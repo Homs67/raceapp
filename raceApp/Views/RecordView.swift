@@ -87,6 +87,14 @@ struct SessionButton: View {
     var isRecording: Bool
     /// Landscape uses a narrower, intrinsic-width button; portrait/idle fill the row.
     var compact: Bool = false
+    /// Elapsed recording time, shown on the Stop button (replaces the REC chip).
+    var elapsed: TimeInterval? = nil
+
+    private var label: String {
+        guard isRecording else { return "Start Session" }
+        if let elapsed { return "Stop Recording · \(Self.format(elapsed))" }
+        return "Stop Recording"
+    }
 
     var body: some View {
         Button {
@@ -96,8 +104,9 @@ struct SessionButton: View {
                 model.startRecording(metricUnits: metric)
             }
         } label: {
-            Text(isRecording ? "Stop Recording" : "Start Session")
+            Text(label)
                 .font(.system(size: compact ? 15 : 17, weight: .semibold))
+                .monospacedDigit()
                 .foregroundStyle(isRecording ? Color.recordRed : .white)
                 .frame(maxWidth: compact ? nil : .infinity)
                 .padding(.horizontal, compact ? 26 : 0)
@@ -106,6 +115,11 @@ struct SessionButton: View {
                 .contentShape(RoundedRectangle(cornerRadius: compact ? 14 : 16))
         }
         .buttonStyle(PressableButtonStyle())
+    }
+
+    static func format(_ elapsed: TimeInterval) -> String {
+        let total = Int(max(0, elapsed))
+        return String(format: "%d:%02d", total / 60, total % 60)
     }
 
     // Start = solid orange fill, white text.
@@ -117,33 +131,6 @@ struct SessionButton: View {
         } else {
             shape.fill(Color.accent)
         }
-    }
-}
-
-/// Recording indicator with a smooth, self-contained pulse. The dot opacity is
-/// derived from absolute time via TimelineView(.animation), so it never jitters
-/// when the parent dashboard re-renders (fixes the landscape jump).
-struct RecordingChip: View {
-    var elapsed: TimeInterval
-
-    var body: some View {
-        TimelineView(.animation) { context in
-            let t = context.date.timeIntervalSinceReferenceDate
-            let opacity = 0.3 + 0.7 * (0.5 + 0.5 * sin(t * 2 * .pi / 1.2))
-            HStack(spacing: 5) {
-                Circle().fill(Color.recordRed).frame(width: 6, height: 6).opacity(opacity)
-                Text("REC \(Self.format(elapsed))")
-                    .font(.system(size: 12, weight: .medium)).monospacedDigit()
-                    .foregroundStyle(Color.recordRed)
-            }
-            .padding(.horizontal, 8).padding(.vertical, 5)
-            .background(Color.recordRed.opacity(0.15), in: RoundedRectangle(cornerRadius: 6))
-        }
-    }
-
-    static func format(_ elapsed: TimeInterval) -> String {
-        let total = Int(max(0, elapsed))
-        return String(format: "%d:%02d", total / 60, total % 60)
     }
 }
 
@@ -262,15 +249,14 @@ private struct DashboardView: View {
 
     private func portrait(live: Live, elapsed: TimeInterval) -> some View {
         VStack(alignment: .leading, spacing: 18) {
-            HStack(spacing: 8) {
-                RecordingChip(elapsed: elapsed)
-                Spacer()
+            HStack(spacing: 12) {
                 Text("OBD \(String(format: "%.0f", live.obdHz)) Hz")
                     .font(.system(size: 12, weight: .medium)).monospacedDigit()
                     .foregroundStyle(Color.muted)
                 Text(live.gpsAccuracy.map { "GPS ±\(Int($0)) m" } ?? "GPS —")
                     .font(.system(size: 12, weight: .medium)).monospacedDigit()
                     .foregroundStyle(Color.muted)
+                Spacer()
             }
 
             if shiftEnabled {
@@ -316,7 +302,7 @@ private struct DashboardView: View {
 
             Spacer(minLength: 8)
 
-            SessionButton(isRecording: true)
+            SessionButton(isRecording: true, elapsed: elapsed)
         }
         .padding(.horizontal, 22)
         .padding(.top, 8)
@@ -378,8 +364,7 @@ private struct DashboardView: View {
                 landscapeStat("YAW", live.yawDegPerS.map { String(format: "%.0f°/s", $0) })
                 landscapeStat("HDG", live.heading.map { String(format: "%03.0f°", $0) })
                 Spacer()
-                RecordingChip(elapsed: elapsed)
-                SessionButton(isRecording: true, compact: true)
+                SessionButton(isRecording: true, compact: true, elapsed: elapsed)
             }
         }
         .padding(.horizontal, 24)
