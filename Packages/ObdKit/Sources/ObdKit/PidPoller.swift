@@ -89,9 +89,28 @@ public actor PidPoller {
         }
         if configuration.useMultiPid {
             let command = "01" + channels.map { String(format: "%02X", $0.pid) }.joined() + "1"
-            if await poll(command: command, continuation: continuation) == .noData {
-                // Whole multi-PID request rejected — fall back to sequential polling.
+            do {
+                let lines = try await session.execute(command)
+                let timestamp = monotonicNow()
+                var seen = Set<ObdChannel>()
+                for (pid, value) in PidDecoder.decodeMode01(lines: lines) {
+                    if let channel = ObdChannel(pid: pid) {
+                        continuation.yield(ObdSample(channel: channel, value: value, timestamp: timestamp))
+                        seen.insert(channel)
+                    }
+                }
+                // Fall back to sequential if the adapter didn't batch every requested
+                // PID (some ELM clones silently return only the first one or two —
+                // this is why throttle went missing on the real Veepeak).
+                if seen.count < channels.count {
+                    configuration.useMultiPid = false
+                }
+            } catch ElmError.noData {
                 configuration.useMultiPid = false
+            } catch ElmError.stopped {
+                // interrupted around reconnects — next cycle retries
+            } catch {
+                try? await Task.sleep(for: .milliseconds(100))
             }
         } else {
             for channel in channels {

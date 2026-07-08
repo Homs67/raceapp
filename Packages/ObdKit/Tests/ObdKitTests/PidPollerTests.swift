@@ -69,6 +69,25 @@ final class PidPollerTests: XCTestCase {
         XCTAssertTrue(transport.sentCommands.contains("010C1"))
     }
 
+    func testPartialMultiPidFallsBackToSequential() async throws {
+        // Adapter batches only RPM+speed for the 3-PID request (the real Veepeak
+        // behaviour that dropped throttle). Poller must fall back and pick up
+        // throttle via sequential polling.
+        let transport = ReplayTransport(simple: [
+            "010C0D111": "410C1AF80D3C", // only 2 of 3 requested
+            "010C1": "410C1AF8",
+            "010D1": "410D3C",
+            "01111": "41115A",           // throttle, only via sequential
+        ])
+        let poller = PidPoller(
+            session: Elm327Session(transport: transport),
+            configuration: PollerConfiguration(slowChannels: [])
+        )
+        let samples = await collect(12, from: poller)
+        XCTAssertTrue(samples.contains { $0.channel == .throttle },
+                      "throttle must be recovered after multi-PID returns a partial set")
+    }
+
     func testUnsupportedSlowChannelDroppedWithoutKillingLoop() async throws {
         let transport = ReplayTransport(simple: [
             "010C0D111": "410C1AF80D3C1145",
