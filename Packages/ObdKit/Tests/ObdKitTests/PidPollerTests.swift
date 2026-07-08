@@ -19,7 +19,7 @@ final class PidPollerTests: XCTestCase {
         ])
         let poller = PidPoller(
             session: Elm327Session(transport: transport),
-            configuration: PollerConfiguration(slowChannels: [])
+            configuration: PollerConfiguration(fastChannels: [.rpm, .speed, .throttle], slowChannels: [])
         )
         let samples = await collect(6, from: poller)
 
@@ -42,6 +42,7 @@ final class PidPollerTests: XCTestCase {
         let poller = PidPoller(
             session: Elm327Session(transport: transport),
             configuration: PollerConfiguration(
+                fastChannels: [.rpm, .speed, .throttle],
                 slowChannels: [.coolantTemp],
                 slowSweepInterval: 0 // every cycle is "due" in tests
             )
@@ -60,7 +61,7 @@ final class PidPollerTests: XCTestCase {
         ])
         let poller = PidPoller(
             session: Elm327Session(transport: transport),
-            configuration: PollerConfiguration(slowChannels: [])
+            configuration: PollerConfiguration(fastChannels: [.rpm, .speed, .throttle], slowChannels: [])
         )
         let samples = await collect(6, from: poller)
         XCTAssertTrue(samples.contains { $0.channel == .rpm })
@@ -81,7 +82,7 @@ final class PidPollerTests: XCTestCase {
         ])
         let poller = PidPoller(
             session: Elm327Session(transport: transport),
-            configuration: PollerConfiguration(slowChannels: [])
+            configuration: PollerConfiguration(fastChannels: [.rpm, .speed, .throttle], slowChannels: [])
         )
         let samples = await collect(12, from: poller)
         XCTAssertTrue(samples.contains { $0.channel == .throttle },
@@ -97,6 +98,7 @@ final class PidPollerTests: XCTestCase {
         let poller = PidPoller(
             session: Elm327Session(transport: transport),
             configuration: PollerConfiguration(
+                fastChannels: [.rpm, .speed, .throttle],
                 slowChannels: [.oilTemp, .coolantTemp],
                 slowSweepInterval: 0
             )
@@ -114,7 +116,7 @@ final class PidPollerTests: XCTestCase {
         ])
         let poller = PidPoller(
             session: Elm327Session(transport: transport),
-            configuration: PollerConfiguration(slowChannels: [])
+            configuration: PollerConfiguration(fastChannels: [.rpm, .speed, .throttle], slowChannels: [])
         )
         await poller.apply(supportedPids: SupportedPids(pids: [0x0C, 0x0D]))
         let samples = await collect(4, from: poller)

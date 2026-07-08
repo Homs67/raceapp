@@ -60,12 +60,15 @@ public enum ObdChannel: String, CaseIterable, Sendable, Codable {
         }
     }
 
-    public static let defaultFastLoop: [ObdChannel] = [.rpm, .speed, .throttle]
+    // Accelerator pedal is a fast-changing driver input (truer than throttle body
+    // on drive-by-wire), so it rides the fast loop. Cars that don't report a
+    // channel simply get it dropped after the first NO DATA.
+    public static let defaultFastLoop: [ObdChannel] = [.rpm, .speed, .throttle, .acceleratorPedal]
 
     public static let defaultSlowLoop: [ObdChannel] = [
         .coolantTemp, .oilTemp, .intakeAirTemp, .ambientTemp,
         .fuelLevel, .controlModuleVoltage, .engineLoad,
-        .barometricPressure, .timingAdvance,
+        .barometricPressure, .timingAdvance, .manifoldPressure, .mafRate,
     ]
 }
 
