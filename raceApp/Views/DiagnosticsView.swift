@@ -12,7 +12,8 @@ import SwiftUI
 
 struct DiagnosticsView: View {
     @Environment(AppModel.self) private var model
-    @State private var report = ""
+    @State private var report: DiagnosticsReport?
+    @State private var reportFile: URL?
     @State private var running = false
 
     var body: some View {
@@ -45,8 +46,8 @@ struct DiagnosticsView: View {
                         .foregroundStyle(Color.recordRed)
                 }
 
-                if !report.isEmpty {
-                    Text(report)
+                if let report {
+                    Text(report.readableText())
                         .font(.system(size: 12, design: .monospaced))
                         .foregroundStyle(Color.textPrimary)
                         .textSelection(.enabled)
@@ -54,14 +55,16 @@ struct DiagnosticsView: View {
                         .padding(14)
                         .background(Color.cardGray, in: RoundedRectangle(cornerRadius: 12))
 
-                    ShareLink(item: report) {
-                        Label("Share report", systemImage: "square.and.arrow.up")
-                            .font(.system(size: 15, weight: .medium))
-                            .foregroundStyle(Color.accent)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 46)
-                            .overlay(RoundedRectangle(cornerRadius: 12)
-                                .stroke(Color.accent.opacity(0.5), lineWidth: 1))
+                    if let reportFile {
+                        ShareLink(item: reportFile) {
+                            Label("Share report (JSON)", systemImage: "square.and.arrow.up")
+                                .font(.system(size: 15, weight: .medium))
+                                .foregroundStyle(Color.accent)
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 46)
+                                .overlay(RoundedRectangle(cornerRadius: 12)
+                                    .stroke(Color.accent.opacity(0.5), lineWidth: 1))
+                        }
                     }
                 }
             }
@@ -77,6 +80,10 @@ struct DiagnosticsView: View {
         Task {
             let result = await model.connection.runDiagnostics()
             report = result
+            let url = FileManager.default.temporaryDirectory
+                .appendingPathComponent("raceapp-diagnostics.json")
+            try? result.jsonData().write(to: url, options: .atomic)
+            reportFile = url
             running = false
         }
     }

@@ -13,6 +13,8 @@ struct TachBar: View {
     var redZoneWidth: Double = 700
     var height: CGFloat = 20
     var segmented = false
+    /// When set (shift indicator active), overrides the default white/red fill.
+    var fillOverride: Color? = nil
 
     var nearRedline: Bool { (rpm ?? 0) >= redline - redZoneWidth }
 
@@ -32,7 +34,7 @@ struct TachBar: View {
                     .offset(x: geo.size.width * redStart)
                 // Fill
                 RoundedRectangle(cornerRadius: 5)
-                    .fill(nearRedline ? Color.recordRed : Color.textPrimary)
+                    .fill(fillOverride ?? (nearRedline ? Color.recordRed : Color.textPrimary))
                     .frame(width: max(0, geo.size.width * fillFraction))
                     .animation(.linear(duration: 0.07), value: fillFraction)
                 // Segment separators (landscape variant)

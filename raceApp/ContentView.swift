@@ -37,8 +37,8 @@ struct ContentView: View {
             SessionsView()
                 .tabItem { Label("Sessions", systemImage: "list.bullet") }
                 .tag(2)
-            ConnectionView()
-                .tabItem { Label("Connection", systemImage: "antenna.radiowaves.left.and.right") }
+            SettingsView()
+                .tabItem { Label("Settings", systemImage: "gearshape.fill") }
                 .tag(3)
         }
         .tint(Color.accent)

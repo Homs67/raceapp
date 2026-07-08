@@ -46,14 +46,15 @@ final class RecordingCoordinator {
 
     // MARK: - Start (R1.1)
 
-    func start(car: SessionManifest.CarInfo?, metricUnits: Bool) async {
+    func start(car: SessionManifest.CarInfo?, metricUnits: Bool, supportedPids: [Int]) async {
         guard !isRecording else { return }
         let recorder = SessionRecorder(store: store)
         do {
             _ = try await recorder.start(
                 car: car,
                 units: metricUnits ? "metric" : "imperial",
-                appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
+                appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String,
+                supportedPids: supportedPids.isEmpty ? nil : supportedPids
             )
         } catch {
             return

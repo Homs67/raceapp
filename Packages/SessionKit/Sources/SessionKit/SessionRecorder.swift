@@ -39,13 +39,15 @@ public actor SessionRecorder {
         car: SessionManifest.CarInfo? = nil,
         units: String? = nil,
         appVersion: String? = nil,
+        supportedPids: [Int]? = nil,
         flushInterval: TimeInterval = 1.0
     ) throws -> UUID {
         guard manifest == nil else { throw RecorderError.alreadyRecording }
         var newManifest = SessionManifest(
             startedAtUTC: utc, startUptime: now,
             appVersion: appVersion, units: units, car: car,
-            phoneOnly: true // flips to false on the first OBD sample
+            phoneOnly: true, // flips to false on the first OBD sample
+            supportedPids: supportedPids
         )
         newManifest.status = .recording
         try store.create(newManifest)

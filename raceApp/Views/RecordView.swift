@@ -153,9 +153,35 @@ private struct DashboardView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     @AppStorage("useMetricUnits") private var metric = false
+    @AppStorage("shiftEnabled") private var shiftEnabled = false
+    @AppStorage("shiftRPM") private var shiftRPM: Double = 5500
 
     @State private var peakG: Double = 0
     @State private var trail: [CGPoint] = []
+
+    private var indicator: ShiftIndicator {
+        ShiftIndicator(enabled: shiftEnabled, shiftRPM: shiftRPM)
+    }
+
+    private func rpmColor(_ rpm: Double?) -> Color {
+        switch indicator.phase(rpm: rpm) {
+        case .shift: return .recordRed
+        case .approach(let progress) where progress >= 0.75: return .accent
+        default: return (rpm ?? 0) >= 6800 ? .recordRed : .textPrimary
+        }
+    }
+
+    private func tachFill(_ rpm: Double?) -> Color? {
+        switch indicator.phase(rpm: rpm) {
+        case .shift: return .recordRed
+        case .approach(let progress) where progress >= 0.5: return .accent
+        default: return nil
+        }
+    }
+
+    private func rpmScale(_ rpm: Double?) -> CGFloat {
+        indicator.phase(rpm: rpm) == .shift ? 1.04 : 1.0
+    }
 
     private struct Live {
         var rpm: Double?
@@ -247,11 +273,15 @@ private struct DashboardView: View {
                     .foregroundStyle(Color.muted)
             }
 
-            TachBar(rpm: live.rpm)
+            if shiftEnabled {
+                ShiftLightBar(indicator: indicator, rpm: live.rpm)
+            }
+            TachBar(rpm: live.rpm, fillOverride: tachFill(live.rpm))
 
             VStack(alignment: .leading, spacing: 0) {
-                bigNumeral(live.rpm.map { String(Int($0)) }, size: 130,
-                           color: (live.rpm ?? 0) >= 6800 ? .recordRed : .textPrimary)
+                bigNumeral(live.rpm.map { String(Int($0)) }, size: 130, color: rpmColor(live.rpm))
+                    .scaleEffect(rpmScale(live.rpm), anchor: .leading)
+                    .animation(.easeOut(duration: 0.12), value: rpmScale(live.rpm))
                 microLabel("RPM")
             }
 
@@ -298,7 +328,10 @@ private struct DashboardView: View {
     private func landscape(live: Live, elapsed: TimeInterval) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             VStack(spacing: 4) {
-                TachBar(rpm: live.rpm, height: 28, segmented: true)
+                if shiftEnabled {
+                    ShiftLightBar(indicator: indicator, rpm: live.rpm, height: 6)
+                }
+                TachBar(rpm: live.rpm, height: 28, segmented: true, fillOverride: tachFill(live.rpm))
                 HStack {
                     microLabel("RPM ×1000")
                     Spacer()
@@ -309,8 +342,7 @@ private struct DashboardView: View {
             }
 
             HStack(alignment: .top, spacing: 36) {
-                bigNumeral(live.rpm.map { String(Int($0)) }, size: 150,
-                           color: (live.rpm ?? 0) >= 6800 ? .recordRed : .textPrimary)
+                bigNumeral(live.rpm.map { String(Int($0)) }, size: 150, color: rpmColor(live.rpm))
                     .frame(minWidth: 300, alignment: .leading)
                 bigNumeral(live.gear.map(String.init) ?? "N", size: 120, color: .accent)
                 Spacer()

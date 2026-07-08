@@ -250,63 +250,64 @@ final class ConnectionController {
 
     var canRunDiagnostics: Bool { session != nil }
 
-    /// Full ECU sweep → a shareable plain-text report. Pauses live polling for
-    /// clean timing, then resumes. Works against the demo adapter too.
-    func runDiagnostics() async -> String {
+    /// Full ECU sweep → a structured report (shared as JSON + readable text).
+    /// Pauses live polling for clean timing, then resumes. Works in demo too.
+    func runDiagnostics() async -> DiagnosticsReport {
+        let now = ISO8601DateFormatter().string(from: Date())
         guard let session else {
-            return "Not connected. Connect the adapter (or start demo) in Connection, then run diagnostics."
+            return .unavailable(generatedAt: now, isDemo: isDemo)
         }
         pollerTask?.cancel()
         pollerTask = nil
         await poller?.stop()
 
-        var lines: [String] = []
-        func log(_ text: String = "") { lines.append(text) }
-
-        log("RACEAPP · OBD-II DIAGNOSTICS")
-        log("Adapter: \(isDemo ? "DEMO (simulated — not a real car)" : (storedAdapterName ?? "unknown"))")
-        if let vin = try? await session.readVin() { log("VIN: \(vin)") }
-        if let ati = try? await session.execute("ATI") { log("ELM: \(ati.joined(separator: " "))") }
-        if let dpn = try? await session.execute("ATDPN") { log("Protocol (ATDPN): \(dpn.joined())") }
-
-        if !isDemo {
-            log()
-            log("BLUETOOTH / GATT:")
-            log(bleTransport?.gattTreeDescription ?? "(unavailable)")
-        }
+        let vin = try? await session.readVin()
+        let elm = (try? await session.execute("ATI"))?.joined(separator: " ")
+        let proto = (try? await session.execute("ATDPN"))?.joined()
+        let gatt = isDemo ? nil : bleTransport?.gattTreeDescription
 
         let supported = (try? await session.connectEcu()) ?? SupportedPids(pids: [])
-        log()
-        log("CHANNELS (\(supported.pids.count) PIDs reported by ECU):")
+        var channels: [DiagnosticsReport.Channel] = []
         for channel in ObdChannel.allCases {
             let pidHex = String(format: "%02X", channel.pid)
             if supported.supports(channel) {
                 let response = try? await session.execute(String(format: "01%02X1", channel.pid))
                 let value = response.flatMap { PidDecoder.decodeMode01(lines: $0).first?.value }
-                let valueText = value.map { String(format: "%.2f %@", $0, channel.unit) } ?? "supported, no value"
-                log("  [\(pidHex)] \(channel.rawValue): \(valueText)")
+                channels.append(.init(name: channel.rawValue, pid: pidHex, supported: true, value: value, unit: channel.unit))
             } else {
-                log("  [\(pidHex)] \(channel.rawValue): not supported")
+                channels.append(.init(name: channel.rawValue, pid: pidHex, supported: false, value: nil, unit: channel.unit))
             }
         }
 
         let multi = try? await session.execute("010C0D111")
         let multiCount = multi.map { PidDecoder.decodeMode01(lines: $0).count } ?? 0
-        log()
-        log("Multi-PID request (010C0D11 → RPM+speed+throttle in one call): "
-            + (multiCount >= 3 ? "SUPPORTED (\(multiCount) values / request)" : "NOT supported — sequential fallback"))
-
         let seqHz = await measureUpdateRate(session: session, commandsPerUpdate: ["010C1", "010D1", "01111"], rounds: 12)
         let multiHz = await measureUpdateRate(session: session, commandsPerUpdate: ["010C0D111"], rounds: 12)
-        log(String(format: "Fast-loop update rate: sequential ~%.1f Hz, multi-PID ~%.1f Hz", seqHz, multiHz))
-
-        if let dtc = try? await session.readDtcStatus() {
-            log()
-            log("Check engine: MIL \(dtc.milOn ? "ON" : "OFF"), \(dtc.dtcCount) stored code(s)")
-        }
+        let dtc = try? await session.readDtcStatus()
 
         beginPolling() // resume live gauges
-        return lines.joined(separator: "\n")
+
+        return DiagnosticsReport(
+            generatedAt: now,
+            isDemo: isDemo,
+            adapter: isDemo ? "Demo adapter" : storedAdapterName,
+            elm: elm,
+            obdProtocol: proto,
+            vin: vin,
+            gatt: gatt,
+            supportedPidCount: supported.pids.count,
+            multiPidSupported: multiCount >= 3,
+            sequentialHz: seqHz,
+            multiPidHz: multiHz,
+            milOn: dtc?.milOn,
+            dtcCount: dtc?.dtcCount,
+            channels: channels
+        )
+    }
+
+    /// Supported PIDs captured at connect, for embedding in session exports.
+    var supportedPidList: [Int] {
+        (supportedPids?.pids.map { Int($0) } ?? []).sorted()
     }
 
     /// Time `rounds` full fast-loop updates and return updates-per-second.

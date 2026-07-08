@@ -40,7 +40,11 @@ final class AppModel {
         }
         connection.onLaunch()
         #if DEBUG
-        // Dev/screenshot hooks: `simctl launch ... -demo [-record]`
+        // Dev/screenshot hooks: `simctl launch ... -demo [-record] [-shift-demo]`
+        if CommandLine.arguments.contains("-shift-demo") {
+            UserDefaults.standard.set(true, forKey: "shiftEnabled")
+            UserDefaults.standard.set(3000.0, forKey: "shiftRPM")
+        }
         if CommandLine.arguments.contains("-demo") {
             connection.startDemo()
             if CommandLine.arguments.contains("-record") {
@@ -55,7 +59,11 @@ final class AppModel {
 
     func startRecording(metricUnits: Bool) {
         Task {
-            await recording.start(car: connection.carInfo, metricUnits: metricUnits)
+            await recording.start(
+                car: connection.carInfo,
+                metricUnits: metricUnits,
+                supportedPids: connection.supportedPidList
+            )
         }
     }
 

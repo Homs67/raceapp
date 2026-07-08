@@ -1,19 +1,21 @@
 //
-//  ConnectionView.swift
+//  SettingsView.swift
 //  raceApp
 //
-//  Connection status + first-time setup + settings (design screen 7,
-//  flow per 06-connection-flow.md).
+//  Settings + connection: adapter status/setup, units, shift indicator,
+//  diagnostics, demo, privacy (connection flow per 06-connection-flow.md).
 //
 
 import SwiftUI
 import ObdKit
 import SessionKit
 
-struct ConnectionView: View {
+struct SettingsView: View {
     @Environment(AppModel.self) private var model
     @AppStorage("useMetricUnits") private var metric = false
     @AppStorage("keepScreenAwake") private var keepAwake = false
+    @AppStorage("shiftEnabled") private var shiftEnabled = false
+    @AppStorage("shiftRPM") private var shiftRPM: Double = 5500
     @State private var showAllDevices = false
 
     private var connection: ConnectionController { model.connection }
@@ -28,14 +30,59 @@ struct ConnectionView: View {
                     recoverySection
                 }
                 settingsSection
+                shiftSection
                 diagnosticsSection
                 demoSection
                 privacySection
             }
             .scrollContentBackground(.hidden)
             .background(Color.bgScreen)
-            .navigationTitle("Connection")
+            .navigationTitle("Settings")
         }
+    }
+
+    // MARK: - Shift indicator
+
+    private var shiftSection: some View {
+        Section {
+            Toggle("Performance shift indicator", isOn: $shiftEnabled)
+                .font(.system(size: 14))
+            if shiftEnabled {
+                HStack(spacing: 8) {
+                    ForEach(ShiftIndicator.presets, id: \.name) { preset in
+                        Button {
+                            shiftRPM = preset.rpm
+                        } label: {
+                            Text(preset.name)
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundStyle(abs(shiftRPM - preset.rpm) < 1 ? Color.black : Color.textPrimary)
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 34)
+                                .background(abs(shiftRPM - preset.rpm) < 1 ? Color.accent : Color.white.opacity(0.08),
+                                           in: RoundedRectangle(cornerRadius: 9))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text("Shift at")
+                            .font(.system(size: 14))
+                        Spacer()
+                        Text("\(Int(shiftRPM)) rpm")
+                            .font(.system(size: 15, weight: .semibold)).monospacedDigit()
+                            .foregroundStyle(Color.accent)
+                    }
+                    Slider(value: $shiftRPM, in: 2000...7400, step: 100)
+                        .tint(Color.accent)
+                }
+            }
+        } header: {
+            Text("Shift Indicator")
+        } footer: {
+            Text("Lights fill as you approach your shift RPM and flash when it's time to shift. MX-5 ND2 (7,500 redline): Street 5,500 · Track 7,200.")
+        }
+        .listRowBackground(Color.cardGray)
     }
 
     // MARK: - Adapter status / scan

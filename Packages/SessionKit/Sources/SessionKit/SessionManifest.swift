@@ -79,10 +79,12 @@ public struct SessionManifest: Codable, Equatable, Sendable, Identifiable {
     public var obdGaps: [Gap]
     public var channels: [ChannelSummary]
     public var highlights: Highlights?
+    /// Mode-01 PIDs the ECU reported as supported at connect (capability record).
+    public var supportedPids: [Int]?
 
     public init(id: UUID = UUID(), startedAtUTC: Date, startUptime: TimeInterval,
                 status: Status = .recording, appVersion: String? = nil, units: String? = nil,
-                car: CarInfo? = nil, phoneOnly: Bool = false) {
+                car: CarInfo? = nil, phoneOnly: Bool = false, supportedPids: [Int]? = nil) {
         self.id = id
         self.startedAtUTC = startedAtUTC
         self.startUptime = startUptime
@@ -93,6 +95,7 @@ public struct SessionManifest: Codable, Equatable, Sendable, Identifiable {
         self.phoneOnly = phoneOnly
         self.obdGaps = []
         self.channels = []
+        self.supportedPids = supportedPids
     }
 
     /// UTC instant for a monotonic sample time.
