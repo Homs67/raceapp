@@ -6,6 +6,8 @@
 	<string>raceApp connects to your OBD2 adapter over Bluetooth to read live engine data.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Your location is recorded during sessions to capture speed, position, and altitude.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Allow Always so recording keeps running with the screen locked or the app in the background during a session. Your location never leaves the device.</string>
 	<key>NSMotionUsageDescription</key>
 	<string>Motion and barometer data are recorded during sessions to measure G-forces and elevation.</string>
 	<key>UIBackgroundModes</key>

@@ -28,13 +28,21 @@ public final class PhoneSensorSuite: NSObject, @unchecked Sendable {
     }
 
     public func requestPermissions() {
-        locationManager.requestWhenInUseAuthorization()
+        // "Always" so recording survives a screen lock / backgrounding for a full
+        // drive. iOS shows the When-In-Use prompt first, then a later upgrade
+        // prompt to Always once background use is observed.
+        locationManager.requestAlwaysAuthorization()
     }
 
     public func start(handler: @escaping SampleHandler) {
         self.handler = handler
 
-        // GPS — background-capable (location background mode + when-in-use auth)
+        // Escalate to Always if the user previously chose When-In-Use.
+        if locationManager.authorizationStatus == .authorizedWhenInUse {
+            locationManager.requestAlwaysAuthorization()
+        }
+
+        // GPS — background-capable (location background mode + Always auth)
         if CLLocationManager.locationServicesEnabled() {
             locationManager.allowsBackgroundLocationUpdates = true
             locationManager.startUpdatingLocation()

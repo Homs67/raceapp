@@ -13,7 +13,13 @@ enum LaunchArgs {
     static var openLatestSession: Bool { false }
     static var openLatestGraph: Bool { false }
     #endif
-    static var initialTab: Int { openLatestSession ? 2 : 0 }
+    static var initialTab: Int {
+        #if DEBUG
+        if CommandLine.arguments.contains("-tab-health") { return 1 }
+        if CommandLine.arguments.contains("-tab-connection") { return 3 }
+        #endif
+        return openLatestSession ? 2 : 0
+    }
 }
 
 struct ContentView: View {

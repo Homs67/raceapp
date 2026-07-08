@@ -38,6 +38,7 @@ final class ConnectionController {
     private var bleTransport: CoreBluetoothTransport?
     private var session: Elm327Session?
     private var poller: PidPoller?
+    private var supportedPids: SupportedPids?
     private var scanTask: Task<Void, Never>?
     private var connectionTask: Task<Void, Never>?
     private var pollerTask: Task<Void, Never>?
@@ -212,6 +213,7 @@ final class ConnectionController {
             }
             guard let supported else { return }
             supportedPidCount = supported.pids.count
+            self.supportedPids = supported
 
             if let vin = try? await session.readVin() {
                 carInfo = Self.carInfo(fromVin: vin, adapterName: isDemo ? "Demo adapter" : storedAdapterName)
@@ -222,21 +224,99 @@ final class ConnectionController {
                 dtcCount = status.dtcCount
             }
 
-            let poller = PidPoller(session: session)
-            await poller.apply(supportedPids: supported)
-            self.poller = poller
+            beginPolling()
             state = .live
             lastError = nil
-
-            pollerTask = Task { [bus] in
-                for await sample in await poller.samples() {
-                    bus.publish(.obd(sample.channel), sample.value, at: sample.timestamp)
-                }
-            }
         } catch {
             lastError = "Adapter didn't respond — unplug it for 10 seconds and plug it back in."
             state = .idle
         }
+    }
+
+    private func beginPolling() {
+        guard let session, let supported = supportedPids else { return }
+        pollerTask?.cancel()
+        let poller = PidPoller(session: session)
+        self.poller = poller
+        pollerTask = Task { [bus] in
+            await poller.apply(supportedPids: supported)
+            for await sample in await poller.samples() {
+                bus.publish(.obd(sample.channel), sample.value, at: sample.timestamp)
+            }
+        }
+    }
+
+    // MARK: - Diagnostics (driveway spike report, 03 §6)
+
+    var canRunDiagnostics: Bool { session != nil }
+
+    /// Full ECU sweep → a shareable plain-text report. Pauses live polling for
+    /// clean timing, then resumes. Works against the demo adapter too.
+    func runDiagnostics() async -> String {
+        guard let session else {
+            return "Not connected. Connect the adapter (or start demo) in Connection, then run diagnostics."
+        }
+        pollerTask?.cancel()
+        pollerTask = nil
+        await poller?.stop()
+
+        var lines: [String] = []
+        func log(_ text: String = "") { lines.append(text) }
+
+        log("RACEAPP · OBD-II DIAGNOSTICS")
+        log("Adapter: \(isDemo ? "DEMO (simulated — not a real car)" : (storedAdapterName ?? "unknown"))")
+        if let vin = try? await session.readVin() { log("VIN: \(vin)") }
+        if let ati = try? await session.execute("ATI") { log("ELM: \(ati.joined(separator: " "))") }
+        if let dpn = try? await session.execute("ATDPN") { log("Protocol (ATDPN): \(dpn.joined())") }
+
+        if !isDemo {
+            log()
+            log("BLUETOOTH / GATT:")
+            log(bleTransport?.gattTreeDescription ?? "(unavailable)")
+        }
+
+        let supported = (try? await session.connectEcu()) ?? SupportedPids(pids: [])
+        log()
+        log("CHANNELS (\(supported.pids.count) PIDs reported by ECU):")
+        for channel in ObdChannel.allCases {
+            let pidHex = String(format: "%02X", channel.pid)
+            if supported.supports(channel) {
+                let response = try? await session.execute(String(format: "01%02X1", channel.pid))
+                let value = response.flatMap { PidDecoder.decodeMode01(lines: $0).first?.value }
+                let valueText = value.map { String(format: "%.2f %@", $0, channel.unit) } ?? "supported, no value"
+                log("  [\(pidHex)] \(channel.rawValue): \(valueText)")
+            } else {
+                log("  [\(pidHex)] \(channel.rawValue): not supported")
+            }
+        }
+
+        let multi = try? await session.execute("010C0D111")
+        let multiCount = multi.map { PidDecoder.decodeMode01(lines: $0).count } ?? 0
+        log()
+        log("Multi-PID request (010C0D11 → RPM+speed+throttle in one call): "
+            + (multiCount >= 3 ? "SUPPORTED (\(multiCount) values / request)" : "NOT supported — sequential fallback"))
+
+        let seqHz = await measureUpdateRate(session: session, commandsPerUpdate: ["010C1", "010D1", "01111"], rounds: 12)
+        let multiHz = await measureUpdateRate(session: session, commandsPerUpdate: ["010C0D111"], rounds: 12)
+        log(String(format: "Fast-loop update rate: sequential ~%.1f Hz, multi-PID ~%.1f Hz", seqHz, multiHz))
+
+        if let dtc = try? await session.readDtcStatus() {
+            log()
+            log("Check engine: MIL \(dtc.milOn ? "ON" : "OFF"), \(dtc.dtcCount) stored code(s)")
+        }
+
+        beginPolling() // resume live gauges
+        return lines.joined(separator: "\n")
+    }
+
+    /// Time `rounds` full fast-loop updates and return updates-per-second.
+    private func measureUpdateRate(session: Elm327Session, commandsPerUpdate: [String], rounds: Int) async -> Double {
+        let start = monotonicNow()
+        for _ in 0..<rounds {
+            for command in commandsPerUpdate { _ = try? await session.execute(command) }
+        }
+        let elapsed = monotonicNow() - start
+        return elapsed > 0 ? Double(rounds) / elapsed : 0
     }
 
     private func handleLinkLost(adapterId: UUID) {
@@ -266,6 +346,7 @@ final class ConnectionController {
         bleTransport = nil
         session = nil
         poller = nil
+        supportedPids = nil
         bus.clearObdChannels()
         supportedPidCount = 0
         milOn = nil

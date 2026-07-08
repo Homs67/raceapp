@@ -28,6 +28,7 @@ struct ConnectionView: View {
                     recoverySection
                 }
                 settingsSection
+                diagnosticsSection
                 demoSection
                 privacySection
             }
@@ -252,6 +253,20 @@ struct ConnectionView: View {
             .font(.system(size: 13))
         }
         .listRowBackground(Color.cardBg)
+    }
+
+    private var diagnosticsSection: some View {
+        Section {
+            NavigationLink {
+                DiagnosticsView()
+            } label: {
+                Label("Adapter diagnostics", systemImage: "stethoscope")
+                    .font(.system(size: 14))
+            }
+        } footer: {
+            Text("See exactly what this car's ECU supports, the real data rate, and share a report.")
+        }
+        .listRowBackground(Color.cardGray)
     }
 
     private var demoSection: some View {

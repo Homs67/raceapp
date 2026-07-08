@@ -38,40 +38,37 @@ struct HealthView: View {
 
     private var header: some View {
         HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(carTitle)
-                    .font(.numeral(24, weight: .semibold))
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Health")
+                    .font(.system(size: 34, weight: .bold))
                     .foregroundStyle(Color.textPrimary)
                 Text(carSubtitle)
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(Color.white.opacity(0.38))
+                    .font(.system(size: 15))
+                    .foregroundStyle(Color.muted)
             }
             Spacer()
             if let milOn = model.connection.milOn {
                 let codes = model.connection.dtcCount ?? 0
+                let flagged = milOn || codes > 0
                 Text("MIL \(milOn ? "ON" : "OFF") · \(codes) CODE\(codes == 1 ? "" : "S")")
                     .font(.microLabel(9)).kerning(1)
-                    .foregroundStyle(milOn || codes > 0 ? Color.warnAmber : Color.mutedStrong)
+                    .foregroundStyle(flagged ? Color.recordRed : Color.mutedStrong)
                     .padding(.horizontal, 8).padding(.vertical, 5)
                     .overlay(RoundedRectangle(cornerRadius: 6)
-                        .stroke(milOn || codes > 0 ? Color.warnAmber.opacity(0.5) : Color.cardBorder, lineWidth: 1))
+                        .stroke(flagged ? Color.recordRed.opacity(0.6) : Color.cardBorder, lineWidth: 1))
+                    .padding(.top, 6)
             }
         }
     }
 
-    private var carTitle: String {
+    private var carSubtitle: String {
         let car = model.connection.carInfo
         if let make = car?.make {
-            return "\(make.uppercased()) \(car?.model?.uppercased() ?? "")".trimmingCharacters(in: .whitespaces)
+            let name = "\(make) \(car?.model ?? "")".trimmingCharacters(in: .whitespaces)
+            if let vin = car?.vin { return "\(name) · \(vin)" }
+            return name
         }
-        return model.connection.carLinkUp ? "VEHICLE" : "NOT CONNECTED"
-    }
-
-    private var carSubtitle: String {
-        if let vin = model.connection.carInfo?.vin {
-            return "VIN \(vin)"
-        }
-        return model.connection.stateDescription
+        return model.connection.carLinkUp ? "Connected" : model.connection.stateDescription
     }
 
     // MARK: - Cards
@@ -202,8 +199,8 @@ private struct HealthCard: View {
                 }
                 .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 1.5))
         }
-        .padding(EdgeInsets(top: 9, leading: 12, bottom: 9, trailing: 12))
-        .background(Color.cardBg, in: RoundedRectangle(cornerRadius: 11))
-        .overlay(RoundedRectangle(cornerRadius: 11).stroke(Color.cardBorder, lineWidth: 1))
+        .padding(EdgeInsets(top: 11, leading: 13, bottom: 11, trailing: 13))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.cardGray, in: RoundedRectangle(cornerRadius: 16))
     }
 }
