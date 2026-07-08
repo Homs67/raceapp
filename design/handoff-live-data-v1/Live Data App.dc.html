@@ -1,0 +1,667 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet data-dc-atomics>
+<meta name="design_doc_mode" content="canvas">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#141518;font-family:-apple-system,system-ui,sans-serif}
+a{color:#64D2FF;text-decoration:none}a:hover{color:#9BE2FF}
+@keyframes ldpulse{0%,100%{opacity:1}50%{opacity:.25}}
+@keyframes ldspin{to{transform:rotate(360deg)}}
+</style>
+</helmet>
+
+<section style="padding:40px 44px 48px">
+  <div style="display:flex;align-items:baseline;gap:10px;margin:0 0 24px">
+    <span style="font:600 13px/1.2 system-ui;color:#eee">Live Data v1.0 — core screens for Xcode handoff. Portrait tabbed app (Record · Health · Sessions · Connection) + landscape dashboard.</span>
+  </div>
+  <div style="display:flex;flex-wrap:wrap;gap:36px;align-items:flex-start">
+
+    <!-- ═══════════════ PORTRAIT APP ═══════════════ -->
+    <div style="display:flex;flex-direction:column;gap:9px">
+      <div style="font:400 11.5px/1.4 system-ui;color:rgba(255,255,255,.55)">Portrait — interactive: tabs, start/stop session, session detail + export, connection setup &amp; settings</div>
+      <div data-screen-label="Portrait app" style="width:402px;height:874px;border-radius:56px;background:#0B0C0F;position:relative;overflow:hidden;box-shadow:0 30px 60px rgba(0,0,0,.5),0 0 0 1px rgba(255,255,255,.09)">
+        <div style="position:absolute;top:12px;left:50%;transform:translateX(-50%);width:126px;height:37px;border-radius:24px;background:#000;z-index:50"></div>
+
+        <!-- RECORD · idle -->
+        <sc-if value="{{recIdleP}}" hint-placeholder-val="{{true}}">
+          <div style="position:absolute;left:0;right:0;top:0;bottom:86px;display:flex;flex-direction:column;padding:72px 24px 16px;box-sizing:border-box;gap:14px">
+            <div style="display:flex;flex-wrap:wrap;gap:6px;justify-content:center">
+              <div style="display:flex;align-items:center;gap:5px;padding:5px 9px;border-radius:6px;background:rgba(255,255,255,.06);font:500 10px system-ui;letter-spacing:1px;color:rgba(255,255,255,.55)"><span style="width:5px;height:5px;border-radius:3px;background:{{adC}}"></span>ADAPTER</div>
+              <div style="display:flex;align-items:center;gap:5px;padding:5px 9px;border-radius:6px;background:rgba(255,255,255,.06);font:500 10px system-ui;letter-spacing:1px;color:rgba(255,255,255,.55)"><span style="width:5px;height:5px;border-radius:3px;background:{{carC}}"></span>{{carTxt}}</div>
+              <div style="display:flex;align-items:center;gap:5px;padding:5px 9px;border-radius:6px;background:rgba(255,255,255,.06);font:500 10px system-ui;letter-spacing:1px;color:rgba(255,255,255,.55)">OBD {{hzTxt}} Hz</div>
+              <div style="display:flex;align-items:center;gap:5px;padding:5px 9px;border-radius:6px;background:rgba(255,255,255,.06);font:500 10px system-ui;letter-spacing:1px;color:rgba(255,255,255,.55)">GPS ±{{accTxt}}</div>
+            </div>
+            <sc-if value="{{notConnected}}" hint-placeholder-val="{{true}}">
+              <div style="background:rgba(255,214,10,.07);border:1px solid rgba(255,214,10,.25);border-radius:12px;padding:11px 14px;font:400 12px/1.55 system-ui;color:rgba(255,255,255,.65)"><strong style="color:#FFD60A">No OBD</strong> — engine channels won't be recorded. GPS, G-meter, barometer and device health still capture. Set up in Connection.</div>
+            </sc-if>
+            <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px">
+              <button onClick="{{toggleRec}}" style="width:140px;height:140px;border-radius:70px;border:4px solid rgba(255,69,58,.5);background:none;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0" style-hover="border-color:#FF453A">
+                <div style="width:112px;height:112px;border-radius:56px;background:#FF453A;display:flex;align-items:center;justify-content:center;font:600 15px system-ui;letter-spacing:1.5px;color:#fff">START</div>
+              </button>
+              <div style="text-align:center">
+                <div style="font:600 20px 'Saira Condensed';letter-spacing:1px;color:#F2F5F7">START SESSION</div>
+                <div style="font:400 12.5px/1.5 system-ui;color:rgba(255,255,255,.45);margin-top:4px">No setup, no modes. Every channel is recorded.</div>
+              </div>
+            </div>
+            <div style="font:400 11px/1.5 system-ui;color:rgba(255,255,255,.3);text-align:center">Keeps recording with the screen locked, in the background,<br>or during a phone call.</div>
+          </div>
+        </sc-if>
+
+        <!-- RECORD · live -->
+        <sc-if value="{{recLiveP}}" hint-placeholder-val="{{false}}">
+          <div style="position:absolute;inset:0;background:#000;display:flex;flex-direction:column;padding:62px 22px 20px;box-sizing:border-box;gap:9px">
+            <div style="display:flex;gap:6px;justify-content:flex-start;flex-wrap:wrap">
+              <div style="display:flex;align-items:center;gap:5px;padding:5px 10px;border-radius:6px;background:rgba(255,69,58,.15);font:600 10.5px system-ui;letter-spacing:1px;color:#FF453A"><span style="width:5px;height:5px;border-radius:3px;background:#FF453A;animation:ldpulse 1.2s infinite"></span>REC {{recTxt}}</div>
+              <div style="display:flex;align-items:center;gap:5px;padding:5px 9px;border-radius:6px;background:rgba(255,255,255,.06);font:500 10px system-ui;letter-spacing:1px;color:rgba(255,255,255,.55)"><span style="width:5px;height:5px;border-radius:3px;background:{{adC}}"></span>OBD {{hzTxt}} Hz</div>
+              <div style="display:flex;align-items:center;gap:5px;padding:5px 9px;border-radius:6px;background:rgba(255,255,255,.06);font:500 10px system-ui;letter-spacing:1px;color:rgba(255,255,255,.55)">GPS ±{{accTxt}}</div>
+            </div>
+            <div style="position:relative;height:20px;border-radius:5px;background:rgba(255,255,255,.07);overflow:hidden">
+              <div style="position:absolute;left:{{redPct}}%;top:0;bottom:0;right:0;background:rgba(255,69,58,.18);border-left:2px solid rgba(255,69,58,.7)"></div>
+              <div style="position:absolute;left:0;top:0;bottom:0;background:{{rpmBarColor}};width:{{rpmPct}}%;transition:width 60ms linear"></div>
+            </div>
+            <div style="margin-top:8px">
+              <div style="font:600 124px/0.85 'Saira Condensed';color:{{rpmBarColor}};font-variant-numeric:tabular-nums;letter-spacing:-1px">{{rpmTxt}}</div>
+              <div style="font:500 10px system-ui;letter-spacing:2px;color:rgba(255,255,255,.4);margin-top:6px">RPM</div>
+            </div>
+            <div style="display:flex;align-items:flex-end;justify-content:flex-start;gap:52px;margin-top:10px">
+              <div>
+                <div style="font:700 84px/0.85 'Saira Condensed';color:#64D2FF;font-variant-numeric:tabular-nums">{{gear}}</div>
+                <div style="font:500 10px system-ui;letter-spacing:2px;color:rgba(255,255,255,.4);margin-top:6px">GEAR</div>
+              </div>
+              <div>
+                <div style="display:flex;align-items:baseline;gap:7px"><span style="font:600 84px/0.85 'Saira Condensed';color:#F2F5F7;font-variant-numeric:tabular-nums">{{speedTxt}}</span><span style="font:600 15px 'Saira Condensed';color:rgba(255,255,255,.45)">{{spdUnit}}</span></div>
+                <div style="font:500 10px system-ui;letter-spacing:2px;color:rgba(255,255,255,.4);margin-top:6px">SPEED</div>
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px">
+              <span style="font:500 9px system-ui;letter-spacing:1.5px;color:rgba(255,255,255,.4)">THR</span>
+              <div style="flex:1;height:9px;border-radius:5px;background:rgba(255,255,255,.08);overflow:hidden"><div style="height:100%;background:#32D74B;width:{{thrPct}}%;transition:width 80ms linear"></div></div>
+              <span style="font:600 14px 'Saira Condensed';color:#32D74B;font-variant-numeric:tabular-nums;min-width:30px;text-align:right">{{thrTxt}}%</span>
+            </div>
+            <div style="flex:1;display:flex;align-items:center;justify-content:flex-start;gap:20px;min-height:0">
+              <svg width="188" height="188" viewBox="-86 -86 172 172" style="flex:none;margin-left:-10px">
+                <circle r="66" fill="none" stroke="rgba(255,255,255,.15)" stroke-width="1"></circle>
+                <circle r="33" fill="none" stroke="rgba(255,255,255,.09)" stroke-width="1"></circle>
+                <line x1="-76" y1="0" x2="76" y2="0" stroke="rgba(255,255,255,.07)"></line>
+                <line x1="0" y1="-76" x2="0" y2="76" stroke="rgba(255,255,255,.07)"></line>
+                <polyline points="{{trailPtsP}}" fill="none" stroke="rgba(100,210,255,.4)" stroke-width="2" stroke-linejoin="round"></polyline>
+                <circle cx="{{pkXp}}" cy="{{pkYp}}" r="4" fill="none" stroke="#FFD60A" stroke-width="1.5"></circle>
+                <circle cx="{{gxP}}" cy="{{gyP}}" r="7" fill="#64D2FF"></circle>
+              </svg>
+              <div style="display:flex;flex-direction:column;gap:3px">
+                <div style="font:600 30px/1 'Saira Condensed';color:#F2F5F7;font-variant-numeric:tabular-nums">{{gMag}} g</div>
+                <div style="font:500 10px system-ui;letter-spacing:1.5px;color:#FFD60A">PEAK {{pkTxt}}</div>
+              </div>
+            </div>
+            <button onClick="{{toggleRec}}" style="height:54px;flex:none;border-radius:14px;border:none;background:rgba(255,69,58,.16);color:#FF453A;font:600 15px system-ui;letter-spacing:1.5px;cursor:pointer" style-hover="background:rgba(255,69,58,.28)">STOP · {{recTxt}}</button>
+          </div>
+        </sc-if>
+
+        <!-- HEALTH -->
+        <sc-if value="{{tabIsHealth}}" hint-placeholder-val="{{false}}">
+          <div style="position:absolute;left:0;right:0;top:0;bottom:86px;display:flex;flex-direction:column;padding:70px 22px 12px;box-sizing:border-box;gap:12px">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+              <div>
+                <div style="font:600 24px 'Saira Condensed';letter-spacing:1px;color:#F2F5F7">MAZDA MX-5</div>
+                <div style="font:400 10.5px system-ui;color:rgba(255,255,255,.38)">ND2 · VIN JM1NDAM75K0313248</div>
+              </div>
+              <div style="padding:6px 10px;border-radius:8px;background:rgba(255,214,10,.09);border:1px solid rgba(255,214,10,.3);font:600 10px system-ui;letter-spacing:1px;color:#FFD60A;white-space:nowrap">MIL OFF · 1 CODE</div>
+            </div>
+            <div style="flex:1;display:grid;grid-template-columns:1fr 1fr;grid-auto-rows:1fr;gap:8px;min-height:0">
+              <sc-for list="{{healthRows}}" as="h" hint-placeholder-count="12">
+                <div style="background:rgba(255,255,255,.045);border:1px solid rgba(255,255,255,.08);border-radius:11px;padding:9px 12px;display:flex;flex-direction:column;justify-content:space-between;min-height:0">
+                  <div style="display:flex;justify-content:space-between;align-items:baseline"><span style="font:500 9px system-ui;letter-spacing:1.2px;color:rgba(255,255,255,.42)">{{h.label}}</span><span style="font:400 9px system-ui;color:{{h.subC}}">{{h.sub}}</span></div>
+                  <div style="display:flex;align-items:baseline;gap:4px">
+                    <span style="font:600 25px/1 'Saira Condensed';color:{{h.color}};font-variant-numeric:tabular-nums">{{h.val}}</span>
+                    <span style="font:500 11px 'Saira Condensed';color:rgba(255,255,255,.4)">{{h.unit}}</span>
+                  </div>
+                  <div style="height:3px;border-radius:2px;background:rgba(255,255,255,.07);overflow:hidden"><div style="height:100%;border-radius:2px;background:{{h.color}};width:{{h.pct}}%"></div></div>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+        </sc-if>
+
+        <!-- SESSIONS -->
+        <sc-if value="{{tabIsSess}}" hint-placeholder-val="{{false}}">
+          <div style="position:absolute;left:0;right:0;top:0;bottom:86px;display:flex;flex-direction:column;padding:70px 22px 12px;box-sizing:border-box;gap:10px">
+            <sc-if value="{{noOpenSession}}" hint-placeholder-val="{{true}}">
+              <div style="display:flex;align-items:baseline;justify-content:space-between">
+                <div style="font:600 24px 'Saira Condensed';letter-spacing:1px;color:#F2F5F7">SESSIONS</div>
+                <div style="font:400 10.5px system-ui;color:rgba(255,255,255,.35)">{{storageTxt}} on device</div>
+              </div>
+              <div style="flex:1;display:flex;flex-direction:column;gap:8px;overflow:auto">
+                <sc-for list="{{sessions}}" as="s" hint-placeholder-count="4">
+                  <button onClick="{{s.open}}" style="display:flex;align-items:center;gap:12px;width:100%;background:rgba(255,255,255,.045);border:1px solid rgba(255,255,255,.08);border-radius:12px;padding:12px 14px;cursor:pointer;text-align:left;flex:none" style-hover="background:rgba(100,210,255,.07);border-color:rgba(100,210,255,.3)">
+                    <div style="flex:1;min-width:0">
+                      <div style="display:flex;align-items:center;gap:6px">
+                        <span style="font:600 14px system-ui;color:#F2F5F7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{s.loc}}</span>
+                        <sc-if value="{{s.recovered}}" hint-placeholder-val="{{false}}"><span style="font:600 8.5px system-ui;letter-spacing:1px;padding:2px 6px;border-radius:5px;background:rgba(255,214,10,.12);color:#FFD60A;flex:none">RECOVERED</span></sc-if>
+                        <sc-if value="{{s.phoneOnly}}" hint-placeholder-val="{{false}}"><span style="font:600 8.5px system-ui;letter-spacing:1px;padding:2px 6px;border-radius:5px;background:rgba(255,255,255,.09);color:rgba(255,255,255,.5);flex:none">NO OBD</span></sc-if>
+                      </div>
+                      <div style="font:400 11px system-ui;color:rgba(255,255,255,.4);margin-top:2px">{{s.date}}</div>
+                    </div>
+                    <div style="text-align:right;flex:none">
+                      <div style="font:600 16px 'Saira Condensed';color:rgba(255,255,255,.8);font-variant-numeric:tabular-nums">{{s.dur}}</div>
+                      <div style="font:400 10.5px system-ui;color:rgba(255,255,255,.4)">{{s.dist}}</div>
+                    </div>
+                  </button>
+                </sc-for>
+                <div style="font:400 10.5px system-ui;color:rgba(255,255,255,.28);text-align:center;padding:4px 0">Swipe a session to delete</div>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{hasOpenSession}}" hint-placeholder-val="{{false}}">
+              <div style="display:flex;align-items:center;gap:10px">
+                <button onClick="{{closePb}}" style="font:600 12px system-ui;color:#64D2FF;background:none;border:none;cursor:pointer;padding:4px 0;flex:none">← Back</button>
+                <div style="flex:1;min-width:0">
+                  <div style="display:flex;align-items:center;gap:6px"><span style="font:600 15px system-ui;color:#F2F5F7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{openS.loc}}</span>
+                  <sc-if value="{{openS.recovered}}" hint-placeholder-val="{{false}}"><span style="font:600 8.5px system-ui;letter-spacing:1px;padding:2px 6px;border-radius:5px;background:rgba(255,214,10,.12);color:#FFD60A;flex:none">RECOVERED</span></sc-if></div>
+                  <div style="font:400 10.5px system-ui;color:rgba(255,255,255,.4)">{{openS.date}} · {{openS.size}}</div>
+                </div>
+              </div>
+              <div style="flex:1;overflow:auto;display:flex;flex-direction:column;gap:10px;min-height:0">
+                <div style="position:relative;background:rgba(255,255,255,.035);border:1px solid rgba(255,255,255,.08);border-radius:14px;overflow:hidden;flex:none">
+                  <svg viewBox="0 0 340 150" style="width:100%;display:block">
+                    <line x1="0" y1="50" x2="340" y2="50" stroke="rgba(255,255,255,.04)"></line>
+                    <line x1="0" y1="100" x2="340" y2="100" stroke="rgba(255,255,255,.04)"></line>
+                    <line x1="113" y1="0" x2="113" y2="150" stroke="rgba(255,255,255,.04)"></line>
+                    <line x1="226" y1="0" x2="226" y2="150" stroke="rgba(255,255,255,.04)"></line>
+                    <path d="M22 132 C44 114 32 92 58 86 C90 79 84 112 112 110 C144 108 136 70 162 60 C188 50 196 86 224 82 C252 78 246 42 272 36 C294 31 306 24 320 18" stroke="#64D2FF" stroke-width="2.5" fill="none" stroke-linecap="round"></path>
+                    <circle cx="22" cy="132" r="4" fill="#32D74B"></circle>
+                    <rect x="316" y="14" width="8" height="8" rx="2" fill="#FF453A"></rect>
+                  </svg>
+                  <div style="position:absolute;top:8px;left:10px;font:500 8.5px system-ui;letter-spacing:1.2px;color:rgba(255,255,255,.35)">GPS TRACE · MAPKIT</div>
+                </div>
+                <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;flex:none">
+                  <div style="background:rgba(255,255,255,.045);border-radius:9px;padding:8px 10px"><div style="font:500 8.5px system-ui;letter-spacing:1.2px;color:rgba(255,255,255,.38)">DURATION</div><div style="font:600 18px 'Saira Condensed';color:#F2F5F7;font-variant-numeric:tabular-nums">{{openS.dur}}</div></div>
+                  <div style="background:rgba(255,255,255,.045);border-radius:9px;padding:8px 10px"><div style="font:500 8.5px system-ui;letter-spacing:1.2px;color:rgba(255,255,255,.38)">DISTANCE</div><div style="font:600 18px 'Saira Condensed';color:#F2F5F7;font-variant-numeric:tabular-nums">{{openS.dist}}</div></div>
+                  <div style="background:rgba(255,255,255,.045);border-radius:9px;padding:8px 10px"><div style="font:500 8.5px system-ui;letter-spacing:1.2px;color:rgba(255,255,255,.38)">MAX / AVG SPD</div><div style="font:600 18px 'Saira Condensed';color:#F2F5F7;font-variant-numeric:tabular-nums">{{openS.maxSpd}} / {{openS.avgSpd}}</div></div>
+                  <div style="background:rgba(255,255,255,.045);border-radius:9px;padding:8px 10px"><div style="font:500 8.5px system-ui;letter-spacing:1.2px;color:rgba(255,255,255,.38)">MAX RPM</div><div style="font:600 18px 'Saira Condensed';color:#F2F5F7;font-variant-numeric:tabular-nums">{{openS.maxRpm}}</div></div>
+                  <div style="background:rgba(255,255,255,.045);border-radius:9px;padding:8px 10px"><div style="font:500 8.5px system-ui;letter-spacing:1.2px;color:rgba(255,255,255,.38)">PEAK LAT G</div><div style="font:600 18px 'Saira Condensed';color:#FFD60A;font-variant-numeric:tabular-nums">{{openS.pkLatS}}</div></div>
+                  <div style="background:rgba(255,255,255,.045);border-radius:9px;padding:8px 10px"><div style="font:500 8.5px system-ui;letter-spacing:1.2px;color:rgba(255,255,255,.38)">PEAK LONG G</div><div style="font:600 18px 'Saira Condensed';color:#FFD60A;font-variant-numeric:tabular-nums">{{openS.pkLongS}}</div></div>
+                  <div style="background:rgba(255,255,255,.045);border-radius:9px;padding:8px 10px"><div style="font:500 8.5px system-ui;letter-spacing:1.2px;color:rgba(255,255,255,.38)">ELEV GAIN</div><div style="font:600 18px 'Saira Condensed';color:#64D2FF;font-variant-numeric:tabular-nums">{{openS.elevG}}</div></div>
+                  <div style="background:rgba(255,255,255,.045);border-radius:9px;padding:8px 10px;grid-column:span 2"><div style="font:500 8.5px system-ui;letter-spacing:1.2px;color:rgba(255,255,255,.38)">COOLANT RANGE</div><div style="font:600 18px 'Saira Condensed';color:#F2F5F7;font-variant-numeric:tabular-nums">{{openS.temps}}</div></div>
+                </div>
+                <input value="{{openS.note}}" onInput="{{onNote}}" placeholder="Add a note — tires, pressures, conditions…" style="background:rgba(255,255,255,.045);border:1px solid rgba(255,255,255,.1);border-radius:10px;padding:11px 13px;font:400 12.5px system-ui;color:#F2F5F7;outline:none;flex:none" style-focus="border-color:rgba(100,210,255,.5)">
+                <div style="background:rgba(255,255,255,.035);border:1px solid rgba(255,255,255,.08);border-radius:12px;padding:10px 13px;display:flex;flex-direction:column;gap:7px;flex:none">
+                  <div style="font:500 9px system-ui;letter-spacing:1.3px;color:rgba(255,255,255,.4)">CHANNELS · SAMPLE COUNTS</div>
+                  <sc-for list="{{chans}}" as="c" hint-placeholder-count="7">
+                    <div style="display:flex;align-items:baseline;gap:8px">
+                      <span style="font:500 10.5px system-ui;color:rgba(255,255,255,.6);flex:1">{{c.ch}}</span>
+                      <span style="font:600 12px 'Saira Condensed';color:#F2F5F7;font-variant-numeric:tabular-nums">{{c.n}}</span>
+                      <span style="font:400 9.5px system-ui;color:{{c.qc}};min-width:96px;text-align:right">{{c.q}}</span>
+                    </div>
+                  </sc-for>
+                </div>
+                <button onClick="{{openShare}}" style="height:46px;border-radius:12px;border:none;background:#64D2FF;color:#000;font:600 14px system-ui;cursor:pointer;flex:none" style-hover="background:#9BE2FF">Export — CSV + JSON</button>
+                <button onClick="{{askDel}}" style="background:none;border:none;color:#FF453A;font:500 12px system-ui;cursor:pointer;padding:2px 0 8px;flex:none">Delete session…</button>
+              </div>
+            </sc-if>
+          </div>
+        </sc-if>
+
+        <!-- CONNECTION -->
+        <sc-if value="{{tabIsSet}}" hint-placeholder-val="{{false}}">
+          <div style="position:absolute;left:0;right:0;top:0;bottom:86px;overflow:auto;padding:70px 22px 16px;box-sizing:border-box;display:flex;flex-direction:column;gap:12px">
+            <div style="font:600 24px 'Saira Condensed';letter-spacing:1px;color:#F2F5F7">CONNECTION</div>
+
+            <sc-if value="{{isConnected}}" hint-placeholder-val="{{false}}">
+              <div style="background:rgba(50,215,75,.07);border:1px solid rgba(50,215,75,.25);border-radius:14px;padding:14px 16px;display:flex;flex-direction:column;gap:6px">
+                <div style="display:flex;align-items:center;gap:7px;font:600 13px system-ui;color:#32D74B"><span style="width:7px;height:7px;border-radius:4px;background:#32D74B"></span>VEEPEAK OBDCheck BLE+ · {{hzTxt}} Hz</div>
+                <div style="font:400 11.5px/1.55 system-ui;color:rgba(255,255,255,.55)">MAZDA MX-5 (ND2) · 14 PIDs · auto-reconnects every drive. Parked with ignition off? "Waiting for ignition" is normal, not an error.</div>
+                <button onClick="{{resetConnect}}" style="align-self:flex-start;background:none;border:none;color:#FF453A;font:500 11.5px system-ui;cursor:pointer;padding:2px 0">Forget adapter</button>
+              </div>
+            </sc-if>
+            <sc-if value="{{isIdle}}" hint-placeholder-val="{{true}}">
+              <button onClick="{{startScan}}" style="height:48px;border-radius:12px;border:none;background:#64D2FF;color:#000;font:600 14px system-ui;cursor:pointer" style-hover="background:#9BE2FF">Scan for adapters</button>
+            </sc-if>
+            <sc-if value="{{isScanning}}" hint-placeholder-val="{{false}}">
+              <div style="display:flex;flex-direction:column;gap:8px">
+                <div style="display:flex;align-items:center;gap:9px;font:500 11px system-ui;letter-spacing:1px;color:rgba(255,255,255,.5)"><span style="width:14px;height:14px;border:2px solid rgba(100,210,255,.25);border-top-color:#64D2FF;border-radius:7px;animation:ldspin .8s linear infinite"></span>SCANNING…</div>
+                <sc-for list="{{found}}" as="d" hint-placeholder-count="1">
+                  <button onClick="{{d.pick}}" style="display:flex;align-items:center;justify-content:space-between;width:100%;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);border-radius:11px;padding:13px 15px;cursor:pointer;text-align:left" style-hover="background:rgba(100,210,255,.1);border-color:rgba(100,210,255,.4)">
+                    <span style="font:600 13px system-ui;color:#F2F5F7">{{d.name}}</span>
+                    <span style="font:500 11px ui-monospace,Menlo,monospace;color:rgba(255,255,255,.4)">{{d.rssi}}</span>
+                  </button>
+                </sc-for>
+              </div>
+            </sc-if>
+            <sc-if value="{{isConnecting}}" hint-placeholder-val="{{false}}">
+              <div style="display:flex;align-items:center;gap:10px;font:500 12px system-ui;color:rgba(255,255,255,.6);padding:6px 0"><span style="width:16px;height:16px;border:2px solid rgba(100,210,255,.25);border-top-color:#64D2FF;border-radius:8px;animation:ldspin .8s linear infinite"></span>Connecting to VEEPEAK… querying supported PIDs</div>
+            </sc-if>
+
+            <div style="background:rgba(255,255,255,.035);border:1px solid rgba(255,255,255,.08);border-radius:14px;padding:13px 16px;display:flex;flex-direction:column;gap:8px">
+              <div style="font:500 9.5px system-ui;letter-spacing:1.3px;color:rgba(255,255,255,.4)">FIRST-TIME SETUP</div>
+              <div style="display:flex;gap:10px;font:400 12px/1.5 system-ui;color:rgba(255,255,255,.65)"><span style="font:600 12px 'Saira Condensed';color:#64D2FF;min-width:14px">1</span>Plug the adapter into the OBD2 port — driver footwell, above the pedals.</div>
+              <div style="display:flex;gap:10px;font:400 12px/1.5 system-ui;color:rgba(255,255,255,.65)"><span style="font:600 12px 'Saira Condensed';color:#64D2FF;min-width:14px">2</span>Turn the ignition on. The engine can stay off.</div>
+              <div style="display:flex;gap:10px;font:400 12px/1.5 system-ui;color:rgba(255,255,255,.65)"><span style="font:600 12px 'Saira Condensed';color:#64D2FF;min-width:14px">3</span>Tap Scan above.</div>
+              <div style="display:flex;gap:10px;font:400 12px/1.5 system-ui;color:rgba(255,255,255,.65)"><span style="font:600 12px 'Saira Condensed';color:#64D2FF;min-width:14px">4</span>Pick your adapter — usually "VEEPEAK".</div>
+              <div style="display:flex;gap:10px;font:400 12px/1.5 system-ui;color:rgba(255,255,255,.65)"><span style="font:600 12px 'Saira Condensed';color:#64D2FF;min-width:14px">5</span>Done. It reconnects by itself every drive after this.</div>
+            </div>
+            <div style="background:rgba(255,214,10,.07);border:1px solid rgba(255,214,10,.25);border-radius:12px;padding:11px 14px;font:400 11.5px/1.55 system-ui;color:rgba(255,255,255,.65)"><strong style="color:#FFD60A">Don't pair in Bluetooth Settings.</strong> The adapter accepts one connection at a time — pairing there blocks the app from finding it.</div>
+            <div style="background:rgba(255,255,255,.035);border:1px solid rgba(255,255,255,.08);border-radius:14px;padding:13px 16px;display:flex;flex-direction:column;gap:6px">
+              <div style="font:500 9.5px system-ui;letter-spacing:1.3px;color:rgba(255,255,255,.4)">NOT FINDING IT?</div>
+              <div style="font:400 11.5px/1.7 system-ui;color:rgba(255,255,255,.6)">· Adapter LED on? Reseat the plug.<br>· Ignition on?<br>· Another OBD app connected? Force-quit it.<br>· Unplug, wait 10 s, plug back in, scan again.</div>
+            </div>
+
+            <div style="font:500 9.5px system-ui;letter-spacing:1.3px;color:rgba(255,255,255,.4);margin-top:4px">SETTINGS</div>
+            <div style="background:rgba(255,255,255,.035);border:1px solid rgba(255,255,255,.08);border-radius:14px;overflow:hidden">
+              <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid rgba(255,255,255,.06)">
+                <span style="font:400 13px system-ui;color:#F2F5F7">Units</span>
+                <div style="display:flex;background:rgba(255,255,255,.07);border-radius:8px;padding:2px">
+                  <button onClick="{{setUnitsImp}}" style="border:none;border-radius:6px;padding:5px 12px;font:600 11px system-ui;cursor:pointer;background:{{impBg}};color:{{impC}}">Imperial</button>
+                  <button onClick="{{setUnitsMet}}" style="border:none;border-radius:6px;padding:5px 12px;font:600 11px system-ui;cursor:pointer;background:{{metBg}};color:{{metC}}">Metric</button>
+                </div>
+              </div>
+              <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid rgba(255,255,255,.06)">
+                <span style="font:400 13px system-ui;color:#F2F5F7">Keep screen awake</span>
+                <button onClick="{{toggleAwake}}" style="width:46px;height:27px;border-radius:14px;border:none;background:{{awakeBg}};cursor:pointer;position:relative;padding:0;transition:background .2s">
+                  <span style="position:absolute;top:3px;left:{{awakeX}}px;width:21px;height:21px;border-radius:11px;background:#fff;transition:left .2s"></span>
+                </button>
+              </div>
+              <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px">
+                <span style="font:400 13px system-ui;color:#F2F5F7">Sessions on device</span>
+                <span style="font:500 12px system-ui;color:rgba(255,255,255,.45)">{{storageTxt}}</span>
+              </div>
+            </div>
+            <button onClick="{{demoGo}}" style="height:46px;border-radius:12px;border:1px solid rgba(100,210,255,.4);background:none;color:#64D2FF;font:600 13.5px system-ui;cursor:pointer" style-hover="background:rgba(100,210,255,.08)">Try with demo data</button>
+            <div style="font:400 10.5px/1.55 system-ui;color:rgba(255,255,255,.3)">Runs the full dashboard from a bundled real session — no adapter needed.</div>
+            <div style="font:400 10.5px/1.6 system-ui;color:rgba(255,255,255,.35);padding-bottom:6px"><strong style="color:rgba(255,255,255,.55)">Privacy:</strong> everything stays on your phone. No account, no cloud — nothing leaves the device except the files you export yourself.</div>
+          </div>
+        </sc-if>
+
+        <!-- tab bar -->
+        <sc-if value="{{showTabs}}" hint-placeholder-val="{{true}}">
+          <div style="position:absolute;left:0;right:0;bottom:0;height:86px;background:rgba(16,17,21,.94);border-top:1px solid rgba(255,255,255,.08);display:flex;padding:10px 8px 24px;box-sizing:border-box;z-index:45;backdrop-filter:blur(20px)">
+            <button onClick="{{goRec}}" style="flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;background:none;border:none;cursor:pointer;padding:0">
+              <svg width="24" height="24" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" fill="none" stroke="{{recIconC}}" stroke-width="2"></circle><circle cx="12" cy="12" r="3.5" fill="{{recIconC}}"></circle></svg>
+              <span style="font:500 10px system-ui;color:{{recTabC}}">Record</span>
+            </button>
+            <button onClick="{{goHealth}}" style="flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;background:none;border:none;cursor:pointer;padding:0">
+              <svg width="24" height="24" viewBox="0 0 24 24"><path d="M2 12h5l2-6 4 12 2-6h7" fill="none" stroke="{{healthTabC}}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+              <span style="font:500 10px system-ui;color:{{healthTabC}}">Health</span>
+            </button>
+            <button onClick="{{goSess}}" style="flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;background:none;border:none;cursor:pointer;padding:0">
+              <svg width="24" height="24" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10" fill="none" stroke="{{sessTabC}}" stroke-width="2" stroke-linecap="round"></path></svg>
+              <span style="font:500 10px system-ui;color:{{sessTabC}}">Sessions</span>
+            </button>
+            <button onClick="{{goSet}}" style="flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;background:none;border:none;cursor:pointer;padding:0">
+              <svg width="24" height="24" viewBox="0 0 24 24"><path d="M5 11a7 7 0 0114 0" fill="none" stroke="{{setTabC}}" stroke-width="2" stroke-linecap="round"></path><path d="M8.5 13a4 4 0 017 0" fill="none" stroke="{{setTabC}}" stroke-width="2" stroke-linecap="round"></path><circle cx="12" cy="16.5" r="2" fill="{{setTabC}}"></circle></svg>
+              <span style="font:500 10px system-ui;color:{{setTabC}}">Connection</span>
+            </button>
+          </div>
+        </sc-if>
+
+        <!-- share sheet -->
+        <sc-if value="{{shareOpen}}" hint-placeholder-val="{{false}}">
+          <div style="position:absolute;inset:0;background:rgba(0,0,0,.55);z-index:70;display:flex;flex-direction:column;justify-content:flex-end" onClick="{{closeShare}}">
+            <div style="background:#1A1C21;border-radius:24px 24px 0 0;padding:18px 20px 34px;display:flex;flex-direction:column;gap:10px">
+              <div style="width:38px;height:4px;border-radius:2px;background:rgba(255,255,255,.2);align-self:center"></div>
+              <div style="font:600 15px system-ui;color:#F2F5F7">Export session</div>
+              <div style="display:flex;align-items:center;gap:12px;background:rgba(255,255,255,.05);border-radius:12px;padding:12px 14px">
+                <div style="width:36px;height:36px;border-radius:9px;background:rgba(50,215,75,.15);display:flex;align-items:center;justify-content:center;font:700 10px 'Saira Condensed';color:#32D74B">CSV</div>
+                <div style="flex:1"><div style="font:600 12.5px system-ui;color:#F2F5F7">session_2026-07-07.csv</div><div style="font:400 10.5px system-ui;color:rgba(255,255,255,.4)">RaceChrono-compatible · 41 columns · opens in Excel</div></div>
+              </div>
+              <div style="display:flex;align-items:center;gap:12px;background:rgba(255,255,255,.05);border-radius:12px;padding:12px 14px">
+                <div style="width:36px;height:36px;border-radius:9px;background:rgba(100,210,255,.15);display:flex;align-items:center;justify-content:center;font:700 9px 'Saira Condensed';color:#64D2FF">JSON</div>
+                <div style="flex:1"><div style="font:600 12.5px system-ui;color:#F2F5F7">session_2026-07-07.meta.json</div><div style="font:400 10.5px system-ui;color:rgba(255,255,255,.4)">Car, VIN, adapter, units, channel inventory</div></div>
+              </div>
+              <div style="display:flex;gap:14px;padding:4px 2px">
+                <div style="display:flex;flex-direction:column;align-items:center;gap:5px"><div style="width:48px;height:48px;border-radius:12px;background:rgba(255,255,255,.09)"></div><span style="font:400 9.5px system-ui;color:rgba(255,255,255,.5)">AirDrop</span></div>
+                <div style="display:flex;flex-direction:column;align-items:center;gap:5px"><div style="width:48px;height:48px;border-radius:12px;background:rgba(255,255,255,.09)"></div><span style="font:400 9.5px system-ui;color:rgba(255,255,255,.5)">Files</span></div>
+                <div style="display:flex;flex-direction:column;align-items:center;gap:5px"><div style="width:48px;height:48px;border-radius:12px;background:rgba(255,255,255,.09)"></div><span style="font:400 9.5px system-ui;color:rgba(255,255,255,.5)">Mail</span></div>
+              </div>
+              <button onClick="{{closeShare}}" style="height:44px;border-radius:12px;border:none;background:rgba(255,255,255,.08);color:#F2F5F7;font:600 13px system-ui;cursor:pointer">Cancel</button>
+            </div>
+          </div>
+        </sc-if>
+
+        <!-- delete confirm -->
+        <sc-if value="{{confirmDel}}" hint-placeholder-val="{{false}}">
+          <div style="position:absolute;inset:0;background:rgba(0,0,0,.55);z-index:70;display:flex;align-items:center;justify-content:center;padding:40px">
+            <div style="background:#1A1C21;border-radius:18px;padding:20px;width:100%;display:flex;flex-direction:column;gap:8px;text-align:center">
+              <div style="font:600 15px system-ui;color:#F2F5F7">Delete session?</div>
+              <div style="font:400 12px/1.5 system-ui;color:rgba(255,255,255,.5)">{{openS.loc}} · {{openS.size}}. This can't be undone.</div>
+              <div style="display:flex;gap:8px;margin-top:8px">
+                <button onClick="{{cancelDel}}" style="flex:1;height:42px;border-radius:11px;border:none;background:rgba(255,255,255,.08);color:#F2F5F7;font:600 13px system-ui;cursor:pointer">Cancel</button>
+                <button onClick="{{doDel}}" style="flex:1;height:42px;border-radius:11px;border:none;background:#FF453A;color:#fff;font:600 13px system-ui;cursor:pointer">Delete</button>
+              </div>
+            </div>
+          </div>
+        </sc-if>
+
+        <div style="position:absolute;bottom:7px;left:50%;transform:translateX(-50%);width:120px;height:5px;border-radius:3px;background:rgba(255,255,255,.3);z-index:80"></div>
+      </div>
+    </div>
+
+    <!-- ═══════════════ LANDSCAPE DASHBOARD ═══════════════ -->
+    <div style="display:flex;flex-direction:column;gap:9px">
+      <div style="font:400 11.5px/1.4 system-ui;color:rgba(255,255,255,.55)">Landscape — the designed-for dashboard layout while recording (rotate from Record tab)</div>
+      <div data-screen-label="Dashboard — landscape" style="width:874px;height:402px;border-radius:48px;background:#000;position:relative;overflow:hidden;box-shadow:0 30px 60px rgba(0,0,0,.5),0 0 0 1px rgba(255,255,255,.09)">
+        <div style="position:absolute;left:0;top:0;right:0;bottom:0;display:flex;flex-direction:column;padding:24px 32px 26px 60px;box-sizing:border-box">
+          <div style="position:relative;height:30px;border-radius:6px;background:rgba(255,255,255,.07);overflow:hidden">
+            <div style="position:absolute;left:{{redPct}}%;top:0;bottom:0;right:0;background:rgba(255,69,58,.18);border-left:2px solid rgba(255,69,58,.7)"></div>
+            <div style="position:absolute;left:0;top:0;bottom:0;background:{{rpmBarColor}};width:{{rpmPct}}%;transition:width 60ms linear"></div>
+            <div style="position:absolute;inset:0;background:repeating-linear-gradient(90deg,transparent 0,transparent calc(100%/15 - 2px),#000 calc(100%/15 - 2px),#000 calc(100%/15))"></div>
+          </div>
+          <div style="display:flex;justify-content:space-between;margin-top:5px;font:500 10px system-ui;letter-spacing:1.5px;color:rgba(255,255,255,.4)">
+            <span>RPM ×1000</span><span style="color:rgba(255,69,58,.8)">REDLINE {{redlineTxt}}</span>
+          </div>
+          <div style="flex:1;display:flex;align-items:center;gap:36px;min-height:0">
+            <div style="display:flex;flex-direction:column">
+              <div style="font:600 168px/0.85 'Saira Condensed';color:{{rpmBarColor}};font-variant-numeric:tabular-nums;letter-spacing:-2px;min-width:340px">{{rpmTxt}}</div>
+              <div style="font:500 11px system-ui;letter-spacing:2px;color:rgba(255,255,255,.4);margin-top:8px">RPM</div>
+            </div>
+            <div style="display:flex;flex-direction:column;align-items:center">
+              <div style="font:700 128px/0.85 'Saira Condensed';color:#64D2FF;font-variant-numeric:tabular-nums">{{gear}}</div>
+              <div style="font:500 11px system-ui;letter-spacing:2px;color:rgba(255,255,255,.4);margin-top:8px">GEAR</div>
+            </div>
+            <div style="flex:1"></div>
+            <div style="display:flex;flex-direction:column;align-items:flex-end">
+              <div style="display:flex;align-items:baseline;gap:10px">
+                <div style="font:600 104px/0.85 'Saira Condensed';color:#F2F5F7;font-variant-numeric:tabular-nums">{{speedTxt}}</div>
+                <div style="font:600 20px 'Saira Condensed';color:rgba(255,255,255,.45)">{{spdUnit}}</div>
+              </div>
+              <div style="display:flex;align-items:center;gap:8px;margin-top:14px;width:220px">
+                <span style="font:500 10px system-ui;letter-spacing:1.5px;color:rgba(255,255,255,.4)">THR</span>
+                <div style="flex:1;height:10px;border-radius:5px;background:rgba(255,255,255,.08);overflow:hidden"><div style="height:100%;background:#32D74B;width:{{thrPct}}%;transition:width 80ms linear"></div></div>
+                <span style="font:600 16px 'Saira Condensed';color:#32D74B;font-variant-numeric:tabular-nums;min-width:34px;text-align:right">{{thrTxt}}%</span>
+              </div>
+            </div>
+          </div>
+          <div style="display:flex;align-items:center;gap:14px">
+            <svg width="96" height="96" viewBox="-48 -48 96 96" style="flex:none">
+              <circle r="34" fill="none" stroke="rgba(255,255,255,.14)" stroke-width="1"></circle>
+              <circle r="17" fill="none" stroke="rgba(255,255,255,.08)" stroke-width="1"></circle>
+              <line x1="-40" y1="0" x2="40" y2="0" stroke="rgba(255,255,255,.07)"></line>
+              <line x1="0" y1="-40" x2="0" y2="40" stroke="rgba(255,255,255,.07)"></line>
+              <circle cx="{{gxS}}" cy="{{gyS}}" r="6" fill="#64D2FF"></circle>
+            </svg>
+            <div style="display:flex;flex-direction:column;gap:2px">
+              <div style="font:600 26px 'Saira Condensed';color:#F2F5F7;font-variant-numeric:tabular-nums">{{gMag}} g</div>
+              <div style="font:500 10px system-ui;letter-spacing:1.5px;color:rgba(255,255,255,.4)">PEAK {{pkTxt}}</div>
+            </div>
+            <div style="width:1px;height:44px;background:rgba(255,255,255,.1);margin:0 6px"></div>
+            <div style="display:flex;gap:20px">
+              <div><div style="font:500 9px system-ui;letter-spacing:1.2px;color:rgba(255,255,255,.35)">ALT</div><div style="font:600 20px 'Saira Condensed';color:#F2F5F7;font-variant-numeric:tabular-nums">{{altTxt}} {{altUnit}}</div></div>
+              <div><div style="font:500 9px system-ui;letter-spacing:1.2px;color:rgba(255,255,255,.35)">YAW</div><div style="font:600 20px 'Saira Condensed';color:#F2F5F7;font-variant-numeric:tabular-nums">{{yawTxt}}°/s</div></div>
+              <div><div style="font:500 9px system-ui;letter-spacing:1.2px;color:rgba(255,255,255,.35)">HDG</div><div style="font:600 20px 'Saira Condensed';color:#F2F5F7;font-variant-numeric:tabular-nums">{{hdgTxt}}° {{hdgCard}}</div></div>
+            </div>
+            <div style="flex:1"></div>
+            <div style="display:flex;gap:8px;align-items:center">
+              <div style="display:flex;align-items:center;gap:6px;padding:6px 11px;border-radius:7px;background:rgba(255,255,255,.06);font:500 11px system-ui;letter-spacing:1px;color:rgba(255,255,255,.55)"><span style="width:6px;height:6px;border-radius:3px;background:{{adC}}"></span>ADAPTER</div>
+              <div style="display:flex;align-items:center;gap:6px;padding:6px 11px;border-radius:7px;background:rgba(255,255,255,.06);font:500 11px system-ui;letter-spacing:1px;color:rgba(255,255,255,.55)"><span style="width:6px;height:6px;border-radius:3px;background:{{carC}}"></span>{{carTxt}} {{hzTxt}} Hz</div>
+              <div style="display:flex;align-items:center;gap:6px;padding:6px 11px;border-radius:7px;background:rgba(255,255,255,.06);font:500 11px system-ui;letter-spacing:1px;color:rgba(255,255,255,.55)"><span style="width:6px;height:6px;border-radius:3px;background:#32D74B"></span>GPS ±{{accTxt}}</div>
+              <sc-if value="{{recording}}" hint-placeholder-val="{{false}}">
+                <div style="display:flex;align-items:center;gap:6px;padding:6px 11px;border-radius:7px;background:rgba(255,69,58,.15);font:600 11px system-ui;letter-spacing:1px;color:#FF453A"><span style="width:6px;height:6px;border-radius:3px;background:#FF453A;animation:ldpulse 1.2s infinite"></span>REC {{recTxt}}</div>
+              </sc-if>
+            </div>
+          </div>
+        </div>
+        <div style="position:absolute;bottom:7px;left:50%;transform:translateX(-50%);width:120px;height:5px;border-radius:3px;background:rgba(255,255,255,.3);z-index:50"></div>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{
+  &quot;units&quot;: { &quot;editor&quot;: &quot;enum&quot;, &quot;options&quot;: [&quot;imperial&quot;, &quot;metric&quot;], &quot;default&quot;: &quot;imperial&quot;, &quot;tsType&quot;: &quot;string&quot;, &quot;section&quot;: &quot;Display&quot; },
+  &quot;redline&quot;: { &quot;editor&quot;: &quot;int&quot;, &quot;default&quot;: 7500, &quot;min&quot;: 6000, &quot;max&quot;: 9000, &quot;step&quot;: 100, &quot;unit&quot;: &quot;rpm&quot;, &quot;tsType&quot;: &quot;number&quot;, &quot;section&quot;: &quot;Display&quot; },
+  &quot;showTrail&quot;: { &quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: true, &quot;tsType&quot;: &quot;boolean&quot;, &quot;section&quot;: &quot;G-meter&quot; }
+}">
+class Component extends DCLogic {
+  state = {
+    tab: 'record',
+    connectStep: 'idle', found: [], showBusyHelp: false,
+    recording: false, recStart: 0,
+    openSession: null,
+    units: null, keepAwake: true, shareOpen: false, confirmDel: false,
+    sessions: [
+      { id: 1, name: 'Angeles Crest Hwy', loc: 'Angeles Crest Hwy', date: 'Jul 7 · 7:12 AM', dur: '42:18', dist: '38.2 mi', samples: '168k', size: '6.1 MB', recovered: false, phoneOnly: false, note: '', maxSpd: '96', avgSpd: '41', maxRpm: '7,180', pkLatS: '1.02', pkLongS: '1.08', elevG: '+3,140 ft', temps: '188–204 °F' },
+      { id: 2, name: 'Streets of Willow', loc: 'Streets of Willow', date: 'Jun 28 · 9:40 AM', dur: '1:24:55', dist: '61.7 mi', samples: '512k', size: '18.9 MB', recovered: false, phoneOnly: false, note: 'New PS4S · 32 psi cold', maxSpd: '104', avgSpd: '52', maxRpm: '7,240', pkLatS: '1.12', pkLongS: '1.10', elevG: '+820 ft', temps: '190–212 °F' },
+      { id: 3, name: 'Glendora Mountain Rd', loc: 'Glendora Mountain Rd', date: 'Jun 27 · 6:41 PM', dur: '28:51', dist: '22.4 mi', samples: '96k', size: '3.4 MB', recovered: true, phoneOnly: false, note: '', maxSpd: '71', avgSpd: '34', maxRpm: '6,850', pkLatS: '0.94', pkLongS: '1.01', elevG: '+2,210 ft', temps: '186–199 °F' },
+      { id: 4, name: 'Home → Office', loc: 'Home → Office', date: 'Jun 26 · 6:02 PM', dur: '12:04', dist: '6.8 mi', samples: '41k', size: '1.5 MB', recovered: false, phoneOnly: true, note: '', maxSpd: '48', avgSpd: '22', maxRpm: '—', pkLatS: '0.41', pkLongS: '0.52', elevG: '+140 ft', temps: '—' },
+    ],
+  };
+
+  RATIOS = [0, 5.087, 2.991, 2.035, 1.594, 1.286, 1.0];
+  SEGS = [
+    { t: 'a', to: 96 }, { t: 'b', to: 44 }, { t: 'c', dir: 1, dur: 2.4 },
+    { t: 'a', to: 74 }, { t: 'b', to: 38 }, { t: 'c', dir: -1, dur: 1.9 },
+    { t: 'a', to: 88 }, { t: 'b', to: 52 }, { t: 'c', dir: 1, dur: 1.2 }, { t: 'c', dir: -1, dur: 2.6 },
+  ];
+
+  initSim() {
+    return { i: 0, segT: 0, t: 0, frame: 0, speed: 52, gear: 3, rpm: 3800, thr: 60, latG: 0, longG: 0, shift: 0, trail: [], pkLat: 0, pkLong: 0, pkMag: 0, acc: 3.1, hz: 13, samples: 0 };
+  }
+
+  nextSeg(s) {
+    s.i = (s.i + 1) % this.SEGS.length; s.segT = 0;
+    if (s.i === 0) { s.pkMag = 0; s.pkLat = 0; s.pkLong = 0; }
+  }
+
+  step(s, dt, rl, rec) {
+    const seg = this.SEGS[s.i]; s.t += dt; s.segT += dt;
+    const n = (a) => (Math.random() - 0.5) * a;
+    const lp = (k) => Math.min(1, dt * k);
+    if (seg.t === 'a') {
+      s.thr += (100 - s.thr) * lp(5);
+      const a = Math.max(2.2, 14.5 - 0.09 * s.speed);
+      s.speed += a * dt;
+      s.longG += ((a / 21.9 + n(0.04)) - s.longG) * lp(7);
+      s.latG += (n(0.08) - s.latG) * lp(4);
+      if (s.speed >= seg.to) this.nextSeg(s);
+    } else if (seg.t === 'b') {
+      s.thr += (0 - s.thr) * lp(10);
+      s.speed = Math.max(seg.to, s.speed - 27 * dt);
+      s.longG += ((-1.08 + n(0.08)) - s.longG) * lp(8);
+      s.latG += (n(0.1) - s.latG) * lp(4);
+      if (s.speed <= seg.to + 0.1) this.nextSeg(s);
+    } else {
+      s.thr += (46 - s.thr) * lp(4);
+      s.latG += ((seg.dir * (0.92 + 0.05 * Math.sin(s.segT * 2.5)) + n(0.06)) - s.latG) * lp(5);
+      s.longG += ((0.04 + n(0.05)) - s.longG) * lp(5);
+      s.speed -= 0.8 * dt;
+      if (s.segT >= seg.dur) this.nextSeg(s);
+    }
+    const rt = () => s.speed * this.RATIOS[s.gear] * 39.2;
+    if (rt() > rl - 320 && s.gear < 6) { s.gear++; s.shift = 0.22; }
+    if (rt() < 2600 && s.gear > 2) { s.gear--; s.shift = 0.18; }
+    if (s.shift > 0) s.shift -= dt;
+    s.rpm += (rt() - s.rpm) * lp(s.shift > 0 ? 14 : 9);
+    s.frame++;
+    if (s.frame % 2 === 0) { s.trail.push([s.latG, s.longG]); if (s.trail.length > 40) s.trail.shift(); }
+    const mag = Math.hypot(s.latG, s.longG);
+    if (mag > s.pkMag) { s.pkMag = mag; s.pkLat = s.latG; s.pkLong = s.longG; }
+    s.acc = Math.min(5.2, Math.max(2.0, s.acc + n(0.2)));
+    s.hz = 12.5 + Math.sin(s.t * 0.6) * 1.4 + n(0.5);
+    if (rec) s.samples += dt * (s.hz + 112);
+  }
+
+  componentDidMount() {
+    this.s = this.s || this.initSim();
+    let last = performance.now();
+    const loop = (now) => {
+      const dt = Math.min(0.08, (now - last) / 1000); last = now;
+      this.step(this.s, dt, this.props.redline ?? 7500, this.state.recording);
+      this.forceUpdate();
+      this.raf = requestAnimationFrame(loop);
+    };
+    this.raf = requestAnimationFrame(loop);
+  }
+  componentWillUnmount() { cancelAnimationFrame(this.raf); clearTimeout(this._t1); clearTimeout(this._t2); clearTimeout(this._t3); }
+
+  mmss(sec) { const m = Math.floor(sec / 60), s2 = Math.floor(sec % 60); return m + ':' + String(s2).padStart(2, '0'); }
+
+  toggleRec = () => {
+    if (!this.state.recording) {
+      if (this.s) this.s.samples = 0;
+      this.setState({ recording: true, recStart: Date.now() });
+    } else {
+      const sec = (Date.now() - this.state.recStart) / 1000;
+      const k = Math.round((this.s ? this.s.samples : 0) / 100) / 10;
+      const sess = { id: Date.now(), name: 'Just recorded', loc: 'Just recorded', date: 'Jul 7 · now', dur: this.mmss(sec), dist: '—', samples: k + 'k', size: (k * 0.037).toFixed(1) + ' MB', recovered: false, phoneOnly: false, note: '', maxSpd: '—', avgSpd: '—', maxRpm: '—', pkLatS: '—', pkLongS: '—', elevG: '—', temps: '—' };
+      this.setState({ recording: false, sessions: [sess, ...this.state.sessions] });
+    }
+  };
+
+  startScan = () => {
+    this.setState({ connectStep: 'scanning', found: [] });
+    this._t1 = setTimeout(() => this.setState({ found: [{ name: 'VEEPEAK OBDCheck BLE+', rssi: '-52 dBm' }] }), 1300);
+    this._t2 = setTimeout(() => this.setState({ found: [{ name: 'VEEPEAK OBDCheck BLE+', rssi: '-52 dBm' }, { name: 'Unnamed device', rssi: '-79 dBm' }] }), 2100);
+  };
+  pickDevice = () => {
+    this.setState({ connectStep: 'connecting', showBusyHelp: false });
+    this._t3 = setTimeout(() => this.setState({ connectStep: 'connected' }), 1400);
+  };
+  resetConnect = () => this.setState({ connectStep: 'idle', found: [] });
+
+  goRec = () => this.setState({ tab: 'record' });
+  goSess = () => this.setState({ tab: 'sessions' });
+  goHealth = () => this.setState({ tab: 'health' });
+  goSet = () => this.setState({ tab: 'settings' });
+  setUnitsImp = () => this.setState({ units: 'imperial' });
+  setUnitsMet = () => this.setState({ units: 'metric' });
+  toggleAwake = () => this.setState({ keepAwake: !this.state.keepAwake });
+  openShare = () => this.setState({ shareOpen: true });
+  closeShare = () => this.setState({ shareOpen: false });
+  askDel = () => this.setState({ confirmDel: true });
+  cancelDel = () => this.setState({ confirmDel: false });
+  doDel = () => { const o = this.state.openSession; this.setState({ sessions: this.state.sessions.filter((x) => x.id !== (o && o.id)), openSession: null, confirmDel: false }); };
+  onNote = (e) => { const v = e.target.value; const o = this.state.openSession; if (!o) return; this.setState({ sessions: this.state.sessions.map((x) => x.id === o.id ? { ...x, note: v } : x), openSession: { ...o, note: v } }); };
+  demoGo = () => this.setState({ tab: 'record' });
+
+  openSess = (s) => this.setState({ openSession: s });
+  closePb = () => this.setState({ openSession: null });
+
+  renderVals() {
+    const s = this.s || this.initSim();
+    const rl = this.props.redline ?? 7500;
+    const st = this.state;
+    const imp = ((st.units ?? this.props.units) ?? 'imperial') !== 'metric';
+    const showTrail = this.props.showTrail ?? true;
+    const clamp = (v, m) => Math.max(-m, Math.min(m, v));
+
+    const spd = (v) => imp ? v : v * 1.609;
+    const speedTxt = String(Math.round(spd(s.speed)));
+    const spdUnit = imp ? 'MPH' : 'KM/H';
+    const rpmR = Math.round(s.rpm / 10) * 10;
+    const rpmTxt = rpmR.toLocaleString();
+    const rpmPct = Math.min(100, s.rpm / rl * 100).toFixed(1);
+    const inRed = s.rpm > rl - 700;
+    const rpmBarColor = inRed ? '#FF453A' : '#F2F5F7';
+    const redPct = ((rl - 700) / rl * 100).toFixed(1);
+    const thrPct = Math.round(s.shift > 0 ? 14 : s.thr);
+    const gMag = Math.hypot(s.latG, s.longG).toFixed(2);
+    const pkTxt = s.pkMag.toFixed(2) + ' g';
+
+    const mkTrail = (sc, cl) => showTrail ? s.trail.map((p) => clamp(p[0] * sc, cl).toFixed(1) + ',' + clamp(-p[1] * sc, cl).toFixed(1)).join(' ') : '';
+
+    // health
+    const t = s.t;
+    const tf = (f) => imp ? Math.round(f) : Math.round((f - 32) / 1.8);
+    const tU = imp ? '°F' : '°C';
+    const cool = 193 + 2.5 * Math.sin(t * 0.05), oil = 211 + 3 * Math.sin(t * 0.03 + 2), iat = 88 + 4 * (s.thr / 100);
+    const fuel = Math.max(5, 61.4 - t * 0.003), batt = 13.8 + 0.15 * Math.sin(t * 0.9);
+    const load = 18 + s.thr * 0.55, timing = 6 + s.thr * 0.13, elev = 120 + 30 * Math.sin(t * 0.02);
+    const W = '#F2F5F7', G = '#32D74B', C = '#64D2FF';
+    const M = 'rgba(255,255,255,.32)';
+    const healthRows = [
+      { label: 'COOLANT', val: String(tf(cool)), unit: tU, color: G, pct: Math.round((cool - 100) / 160 * 100), sub: '2 s ago', subC: M },
+      { label: 'OIL TEMP', val: '—', unit: '', color: 'rgba(255,255,255,.3)', pct: 0, sub: 'not reported by ECU', subC: M },
+      { label: 'INTAKE AIR', val: String(tf(iat)), unit: tU, color: W, pct: Math.round(iat / 180 * 100), sub: '3 s ago', subC: M },
+      { label: 'AMBIENT', val: String(tf(78.6)), unit: tU, color: 'rgba(255,255,255,.55)', pct: 0, sub: '14 s ago — stale', subC: '#FFD60A' },
+      { label: 'FUEL LEVEL', val: fuel.toFixed(0), unit: '%', color: fuel < 20 ? '#FFD60A' : W, pct: Math.round(fuel), sub: '4 s ago', subC: M },
+      { label: 'BATTERY', val: batt.toFixed(1), unit: 'V', color: G, pct: Math.round((batt - 11) / 4 * 100), sub: 'alternator OK', subC: M },
+      { label: 'ENGINE LOAD', val: String(Math.round(load)), unit: '%', color: W, pct: Math.round(load), sub: '2 s ago', subC: M },
+      { label: 'BARO', val: imp ? '29.91' : '1013', unit: imp ? 'inHg' : 'hPa', color: W, pct: 0, sub: 'phone barometer', subC: M },
+      { label: 'TIMING ADV', val: String(Math.round(timing)), unit: '°BTDC', color: W, pct: 0, sub: '5 s ago', subC: M },
+      { label: 'REL. ELEVATION', val: (imp ? '+' + Math.round(elev) : '+' + Math.round(elev * 0.305)), unit: imp ? 'ft' : 'm', color: C, pct: 0, sub: 'GPS + baro', subC: M },
+      { label: 'PHONE BATTERY', val: '84', unit: '%', color: G, pct: 84, sub: 'on charger', subC: M },
+      { label: 'THERMAL STATE', val: 'NOM', unit: '', color: G, pct: 0, sub: 'no throttling', subC: M },
+    ];
+
+    const recSec = st.recording ? (Date.now() - st.recStart) / 1000 : 0;
+
+    return {
+      // gauges
+      speedTxt, spdUnit, rpmTxt, rpmPct, rpmBarColor, redPct, redlineTxt: (rl / 1000).toFixed(1) + 'k',
+      gear: String(s.gear), thrPct, thrTxt: String(thrPct), gMag, pkTxt,
+      gxS: clamp(s.latG * 32, 42).toFixed(1), gyS: clamp(-s.longG * 32, 42).toFixed(1),
+      gxP: clamp(s.latG * 63, 84).toFixed(1), gyP: clamp(-s.longG * 63, 84).toFixed(1),
+      pkXp: clamp(s.pkLat * 63, 84).toFixed(1), pkYp: clamp(-s.pkLong * 63, 84).toFixed(1),
+      trailPtsP: mkTrail(63, 84),
+      hzTxt: s.hz.toFixed(0), accTxt: s.acc.toFixed(1) + ' m',
+      // status two-stage + secondary channels
+      adC: '#32D74B',
+      carC: st.connectStep === 'connected' ? '#32D74B' : 'rgba(255,255,255,.3)',
+      carTxt: st.connectStep === 'connected' ? 'CAR' : 'CAR —',
+      altTxt: String(Math.round(imp ? 1187 + 30 * Math.sin(t * 0.02) : (1187 + 30 * Math.sin(t * 0.02)) * 0.305)),
+      altUnit: imp ? 'ft' : 'm',
+      yawTxt: (s.latG * 24).toFixed(0),
+      hdgTxt: String(Math.round(((t * 9) % 360 + 360) % 360)),
+      hdgCard: ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'][Math.round((((t * 9) % 360 + 360) % 360) / 45) % 8],
+      // recording
+      recording: st.recording, recTxt: this.mmss(recSec),
+      toggleRec: this.toggleRec,
+      // tabs
+      tabIsHealth: st.tab === 'health', tabIsSess: st.tab === 'sessions', tabIsSet: st.tab === 'settings',
+      recIdleP: st.tab === 'record' && !st.recording,
+      recLiveP: st.tab === 'record' && st.recording,
+      showTabs: !(st.tab === 'record' && st.recording),
+      goRec: this.goRec, goSess: this.goSess, goHealth: this.goHealth, goSet: this.goSet,
+      recTabC: st.tab === 'record' ? '#F2F5F7' : 'rgba(255,255,255,.35)',
+      sessTabC: st.tab === 'sessions' ? '#F2F5F7' : 'rgba(255,255,255,.35)',
+      healthTabC: st.tab === 'health' ? '#F2F5F7' : 'rgba(255,255,255,.35)',
+      setTabC: st.tab === 'settings' ? '#F2F5F7' : 'rgba(255,255,255,.35)',
+      recIconC: st.recording ? '#FF453A' : (st.tab === 'record' ? '#F2F5F7' : 'rgba(255,255,255,.35)'),
+      // connect flow
+      isIdle: st.connectStep === 'idle', isScanning: st.connectStep === 'scanning',
+      isConnecting: st.connectStep === 'connecting', isConnected: st.connectStep === 'connected',
+      notConnected: st.connectStep !== 'connected',
+      found: st.found.map((d) => ({ ...d, pick: this.pickDevice })),
+      startScan: this.startScan, resetConnect: this.resetConnect,
+      // health
+      healthRows,
+      // sessions
+      sessions: st.sessions.map((x) => ({ ...x, open: () => this.openSess(x) })),
+      noOpenSession: !st.openSession, hasOpenSession: !!st.openSession,
+      openS: st.openSession || {},
+      closePb: this.closePb, onNote: this.onNote,
+      chans: [
+        { ch: 'RPM · OBD fast', n: '32,410', q: '2 gaps · 4.1 s', qc: '#FFD60A' },
+        { ch: 'SPEED · OBD fast', n: '32,395', q: '2 gaps · 4.1 s', qc: '#FFD60A' },
+        { ch: 'THROTTLE · OBD fast', n: '32,401', q: 'clean', qc: '#32D74B' },
+        { ch: 'SLOW LOOP ×9 · OBD', n: '508', q: 'clean', qc: '#32D74B' },
+        { ch: 'GPS · 10 Hz', n: '25,380', q: 'clean · ±2.4–4.9 m', qc: '#32D74B' },
+        { ch: 'IMU · 100 Hz', n: '253,800', q: 'clean', qc: '#32D74B' },
+        { ch: 'BAROMETER · 1 Hz', n: '2,538', q: 'clean', qc: '#32D74B' },
+      ],
+      shareOpen: st.shareOpen, openShare: this.openShare, closeShare: this.closeShare,
+      confirmDel: st.confirmDel, askDel: this.askDel, cancelDel: this.cancelDel, doDel: this.doDel,
+      demoGo: this.demoGo,
+      storageTxt: '29.9 MB',
+      // settings controls
+      impBg: imp ? '#64D2FF' : 'transparent', impC: imp ? '#000' : 'rgba(255,255,255,.6)',
+      metBg: !imp ? '#64D2FF' : 'transparent', metC: !imp ? '#000' : 'rgba(255,255,255,.6)',
+      setUnitsImp: this.setUnitsImp, setUnitsMet: this.setUnitsMet,
+      awakeBg: st.keepAwake ? '#32D74B' : 'rgba(255,255,255,.18)', awakeX: st.keepAwake ? 22 : 3,
+      toggleAwake: this.toggleAwake,
+    };
+  }
+}
+</script>
+</body>
+</html>

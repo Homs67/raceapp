@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>raceApp connects to your OBD2 adapter over Bluetooth to read live engine data.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Your location is recorded during sessions to capture speed, position, and altitude.</string>
+	<key>NSMotionUsageDescription</key>
+	<string>Motion and barometer data are recorded during sessions to measure G-forces and elevation.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>bluetooth-central</string>
+		<string>location</string>
+	</array>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+</dict>
+</plist>
