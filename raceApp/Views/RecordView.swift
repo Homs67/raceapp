@@ -2,8 +2,9 @@
 //  RecordView.swift
 //  raceApp
 //
-//  Home tab: idle screen with the big START button (design screen 1),
-//  live dashboard while recording (screens 2–3), both orientations.
+//  Home tab, restyled to the iOS Fitness aesthetic (pure black, rounded
+//  #1F1F1F cards, big bold titles) with the orange/white/red palette.
+//  Idle screen = status card + START hero; recording = live dashboard.
 //
 
 import SwiftUI
@@ -25,113 +26,128 @@ struct RecordView: View {
     }
 }
 
-// MARK: - Shared status chips
-
-struct ConnectionChipsRow: View {
-    @Environment(AppModel.self) private var model
-    var snapshot: [ChannelId: TelemetryReading]
-    var now: TimeInterval
-
-    var body: some View {
-        HStack(spacing: 8) {
-            StatusChip(
-                text: "ADAPTER",
-                dotColor: model.connection.adapterLinkUp ? .okGreen : .white.opacity(0.3))
-            StatusChip(
-                text: model.connection.carLinkUp ? "CAR" : "CAR —",
-                dotColor: model.connection.carLinkUp ? .okGreen : .white.opacity(0.3))
-            if model.connection.carLinkUp {
-                StatusChip(text: "OBD \(String(format: "%.0f", model.bus.obdHz(now: now))) Hz")
-            }
-            if let accuracy = snapshot.fresh(.gpsHorizontalAccuracy, now: now, maxAge: 10) {
-                StatusChip(text: "GPS ±\(Int(accuracy)) m")
-            } else {
-                StatusChip(text: "GPS —")
-            }
-        }
-    }
-}
-
-// MARK: - Idle (design screen 1)
+// MARK: - Idle (Fitness style)
 
 private struct IdleRecordView: View {
-    @Environment(AppModel.self) private var model
-    @AppStorage("useMetricUnits") private var metric = false
-
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 1)) { _ in
-            let now = uptimeNow()
-            let snapshot = model.bus.snapshot()
-            VStack(spacing: 0) {
-                ConnectionChipsRow(snapshot: snapshot, now: now)
-                    .padding(.top, 16)
-
-                if !model.connection.carLinkUp {
-                    noObdNotice.padding(.top, 14)
-                }
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            VStack(alignment: .leading, spacing: 0) {
+                header(date: context.date)
 
                 Spacer()
-                startButton
-                VStack(spacing: 6) {
-                    Text("START SESSION")
-                        .font(.numeral(20, weight: .semibold))
-                        .foregroundStyle(Color.textPrimary)
-                    Text("No setup, no modes. Every channel is recorded.")
-                        .font(.system(size: 12.5))
-                        .foregroundStyle(Color.white.opacity(0.45))
-                }
-                .padding(.top, 22)
+                idleHero
                 Spacer()
 
-                Text("Keeps recording with the screen locked, in the background, or during a phone call.")
-                    .font(.system(size: 11))
-                    .foregroundStyle(Color.mutedWeak)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 40)
-                    .padding(.bottom, 12)
+                SessionButton(isRecording: false)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color.bgScreen)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .padding(.horizontal, 22)
+            .padding(.top, 8)
+            .padding(.bottom, 16)
+            .background(Color.black)
         }
     }
 
-    private var startButton: some View {
-        Button {
-            model.startRecording(metricUnits: metric)
-        } label: {
-            ZStack {
-                Circle()
-                    .stroke(Color.recordRed.opacity(0.5), lineWidth: 4)
-                    .frame(width: 140, height: 140)
-                Circle()
-                    .fill(Color.recordRed)
-                    .frame(width: 112, height: 112)
-                Text("START")
-                    .font(.system(size: 15, weight: .semibold))
-                    .kerning(1.5)
-                    .foregroundStyle(.white)
-            }
+    private func header(date: Date) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("Record")
+                .font(.system(size: 34, weight: .bold))
+                .foregroundStyle(Color.textPrimary)
+            Text(date.formatted(.dateTime.weekday(.wide).month().day()))
+                .font(.system(size: 15))
+                .foregroundStyle(Color.muted)
         }
-        .buttonStyle(.plain)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private var noObdNotice: some View {
-        HStack(alignment: .top, spacing: 8) {
-            Text("No OBD")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(Color.warnAmber)
-            Text("— engine channels won't be recorded. GPS, G-meter, barometer and device health still capture. Set up in Connection.")
-                .font(.system(size: 12))
-                .foregroundStyle(Color.white.opacity(0.55))
+    private var idleHero: some View {
+        VStack(spacing: 14) {
+            Image(systemName: "gauge.open.with.lines.needle.33percent")
+                .font(.system(size: 46, weight: .light))
+                .foregroundStyle(Color.mutedWeak)
+            Text("Ready to record")
+                .font(.system(size: 22, weight: .semibold))
+                .foregroundStyle(Color.textPrimary)
+            Text("Every channel — GPS, motion, and OBD — is captured the moment you start.")
+                .font(.system(size: 13))
+                .foregroundStyle(Color.muted)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 24)
         }
-        .padding(12)
-        .background(Color.warnAmber.opacity(0.07), in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.warnAmber.opacity(0.25), lineWidth: 1))
-        .padding(.horizontal, 22)
+        .frame(maxWidth: .infinity)
     }
 }
 
-// MARK: - Recording dashboard (design screens 2–3)
+/// Shared start/stop control: identical shape and size in both states —
+/// only the fill color and label change. Orange "Start Session" → red-filled
+/// "Stop Recording" (R1.1–R1.3).
+struct SessionButton: View {
+    @Environment(AppModel.self) private var model
+    @AppStorage("useMetricUnits") private var metric = false
+    var isRecording: Bool
+    /// Landscape uses a narrower, intrinsic-width button; portrait/idle fill the row.
+    var compact: Bool = false
+
+    var body: some View {
+        Button {
+            if isRecording {
+                model.stopRecording()
+            } else {
+                model.startRecording(metricUnits: metric)
+            }
+        } label: {
+            Text(isRecording ? "Stop Recording" : "Start Session")
+                .font(.system(size: compact ? 15 : 17, weight: .semibold))
+                .foregroundStyle(isRecording ? Color.recordRed : .white)
+                .frame(maxWidth: compact ? nil : .infinity)
+                .padding(.horizontal, compact ? 26 : 0)
+                .frame(height: compact ? 46 : 56)
+                .background(background)
+                .contentShape(RoundedRectangle(cornerRadius: compact ? 14 : 16))
+        }
+        .buttonStyle(PressableButtonStyle())
+    }
+
+    // Start = solid orange fill, white text.
+    // Stop  = red outline only, no fill, red text — high contrast on black.
+    @ViewBuilder private var background: some View {
+        let shape = RoundedRectangle(cornerRadius: compact ? 14 : 16)
+        if isRecording {
+            shape.stroke(Color.recordRed, lineWidth: 1.5)
+        } else {
+            shape.fill(Color.accent)
+        }
+    }
+}
+
+/// Recording indicator with a smooth, self-contained pulse. The dot opacity is
+/// derived from absolute time via TimelineView(.animation), so it never jitters
+/// when the parent dashboard re-renders (fixes the landscape jump).
+struct RecordingChip: View {
+    var elapsed: TimeInterval
+
+    var body: some View {
+        TimelineView(.animation) { context in
+            let t = context.date.timeIntervalSinceReferenceDate
+            let opacity = 0.3 + 0.7 * (0.5 + 0.5 * sin(t * 2 * .pi / 1.2))
+            HStack(spacing: 5) {
+                Circle().fill(Color.recordRed).frame(width: 6, height: 6).opacity(opacity)
+                Text("REC \(Self.format(elapsed))")
+                    .font(.system(size: 12, weight: .medium)).monospacedDigit()
+                    .foregroundStyle(Color.recordRed)
+            }
+            .padding(.horizontal, 8).padding(.vertical, 5)
+            .background(Color.recordRed.opacity(0.15), in: RoundedRectangle(cornerRadius: 6))
+        }
+    }
+
+    static func format(_ elapsed: TimeInterval) -> String {
+        let total = Int(max(0, elapsed))
+        return String(format: "%d:%02d", total / 60, total % 60)
+    }
+}
+
+// MARK: - Recording dashboard
 
 private struct DashboardView: View {
     @Environment(AppModel.self) private var model
@@ -216,73 +232,79 @@ private struct DashboardView: View {
         return live
     }
 
-    // MARK: Portrait (design screen 2)
+    // MARK: Portrait
 
     private func portrait(live: Live, elapsed: TimeInterval) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 18) {
             HStack(spacing: 8) {
-                recChip(elapsed: elapsed)
-                StatusChip(text: "OBD \(String(format: "%.0f", live.obdHz)) Hz")
-                StatusChip(text: live.gpsAccuracy.map { "GPS ±\(Int($0)) m" } ?? "GPS —")
+                RecordingChip(elapsed: elapsed)
+                Spacer()
+                Text("OBD \(String(format: "%.0f", live.obdHz)) Hz")
+                    .font(.system(size: 12, weight: .medium)).monospacedDigit()
+                    .foregroundStyle(Color.muted)
+                Text(live.gpsAccuracy.map { "GPS ±\(Int($0)) m" } ?? "GPS —")
+                    .font(.system(size: 12, weight: .medium)).monospacedDigit()
+                    .foregroundStyle(Color.muted)
             }
 
             TachBar(rpm: live.rpm)
-            VStack(alignment: .leading, spacing: 2) {
-                bigNumeral(live.rpm.map { String(Int($0)) }, size: 124,
+
+            VStack(alignment: .leading, spacing: 0) {
+                bigNumeral(live.rpm.map { String(Int($0)) }, size: 130,
                            color: (live.rpm ?? 0) >= 6800 ? .recordRed : .textPrimary)
                 microLabel("RPM")
             }
 
-            HStack(alignment: .top, spacing: 52) {
-                VStack(alignment: .leading, spacing: 2) {
-                    bigNumeral(live.gear.map(String.init) ?? (live.speedMps ?? 0 > 2 ? "N" : nil),
-                               size: 84, color: .accentCyan)
-                    microLabel("GEAR")
-                }
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        bigNumeral(live.speedDisplay.map { String(Int($0)) }, size: 84)
-                        Text(UnitsFormatter(metric: metric).speedUnit)
-                            .font(.system(size: 15))
-                            .foregroundStyle(Color.white.opacity(0.45))
-                    }
-                    microLabel("SPEED")
-                }
+            HStack(alignment: .top, spacing: 48) {
+                metricBlock(value: live.gear.map(String.init) ?? (live.speedMps ?? 0 > 2 ? "N" : nil),
+                            label: "GEAR", size: 88, color: .accent)
+                metricBlock(value: live.speedDisplay.map { String(Int($0)) },
+                            label: "SPEED", size: 88, color: .textPrimary,
+                            unit: UnitsFormatter(metric: metric).speedUnit)
             }
 
             ThrottleBar(percent: live.throttle)
 
-            HStack(alignment: .center, spacing: 18) {
-                GMeterView(latG: live.latG, longG: live.longG, peakG: peakG, trail: trail)
-                    .frame(width: 188, height: 188)
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(live.combinedG.map { String(format: "%.2f g", $0) } ?? "—")
-                        .font(.system(size: 30, weight: .medium)).monospacedDigit()
-                        .foregroundStyle(live.combinedG == nil ? Color.mutedWeak : Color.textPrimary)
-                    Text("PEAK \(String(format: "%.2f", peakG)) g")
-                        .font(.microLabel(10)).kerning(1)
-                        .foregroundStyle(Color.warnAmber)
-                }
-            }
-            .frame(maxHeight: .infinity)
+            Spacer(minLength: 8)
 
-            stopButton(elapsed: elapsed)
+            HStack(alignment: .center, spacing: 20) {
+                GMeterView(latG: live.latG, longG: live.longG, peakG: peakG, trail: trail)
+                    .frame(width: 176, height: 176)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(live.combinedG.map { String(format: "%.2f", $0) } ?? "—")
+                        .font(.numeral(38, weight: .semibold))
+                        .foregroundStyle(live.combinedG == nil ? Color.mutedWeak : Color.textPrimary)
+                    + Text(" g")
+                        .font(.system(size: 18))
+                        .foregroundStyle(Color.muted)
+                    Text("PEAK \(String(format: "%.2f", peakG)) g")
+                        .font(.system(size: 11, weight: .semibold)).kerning(0.5)
+                        .foregroundStyle(Color.mutedStrong)
+                }
+                Spacer()
+            }
+
+            Spacer(minLength: 8)
+
+            SessionButton(isRecording: true)
         }
-        .padding(22)
+        .padding(.horizontal, 22)
+        .padding(.top, 8)
+        .padding(.bottom, 16)
     }
 
-    // MARK: Landscape (design screen 3 — the designed-for layout)
+    // MARK: Landscape
 
     private func landscape(live: Live, elapsed: TimeInterval) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             VStack(spacing: 4) {
-                TachBar(rpm: live.rpm, height: 30, segmented: true)
+                TachBar(rpm: live.rpm, height: 28, segmented: true)
                 HStack {
                     microLabel("RPM ×1000")
                     Spacer()
                     Text("REDLINE 7.5K")
-                        .font(.microLabel(9)).kerning(1.5)
-                        .foregroundStyle(Color.recordRed.opacity(0.8))
+                        .font(.system(size: 9, weight: .semibold)).kerning(1.5)
+                        .foregroundStyle(Color.recordRed.opacity(0.85))
                 }
             }
 
@@ -290,14 +312,14 @@ private struct DashboardView: View {
                 bigNumeral(live.rpm.map { String(Int($0)) }, size: 150,
                            color: (live.rpm ?? 0) >= 6800 ? .recordRed : .textPrimary)
                     .frame(minWidth: 300, alignment: .leading)
-                bigNumeral(live.gear.map(String.init) ?? "N", size: 120, color: .accentCyan)
+                bigNumeral(live.gear.map(String.init) ?? "N", size: 120, color: .accent)
                 Spacer()
                 VStack(alignment: .trailing, spacing: 8) {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         bigNumeral(live.speedDisplay.map { String(Int($0)) }, size: 96)
                         Text(UnitsFormatter(metric: metric).speedUnit)
                             .font(.system(size: 15))
-                            .foregroundStyle(Color.white.opacity(0.45))
+                            .foregroundStyle(Color.muted)
                     }
                     ThrottleBar(percent: live.throttle, barWidth: 180)
                 }
@@ -313,10 +335,10 @@ private struct DashboardView: View {
                         .font(.system(size: 18, weight: .medium)).monospacedDigit()
                         .foregroundStyle(live.combinedG == nil ? Color.mutedWeak : Color.textPrimary)
                     Text("PEAK \(String(format: "%.2f", peakG))")
-                        .font(.microLabel(9)).kerning(1)
-                        .foregroundStyle(Color.warnAmber)
+                        .font(.system(size: 9, weight: .semibold)).kerning(1)
+                        .foregroundStyle(Color.mutedStrong)
                 }
-                Divider().overlay(Color.cardBorder).frame(height: 40)
+                Divider().overlay(Color.white.opacity(0.1)).frame(height: 40)
                 landscapeStat("ALT", live.altitude.map {
                     let units = UnitsFormatter(metric: metric)
                     return "\(Int(units.shortDistance(fromMeters: $0))) \(units.shortDistanceUnit)"
@@ -324,8 +346,8 @@ private struct DashboardView: View {
                 landscapeStat("YAW", live.yawDegPerS.map { String(format: "%.0f°/s", $0) })
                 landscapeStat("HDG", live.heading.map { String(format: "%03.0f°", $0) })
                 Spacer()
-                recChip(elapsed: elapsed)
-                stopButtonCompact
+                RecordingChip(elapsed: elapsed)
+                SessionButton(isRecording: true, compact: true)
             }
         }
         .padding(.horizontal, 24)
@@ -337,7 +359,7 @@ private struct DashboardView: View {
     private func landscapeStat(_ label: String, _ value: String?) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(label)
-                .font(.microLabel(9)).kerning(1)
+                .font(.system(size: 9, weight: .semibold)).kerning(1)
                 .foregroundStyle(Color.muted)
             Text(value ?? "—")
                 .font(.numeral(20, weight: .medium))
@@ -345,42 +367,19 @@ private struct DashboardView: View {
         }
     }
 
-    private func recChip(elapsed: TimeInterval) -> some View {
-        StatusChip(text: "REC \(formatElapsed(elapsed))",
-                   dotColor: .recordRed,
-                   tint: .recordRed,
-                   background: Color.recordRed.opacity(0.15),
-                   pulsing: true)
-    }
-
-    private func stopButton(elapsed: TimeInterval) -> some View {
-        Button {
-            model.stopRecording()
-        } label: {
-            Text("STOP · \(formatElapsed(elapsed))")
-                .font(.system(size: 15, weight: .semibold))
-                .kerning(1.5)
-                .monospacedDigit()
-                .foregroundStyle(Color.recordRed)
-                .frame(maxWidth: .infinity)
-                .frame(height: 54)
-                .background(Color.recordRed.opacity(0.16), in: RoundedRectangle(cornerRadius: 14))
+    private func metricBlock(value: String?, label: String, size: CGFloat,
+                             color: Color, unit: String? = nil) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                bigNumeral(value, size: size, color: color)
+                if let unit, value != nil {
+                    Text(unit)
+                        .font(.system(size: 15))
+                        .foregroundStyle(Color.muted)
+                }
+            }
+            microLabel(label)
         }
-        .buttonStyle(.plain)
-    }
-
-    private var stopButtonCompact: some View {
-        Button {
-            model.stopRecording()
-        } label: {
-            Text("STOP")
-                .font(.system(size: 13, weight: .semibold)).kerning(1.5)
-                .foregroundStyle(Color.recordRed)
-                .padding(.horizontal, 18)
-                .frame(height: 44)
-                .background(Color.recordRed.opacity(0.16), in: RoundedRectangle(cornerRadius: 12))
-        }
-        .buttonStyle(.plain)
     }
 
     private func bigNumeral(_ text: String?, size: CGFloat, color: Color = .textPrimary) -> some View {
@@ -393,13 +392,18 @@ private struct DashboardView: View {
 
     private func microLabel(_ text: String) -> some View {
         Text(text)
-            .font(.microLabel(10)).kerning(2)
+            .font(.system(size: 11, weight: .semibold)).kerning(1.5)
             .foregroundStyle(Color.muted)
     }
+}
 
-    private func formatElapsed(_ elapsed: TimeInterval) -> String {
-        let total = Int(max(0, elapsed))
-        return String(format: "%d:%02d", total / 60, total % 60)
+/// Subtle press feedback for the big buttons.
+struct PressableButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.96 : 1)
+            .opacity(configuration.isPressed ? 0.9 : 1)
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
     }
 }
 

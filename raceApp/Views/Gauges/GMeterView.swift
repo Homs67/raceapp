@@ -43,7 +43,7 @@ struct GMeterView: View {
                 context.stroke(
                     Path(ellipseIn: CGRect(x: center.x - radius, y: center.y - radius,
                                            width: radius * 2, height: radius * 2)),
-                    with: .color(.warnAmber), lineWidth: 1.5)
+                    with: .color(.white.opacity(0.55)), lineWidth: 1.5)
             }
 
             func place(_ point: CGPoint) -> CGPoint {
@@ -62,7 +62,7 @@ struct GMeterView: View {
                 var path = Path()
                 path.move(to: place(trail[0]))
                 for point in trail.dropFirst() { path.addLine(to: place(point)) }
-                context.stroke(path, with: .color(Color.accentCyan.opacity(0.4)), lineWidth: 2)
+                context.stroke(path, with: .color(Color.accent.opacity(0.45)), lineWidth: 2)
             }
 
             // Live dot — only with fresh data
@@ -70,7 +70,7 @@ struct GMeterView: View {
                 let dot = place(CGPoint(x: latG, y: -longG))
                 context.fill(
                     Path(ellipseIn: CGRect(x: dot.x - 7, y: dot.y - 7, width: 14, height: 14)),
-                    with: .color(.accentCyan))
+                    with: .color(.accent))
             }
         }
         .aspectRatio(1, contentMode: .fit)

@@ -8,16 +8,20 @@
 
 import SwiftUI
 import MapKit
+import Charts
 import SessionKit
+import ObdKit
 
 struct SessionsView: View {
     @Environment(AppModel.self) private var model
     @AppStorage("useMetricUnits") private var metric = false
     @State private var sessions: [SessionManifest] = []
     @State private var pendingDelete: SessionManifest?
+    @State private var path: [UUID] = []
+    @State private var didAutoOpen = false
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             Group {
                 if sessions.isEmpty {
                     ContentUnavailableView(
@@ -74,6 +78,10 @@ struct SessionsView: View {
 
     private func reload() {
         sessions = model.store.list()
+        if LaunchArgs.openLatestSession, !didAutoOpen, let latest = sessions.first {
+            didAutoOpen = true
+            path = [latest.id]
+        }
     }
 
     private var storageText: String {
@@ -147,6 +155,9 @@ struct SessionDetailView: View {
 
     @State private var manifest: SessionManifest?
     @State private var trace: [CLLocationCoordinate2D] = []
+    @State private var graphs: [MetricSeries] = []
+    @State private var loadingGraphs = true
+    @State private var expandedSeries: MetricSeries?
     @State private var note = ""
     @State private var exportUrls: [URL]?
     @State private var exporting = false
@@ -159,10 +170,9 @@ struct SessionDetailView: View {
                     header(manifest)
                     if !trace.isEmpty { mapCard }
                     highlightsGrid(manifest)
+                    graphsSection
                     noteField(manifest)
-                    channelsCard(manifest)
                     exportButton
-                    deleteButton
                 }
                 .padding(22)
             }
@@ -170,6 +180,17 @@ struct SessionDetailView: View {
         .background(Color.bgScreen)
         .navigationTitle(manifest?.locationName ?? "Session")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    Button("Delete Session", systemImage: "trash", role: .destructive) {
+                        confirmingDelete = true
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+            }
+        }
         .task { load() }
         .sheet(isPresented: Binding(get: { exportUrls != nil }, set: { if !$0 { exportUrls = nil } })) {
             if let urls = exportUrls {
@@ -187,23 +208,56 @@ struct SessionDetailView: View {
     }
 
     private func load() {
-        manifest = try? model.store.manifest(for: sessionId)
-        note = manifest?.note ?? ""
+        let loaded = try? model.store.manifest(for: sessionId)
+        manifest = loaded
+        note = loaded?.note ?? ""
         let directory = model.store.directory(for: sessionId)
+        let metric = self.metric
         Task.detached {
             let lats = ChannelReader.samples(for: .gpsLatitude, inSessionDirectory: directory)
             let lons = ChannelReader.samples(for: .gpsLongitude, inSessionDirectory: directory)
             let count = min(lats.count, lons.count)
-            guard count > 1 else { return }
-            let stride = Swift.max(1, count / 1500)
             var coords: [CLLocationCoordinate2D] = []
-            var index = 0
-            while index < count {
-                coords.append(.init(latitude: lats[index].value, longitude: lons[index].value))
-                index += stride
+            if count > 1 {
+                let stride = Swift.max(1, count / 1500)
+                var index = 0
+                while index < count {
+                    coords.append(.init(latitude: lats[index].value, longitude: lons[index].value))
+                    index += stride
+                }
             }
+            let series = loaded.map { MetricSeries.build(directory: directory, manifest: $0, metric: metric) } ?? []
             let finalCoords = coords
-            await MainActor.run { trace = finalCoords }
+            await MainActor.run {
+                trace = finalCoords
+                graphs = series
+                loadingGraphs = false
+                if LaunchArgs.openLatestGraph, expandedSeries == nil {
+                    expandedSeries = series.first
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private var graphsSection: some View {
+        if !graphs.isEmpty {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("GRAPHS")
+                    .font(.microLabel(9)).kerning(1.2)
+                    .foregroundStyle(Color.muted)
+                ForEach(graphs) { series in
+                    Button { expandedSeries = series } label: {
+                        MetricChart(series: series)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .sheet(item: $expandedSeries) { series in
+                FullGraphView(series: series)
+            }
+        } else if loadingGraphs {
+            HStack { Spacer(); ProgressView().tint(.gray); Spacer() }
+                .frame(height: 80)
         }
     }
 
@@ -310,43 +364,6 @@ struct SessionDetailView: View {
         self.manifest = manifest
     }
 
-    private func channelsCard(_ manifest: SessionManifest) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("CHANNELS")
-                .font(.microLabel(9)).kerning(1.2)
-                .foregroundStyle(Color.muted)
-            ForEach(manifest.channels, id: \.id) { channel in
-                HStack {
-                    Text(channel.id.rawValue)
-                        .font(.system(size: 12, design: .monospaced))
-                        .foregroundStyle(Color.textPrimary)
-                    Spacer()
-                    Text("\(channel.sampleCount.formatted())")
-                        .font(.system(size: 12)).monospacedDigit()
-                        .foregroundStyle(Color.mutedStrong)
-                    gapLabel(for: channel, manifest: manifest)
-                }
-            }
-        }
-        .padding(14)
-        .background(Color.cardBg, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.cardBorder, lineWidth: 1))
-    }
-
-    @ViewBuilder
-    private func gapLabel(for channel: SessionManifest.ChannelSummary, manifest: SessionManifest) -> some View {
-        if channel.id.rawValue.hasPrefix("obd."), !manifest.obdGaps.isEmpty {
-            let total = manifest.obdGaps.reduce(0) { $0 + $1.duration }
-            Text("\(manifest.obdGaps.count) gap\(manifest.obdGaps.count == 1 ? "" : "s") · \(String(format: "%.1f", total)) s")
-                .font(.system(size: 10))
-                .foregroundStyle(Color.warnAmber)
-        } else {
-            Text("clean")
-                .font(.system(size: 10))
-                .foregroundStyle(Color.okGreen.opacity(0.8))
-        }
-    }
-
     private var exportButton: some View {
         Button {
             export()
@@ -381,14 +398,6 @@ struct SessionDetailView: View {
         }
     }
 
-    private var deleteButton: some View {
-        Button("Delete session…", role: .destructive) {
-            confirmingDelete = true
-        }
-        .font(.system(size: 13))
-        .frame(maxWidth: .infinity)
-    }
-
     private func formatDuration(_ seconds: TimeInterval) -> String {
         let total = Int(seconds)
         return String(format: "%d:%02d", total / 60, total % 60)
@@ -409,4 +418,220 @@ struct ActivityView: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
+}
+
+// MARK: - Session graphs
+
+struct SeriesPoint: Identifiable {
+    let x: Double   // seconds since session start
+    let y: Double
+    var id: Double { x }
+}
+
+/// One plotted metric over the whole session. Built off-main by bucket-averaging
+/// the raw channel down to ~360 points so charts stay smooth on long sessions.
+struct MetricSeries: Identifiable {
+    let id: String
+    let title: String
+    let unit: String
+    let color: Color
+    let points: [SeriesPoint]
+    var symmetricZero = false   // G channels: draw a zero baseline, center the axis
+
+    static func build(directory: URL, manifest: SessionManifest, metric: Bool) -> [MetricSeries] {
+        let units = UnitsFormatter(metric: metric)
+        let start = manifest.startUptime
+        let duration = manifest.highlights?.durationSeconds ?? 0
+        guard duration > 0 else { return [] }
+        let buckets = 360
+
+        func series(_ id: String, _ title: String, _ unit: String, _ color: Color,
+                    _ channel: ChannelId, symmetricZero: Bool = false,
+                    transform: (Double) -> Double = { $0 }) -> MetricSeries? {
+            let samples = ChannelReader.samples(for: channel, inSessionDirectory: directory)
+            guard !samples.isEmpty else { return nil }
+            var sums = [Double](repeating: 0, count: buckets)
+            var counts = [Int](repeating: 0, count: buckets)
+            for sample in samples {
+                let elapsed = sample.t - start
+                guard elapsed >= 0, elapsed <= duration else { continue }
+                let bucket = min(buckets - 1, Int(elapsed / duration * Double(buckets)))
+                sums[bucket] += transform(sample.value)
+                counts[bucket] += 1
+            }
+            var points: [SeriesPoint] = []
+            for bucket in 0..<buckets where counts[bucket] > 0 {
+                let x = (Double(bucket) + 0.5) / Double(buckets) * duration
+                points.append(SeriesPoint(x: x, y: sums[bucket] / Double(counts[bucket])))
+            }
+            guard points.count > 1 else { return nil }
+            return MetricSeries(id: id, title: title, unit: unit, color: color,
+                                points: points, symmetricZero: symmetricZero)
+        }
+
+        var result: [MetricSeries] = []
+
+        // Speed — prefer OBD (km/h) then GPS (m/s)
+        if let s = series("speed", "Speed", units.speedUnit.lowercased(), .accent, .obd(.speed),
+                          transform: { units.speed(fromKmh: $0) })
+            ?? series("speed", "Speed", units.speedUnit.lowercased(), .accent, .gpsSpeed,
+                      transform: { units.speed(fromMps: $0) }) {
+            result.append(s)
+        }
+        if let s = series("rpm", "RPM", "rpm", .textPrimary, .obd(.rpm)) { result.append(s) }
+        if let s = series("throttle", "Throttle", "%", .accent, .obd(.throttle)) { result.append(s) }
+        // Longitudinal g = acceleration (+) and braking (−); our brake proxy (no OBD brake channel)
+        if let s = series("longg", "Acceleration & Braking", "g", .recordRed, .imuAccelY,
+                          symmetricZero: true) { result.append(s) }
+        if let s = series("latg", "Cornering", "g", .textPrimary, .imuAccelX,
+                          symmetricZero: true) { result.append(s) }
+        if let s = series("elev", "Elevation", units.shortDistanceUnit, .mutedStrong, .baroRelativeAltitude,
+                          transform: { units.shortDistance(fromMeters: $0) }) { result.append(s) }
+        if let s = series("load", "Engine Load", "%", .accent, .obd(.engineLoad)) { result.append(s) }
+        if let s = series("coolant", "Coolant Temp", units.tempUnit, .recordRed, .obd(.coolantTemp),
+                          transform: { units.temp(fromC: $0) }) { result.append(s) }
+        return result
+    }
+}
+
+private struct MetricChart: View {
+    let series: MetricSeries
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(series.title)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Color.textPrimary)
+                Spacer()
+                Text(series.unit)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.muted)
+                Image(systemName: "arrow.up.left.and.arrow.down.right")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color.muted)
+            }
+
+            Chart {
+                if series.symmetricZero {
+                    RuleMark(y: .value("zero", 0))
+                        .foregroundStyle(Color.white.opacity(0.12))
+                        .lineStyle(StrokeStyle(lineWidth: 1))
+                }
+                ForEach(series.points) { point in
+                    LineMark(x: .value("t", point.x), y: .value("v", point.y))
+                        .foregroundStyle(series.color)
+                        .lineStyle(StrokeStyle(lineWidth: 1.6))
+                        .interpolationMethod(.catmullRom)
+                }
+            }
+            .chartXAxis {
+                AxisMarks(values: .automatic(desiredCount: 4)) { value in
+                    AxisGridLine().foregroundStyle(Color.white.opacity(0.06))
+                    AxisValueLabel {
+                        if let seconds = value.as(Double.self) {
+                            Text(timeLabel(seconds))
+                                .font(.system(size: 9))
+                                .foregroundStyle(Color.muted)
+                        }
+                    }
+                }
+            }
+            .chartYAxis {
+                AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) { _ in
+                    AxisGridLine().foregroundStyle(Color.white.opacity(0.06))
+                    AxisValueLabel()
+                        .font(.system(size: 9))
+                        .foregroundStyle(Color.muted)
+                }
+            }
+            .frame(height: 110)
+        }
+        .padding(14)
+        .background(Color.cardGray, in: RoundedRectangle(cornerRadius: 16))
+    }
+
+    private func timeLabel(_ seconds: Double) -> String {
+        let total = Int(max(0, seconds))
+        return String(format: "%d:%02d", total / 60, total % 60)
+    }
+}
+
+/// Full-screen graph with a horizontally scrollable time axis for detail.
+private struct FullGraphView: View {
+    let series: MetricSeries
+    @Environment(\.dismiss) private var dismiss
+
+    /// Show a window of the session at a time so scrolling reveals detail.
+    private var window: Double {
+        let total = series.points.last?.x ?? 0
+        guard total > 0 else { return 1 }
+        return min(total, max(15, total * 0.3))
+    }
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Scroll left and right to explore. Values in \(series.unit).")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Color.muted)
+                    .padding(.horizontal)
+
+                Chart {
+                    if series.symmetricZero {
+                        RuleMark(y: .value("zero", 0))
+                            .foregroundStyle(Color.white.opacity(0.15))
+                            .lineStyle(StrokeStyle(lineWidth: 1))
+                    }
+                    ForEach(series.points) { point in
+                        LineMark(x: .value("t", point.x), y: .value("v", point.y))
+                            .foregroundStyle(series.color)
+                            .lineStyle(StrokeStyle(lineWidth: 1.8))
+                            .interpolationMethod(.catmullRom)
+                    }
+                }
+                .chartScrollableAxes(.horizontal)
+                .chartXVisibleDomain(length: window)
+                .chartXAxis {
+                    AxisMarks(values: .automatic(desiredCount: 6)) { value in
+                        AxisGridLine().foregroundStyle(Color.white.opacity(0.06))
+                        AxisValueLabel {
+                            if let seconds = value.as(Double.self) {
+                                Text(timeLabel(seconds))
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(Color.muted)
+                            }
+                        }
+                    }
+                }
+                .chartYAxis {
+                    AxisMarks(position: .leading, values: .automatic(desiredCount: 5)) { _ in
+                        AxisGridLine().foregroundStyle(Color.white.opacity(0.06))
+                        AxisValueLabel()
+                            .font(.system(size: 10))
+                            .foregroundStyle(Color.muted)
+                    }
+                }
+                .frame(maxHeight: .infinity)
+                .padding(.horizontal)
+            }
+            .padding(.vertical)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color.black)
+            .navigationTitle(series.title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }
+                        .tint(Color.accent)
+                }
+            }
+        }
+        .preferredColorScheme(.dark)
+    }
+
+    private func timeLabel(_ seconds: Double) -> String {
+        let total = Int(max(0, seconds))
+        return String(format: "%d:%02d", total / 60, total % 60)
+    }
 }

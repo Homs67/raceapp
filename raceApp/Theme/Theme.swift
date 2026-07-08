@@ -16,19 +16,24 @@ extension Color {
         )
     }
 
-    static let bgScreen = Color(hex: 0x0B0C0F)
-    static let bgSheet = Color(hex: 0x1A1C21)
-    static let textPrimary = Color(hex: 0xF2F5F7)
-    static let accentCyan = Color(hex: 0x64D2FF)
-    static let okGreen = Color(hex: 0x32D74B)
-    static let recordRed = Color(hex: 0xFF453A)
-    static let warnAmber = Color(hex: 0xFFD60A)
+    // Core palette: pure black, orange accent, white, red, gray card.
+    static let bgScreen = Color.black
+    static let bgSheet = Color(hex: 0x1F1F1F)
+    static let textPrimary = Color.white
+    static let accent = Color(hex: 0xDF5313)     // primary accent (gear, throttle, START, active)
+    static let recordRed = Color(hex: 0xFF3B30)  // recording, redline, destructive
+    static let cardGray = Color(hex: 0x1F1F1F)   // card fill
 
-    static let mutedStrong = Color.white.opacity(0.55)
-    static let muted = Color.white.opacity(0.4)
+    // Backward-compatible aliases (other tabs still reference these; migrate later)
+    static let accentCyan = accent
+    static let okGreen = accent
+    static let warnAmber = recordRed
+
+    static let mutedStrong = Color.white.opacity(0.6)
+    static let muted = Color.white.opacity(0.45)
     static let mutedWeak = Color.white.opacity(0.3)
-    static let cardBg = Color.white.opacity(0.045)
-    static let cardBorder = Color.white.opacity(0.08)
+    static let cardBg = Color(hex: 0x1F1F1F)
+    static let cardBorder = Color.white.opacity(0.06)
 }
 
 extension Font {

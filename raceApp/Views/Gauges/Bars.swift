@@ -62,9 +62,9 @@ struct ThrottleBar: View {
                 .foregroundStyle(Color.muted)
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
-                    Capsule().fill(Color.white.opacity(0.08))
+                    Capsule().fill(Color.white.opacity(0.1))
                     Capsule()
-                        .fill(Color.okGreen)
+                        .fill(Color.accent)
                         .frame(width: max(0, geo.size.width * (percent ?? 0) / 100))
                         .animation(.linear(duration: 0.07), value: percent ?? 0)
                 }
@@ -72,7 +72,7 @@ struct ThrottleBar: View {
             .frame(width: barWidth, height: 9)
             Text(percent.map { "\(Int($0))%" } ?? "—")
                 .font(.system(size: 14, weight: .medium)).monospacedDigit()
-                .foregroundStyle(percent == nil ? Color.mutedWeak : Color.okGreen)
+                .foregroundStyle(percent == nil ? Color.mutedWeak : Color.accent)
                 .frame(minWidth: 42, alignment: .trailing)
         }
     }
