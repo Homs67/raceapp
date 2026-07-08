@@ -201,19 +201,24 @@ final class ConnectionController {
             _ = try await session.initialize(elmProtocol: elmProtocol)
             state = .connectingEcu
 
-            var supported: SupportedPids?
-            while supported == nil, !Task.isCancelled {
-                do {
-                    supported = try await session.connectEcu()
-                } catch let error as ElmError
-                    where error == .unableToConnect || error == .noData || error == .timeout || error == .stopped {
+            // ECU readiness is decided by directly probing RPM, not by the 0100
+            // supported-bitmap — some adapters/ECUs answer live PIDs fine but
+            // return a bitmap we can't parse. Only genuine no-answer = ignition off.
+            var ecuReady = false
+            while !ecuReady, !Task.isCancelled {
+                if await session.probeValue(pid: 0x0C) != nil {
+                    ecuReady = true
+                } else {
                     state = .waitingForIgnition
                     try? await Task.sleep(for: .seconds(3))
                 }
             }
-            guard let supported else { return }
-            supportedPidCount = supported.pids.count
-            self.supportedPids = supported
+            guard ecuReady else { return }
+
+            // Capability bitmap is best-effort; polling does not depend on it.
+            let bitmap = (try? await session.connectEcu()) ?? SupportedPids(pids: [])
+            supportedPidCount = bitmap.pids.count
+            supportedPids = bitmap.pids.isEmpty ? nil : bitmap
 
             if let vin = try? await session.readVin() {
                 carInfo = Self.carInfo(fromVin: vin, adapterName: isDemo ? "Demo adapter" : storedAdapterName)
@@ -234,12 +239,13 @@ final class ConnectionController {
     }
 
     private func beginPolling() {
-        guard let session, let supported = supportedPids else { return }
+        guard let session else { return }
         pollerTask?.cancel()
         let poller = PidPoller(session: session)
         self.poller = poller
+        let supported = supportedPids // nil → poll unfiltered; poller drops NO-DATA channels
         pollerTask = Task { [bus] in
-            await poller.apply(supportedPids: supported)
+            if let supported { await poller.apply(supportedPids: supported) }
             for await sample in await poller.samples() {
                 bus.publish(.obd(sample.channel), sample.value, at: sample.timestamp)
             }
@@ -266,18 +272,19 @@ final class ConnectionController {
         let proto = (try? await session.execute("ATDPN"))?.joined()
         let gatt = isDemo ? nil : bleTransport?.gattTreeDescription
 
-        let supported = (try? await session.connectEcu()) ?? SupportedPids(pids: [])
+        // Probe every channel directly — the real test of availability, rather
+        // than trusting the 0100 bitmap (which some adapters mis-report).
+        let bitmap = (try? await session.connectEcu()) ?? SupportedPids(pids: [])
         var channels: [DiagnosticsReport.Channel] = []
+        var probedCount = 0
         for channel in ObdChannel.allCases {
             let pidHex = String(format: "%02X", channel.pid)
-            if supported.supports(channel) {
-                let response = try? await session.execute(String(format: "01%02X1", channel.pid))
-                let value = response.flatMap { PidDecoder.decodeMode01(lines: $0).first?.value }
-                channels.append(.init(name: channel.rawValue, pid: pidHex, supported: true, value: value, unit: channel.unit))
-            } else {
-                channels.append(.init(name: channel.rawValue, pid: pidHex, supported: false, value: nil, unit: channel.unit))
-            }
+            let value = await session.probeValue(pid: channel.pid)
+            if value != nil { probedCount += 1 }
+            channels.append(.init(name: channel.rawValue, pid: pidHex,
+                                  supported: value != nil, value: value, unit: channel.unit))
         }
+        let supportedCount = max(bitmap.pids.count, probedCount)
 
         let multi = try? await session.execute("010C0D111")
         let multiCount = multi.map { PidDecoder.decodeMode01(lines: $0).count } ?? 0
@@ -295,7 +302,7 @@ final class ConnectionController {
             obdProtocol: proto,
             vin: vin,
             gatt: gatt,
-            supportedPidCount: supported.pids.count,
+            supportedPidCount: supportedCount,
             multiPidSupported: multiCount >= 3,
             sequentialHz: seqHz,
             multiPidHz: multiHz,

@@ -133,6 +133,37 @@ final class Elm327SessionTests: XCTestCase {
         XCTAssertTrue(supported.supports(0x0C))
     }
 
+    func testConcurrentCommandsDoNotClobber() async throws {
+        // Fires three commands concurrently; each must receive its own response.
+        // Before the serial lock, actor reentrancy let one overwrite another's
+        // response slot (the real-adapter diagnostics corruption).
+        let transport = ReplayTransport(simple: [
+            "010C1": "410C1AF8", // 1726 rpm
+            "010D1": "410D3C",   // 60 km/h
+            "01111": "41115A",   // throttle
+        ], chunkSize: 3)
+        let session = Elm327Session(transport: transport)
+
+        async let a = session.execute("010C1")
+        async let b = session.execute("010D1")
+        async let c = session.execute("01111")
+        let results = try await [a, b, c]
+
+        XCTAssertEqual(PidDecoder.decodeMode01(lines: results[0]).first?.pid, 0x0C)
+        XCTAssertEqual(PidDecoder.decodeMode01(lines: results[1]).first?.pid, 0x0D)
+        XCTAssertEqual(PidDecoder.decodeMode01(lines: results[2]).first?.pid, 0x11)
+    }
+
+    func testProbeValue() async throws {
+        let transport = ReplayTransport(simple: ["010C1": "410C1AF8"])
+        let session = Elm327Session(transport: transport)
+        let rpm = await session.probeValue(pid: 0x0C)
+        XCTAssertEqual(rpm ?? 0, 1726, accuracy: 0.001)
+        // Unknown command → ELM "?" → nil (channel genuinely unsupported)
+        let missing = await session.probeValue(pid: 0x05)
+        XCTAssertNil(missing)
+    }
+
     func testReadVin() async throws {
         let transport = ReplayTransport(simple: [
             "0902": "014\r0:490201314731\r1:4A433534343452\r2:37323532333637",

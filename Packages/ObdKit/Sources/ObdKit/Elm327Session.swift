@@ -34,8 +34,33 @@ public actor Elm327Session {
     private var waiter: (id: Int, continuation: CheckedContinuation<String, Error>)?
     private var nextWaiterId = 0
 
+    // Serial command lock. Actors are reentrant — while one execute() is
+    // suspended awaiting its response, the actor is free to run another
+    // execute(), which would clobber `waiter`. This gate guarantees exactly one
+    // command is truly in flight, so overlapping callers (poller + diagnostics)
+    // can't corrupt each other's responses.
+    private var isBusy = false
+    private var lockWaiters: [CheckedContinuation<Void, Never>] = []
+
     public init(transport: any ObdTransport) {
         self.transport = transport
+    }
+
+    private func lock() async {
+        if !isBusy {
+            isBusy = true
+            return
+        }
+        await withCheckedContinuation { lockWaiters.append($0) }
+        // Resumed by unlock() with ownership handed over; isBusy stays true.
+    }
+
+    private func unlock() {
+        if lockWaiters.isEmpty {
+            isBusy = false
+        } else {
+            lockWaiters.removeFirst().resume()
+        }
     }
 
     deinit {
@@ -47,6 +72,8 @@ public actor Elm327Session {
     /// Send one command, await its complete response, return cleaned lines.
     @discardableResult
     public func execute(_ command: String, timeout: Duration = .seconds(3)) async throws -> [String] {
+        await lock()
+        defer { unlock() }
         startReaderIfNeeded()
         let id = nextWaiterId
         nextWaiterId += 1
@@ -96,6 +123,14 @@ public actor Elm327Session {
             supported.formUnion(PidDecoder.supportedPids(basePid: basePid, bytes: Array(bytes[2...])))
         }
         return SupportedPids(pids: supported)
+    }
+
+    /// Directly probe one mode-01 PID; returns its decoded value or nil if the
+    /// ECU doesn't answer. More reliable than the 0100 supported-bitmap on
+    /// quirky adapters, and the source of truth for "is this channel available".
+    public func probeValue(pid: UInt8) async -> Double? {
+        guard let lines = try? await execute(String(format: "01%02X1", pid)) else { return nil }
+        return PidDecoder.decodeMode01(lines: lines).first(where: { $0.pid == pid })?.value
     }
 
     /// Read the VIN (mode 09 PID 02).
