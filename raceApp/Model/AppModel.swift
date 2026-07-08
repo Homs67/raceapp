@@ -43,7 +43,7 @@ final class AppModel {
         // Dev/screenshot hooks: `simctl launch ... -demo [-record] [-shift-demo]`
         if CommandLine.arguments.contains("-shift-demo") {
             UserDefaults.standard.set(true, forKey: "shiftEnabled")
-            UserDefaults.standard.set(3000.0, forKey: "shiftRPM")
+            UserDefaults.standard.set(5500.0, forKey: "shiftRPM") // Street mode
         }
         if CommandLine.arguments.contains("-demo") {
             connection.startDemo()

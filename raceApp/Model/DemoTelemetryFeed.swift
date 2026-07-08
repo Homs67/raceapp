@@ -9,6 +9,7 @@
 
 import Foundation
 import SessionKit
+import ObdKit
 
 final class DemoTelemetryFeed: @unchecked Sendable {
 
@@ -34,10 +35,10 @@ final class DemoTelemetryFeed: @unchecked Sendable {
                 let dt = now - lastT
                 lastT = now
 
-                let speedKmh = max(0, 65 + 45 * sin(t / 7.0) + 12 * sin(t / 2.3))
-                let speedMps = speedKmh / 3.6
-                let latG = 0.85 * sin(t / 3.5) + 0.15 * sin(t / 1.1)
-                let longG = (45 / 7.0 * cos(t / 7.0) / 3.6) / 9.81 * 3.5
+                let drive = DemoDrive(t: t)
+                let speedMps = drive.speedMps
+                let latG = drive.lateralG
+                let longG = drive.longitudinalG
 
                 heading += latG * 12 * dt
                 let headingRad = heading * .pi / 180
