@@ -295,6 +295,7 @@ final class ConnectionController {
         beginPolling() // resume live gauges
 
         return DiagnosticsReport(
+            appVersion: DiagnosticsReport.appVersionString,
             generatedAt: now,
             isDemo: isDemo,
             adapter: isDemo ? "Demo adapter" : storedAdapterName,
