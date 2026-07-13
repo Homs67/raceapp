@@ -148,7 +148,7 @@ private struct DashboardView: View {
     @State private var trail: [CGPoint] = []
     @AppStorage("dashboardFace") private var face = 0
 
-    private static let faceCount = 3
+    private static let faceCount = 6
 
     private var indicator: ShiftIndicator {
         ShiftIndicator(enabled: shiftEnabled, shiftRPM: shiftRPM)
@@ -239,6 +239,9 @@ private struct DashboardView: View {
         switch index {
         case 1: gforceFace(live: live, landscape: landscape)
         case 2: trackMapFace(live: live, landscape: landscape)
+        case 3: lapFace(landscape: landscape)
+        case 4: dragFace(landscape: landscape)
+        case 5: healthFace(now: uptimeNow(), landscape: landscape)
         default:
             if landscape { primaryLandscape(live: live) } else { primaryPortrait(live: live) }
         }
@@ -314,7 +317,7 @@ private struct DashboardView: View {
 
     @ViewBuilder
     private func trackMapFace(live: Live, landscape: Bool) -> some View {
-        if let track = model.connection.activeTrack {
+        if let track = model.metrics.track {
             let position = (live.gpsLat).flatMap { lat in live.gpsLon.map { CLLocationCoordinate2D(latitude: lat, longitude: $0) } }
             VStack(alignment: .leading, spacing: landscape ? 6 : 12) {
                 HStack {
@@ -518,6 +521,134 @@ private struct DashboardView: View {
         }
         .padding(.horizontal, 24)
         .padding(.top, 12)
+    }
+
+    // MARK: Lap-time face
+
+    private func lapFace(landscape: Bool) -> some View {
+        let s = model.metrics.lapState
+        return VStack(alignment: .leading, spacing: landscape ? 8 : 18) {
+            HStack {
+                microLabel("LAP \(s.completedLaps + 1)")
+                Spacer()
+                if model.metrics.track == nil {
+                    Text("NO TRACK").font(.system(size: 9, weight: .medium)).kerning(1)
+                        .foregroundStyle(Color.mutedWeak)
+                }
+            }
+            VStack(alignment: .leading, spacing: 0) {
+                bigNumeral(Self.lapString(s.currentLapTime), size: landscape ? 92 : 108)
+                microLabel("CURRENT")
+            }
+            HStack(spacing: 44) {
+                lapStat("LAST", s.lastLapTime)
+                lapStat("BEST", s.bestLapTime, highlight: true)
+            }
+            if !s.lapTimes.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(Array(s.lapTimes.suffix(landscape ? 3 : 5).enumerated().reversed()), id: \.offset) { i, lap in
+                        HStack {
+                            Text("L\(i + 1)").font(.system(size: 12, weight: .medium)).foregroundStyle(Color.muted)
+                            Spacer()
+                            Text(Self.lapString(lap)).font(.numeral(16, weight: .medium))
+                                .foregroundStyle(lap == s.bestLapTime ? Color.accent : Color.textPrimary)
+                        }
+                    }
+                }
+                .frame(maxWidth: 260)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, landscape ? 24 : 22).padding(.top, landscape ? 10 : 8)
+    }
+
+    private func lapStat(_ label: String, _ value: TimeInterval?, highlight: Bool = false) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(Self.lapString(value)).font(.numeral(30, weight: .semibold))
+                .foregroundStyle(value == nil ? Color.mutedWeak : (highlight ? Color.accent : Color.textPrimary))
+            Text(label).font(.system(size: 9, weight: .semibold)).kerning(1).foregroundStyle(Color.muted)
+        }
+    }
+
+    static func lapString(_ t: TimeInterval?) -> String {
+        guard let t else { return "—:—" }
+        let m = Int(t) / 60, s = t - Double(m * 60)
+        return String(format: "%d:%05.2f", m, s)
+    }
+
+    // MARK: Drag face
+
+    private func dragFace(landscape: Bool) -> some View {
+        let r = model.metrics.dragRun, b = model.metrics.dragBest
+        return VStack(alignment: .leading, spacing: landscape ? 10 : 22) {
+            HStack {
+                microLabel("ACCELERATION")
+                Spacer()
+                if r.launching {
+                    Text("● LAUNCH").font(.system(size: 10, weight: .semibold)).kerning(1)
+                        .foregroundStyle(Color.recordRed)
+                }
+            }
+            dragRow("0–60 MPH", r.zeroToSixty, b.zeroToSixty)
+            dragRow("0–100 MPH", r.zeroToHundred, b.zeroToHundred)
+            dragRow("¼ MILE", r.quarterMile, b.quarterMile,
+                    trapKmh: r.quarterMileTrapKmh)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, landscape ? 24 : 22).padding(.top, landscape ? 10 : 8)
+    }
+
+    private func dragRow(_ label: String, _ value: TimeInterval?, _ best: TimeInterval?,
+                         trapKmh: Double? = nil) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(label).font(.system(size: 11, weight: .semibold)).kerning(1).foregroundStyle(Color.muted)
+                if let best { Text("BEST \(String(format: "%.2f", best))s")
+                    .font(.system(size: 9, weight: .medium)).foregroundStyle(Color.mutedWeak) }
+            }
+            Spacer()
+            if let trapKmh, value != nil {
+                Text("\(Int(UnitsFormatter(metric: metric).speed(fromKmh: trapKmh))) \(UnitsFormatter(metric: metric).speedUnit)")
+                    .font(.system(size: 13, weight: .medium)).foregroundStyle(Color.muted).padding(.trailing, 10)
+            }
+            Text(value.map { String(format: "%.2f", $0) } ?? "—")
+                .font(.numeral(34, weight: .semibold))
+                .foregroundStyle(value == nil ? Color.mutedWeak : Color.textPrimary)
+            + Text(value != nil ? " s" : "").font(.system(size: 15)).foregroundStyle(Color.muted)
+        }
+    }
+
+    // MARK: Vehicle-health face
+
+    private func healthFace(now: TimeInterval, landscape: Bool) -> some View {
+        let snap = model.bus.snapshot()
+        func v(_ ch: ChannelId, _ maxAge: TimeInterval = 8) -> Double? { snap.fresh(ch, now: now, maxAge: maxAge) }
+        let cols = [GridItem(.flexible()), GridItem(.flexible())]
+        return VStack(alignment: .leading, spacing: landscape ? 8 : 16) {
+            microLabel("VEHICLE HEALTH")
+            LazyVGrid(columns: cols, alignment: .leading, spacing: landscape ? 10 : 18) {
+                healthStat("COOLANT", v(.obd(.coolantTemp)), "°C", warn: v(.obd(.coolantTemp)).map { $0 > 110 } ?? false)
+                healthStat("OIL", v(.obd(.oilTemp)), "°C", warn: v(.obd(.oilTemp)).map { $0 > 125 } ?? false)
+                healthStat("INTAKE AIR", v(.obd(.intakeAirTemp)), "°C")
+                healthStat("FUEL", v(.obd(.fuelLevel)), "%", warn: v(.obd(.fuelLevel)).map { $0 < 12 } ?? false)
+                healthStat("BATTERY", v(.obd(.controlModuleVoltage)).map { $0 / 1000 }, "V")
+                healthStat("ENGINE LOAD", v(.obd(.engineLoad)), "%")
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, landscape ? 24 : 22).padding(.top, landscape ? 10 : 8)
+    }
+
+    private func healthStat(_ label: String, _ value: Double?, _ unit: String, warn: Bool = false) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                Text(value.map { String(Int($0.rounded())) } ?? "—")
+                    .font(.numeral(38, weight: .semibold))
+                    .foregroundStyle(value == nil ? Color.mutedWeak : (warn ? Color.recordRed : Color.textPrimary))
+                Text(unit).font(.system(size: 14)).foregroundStyle(Color.muted)
+            }
+            Text(label).font(.system(size: 10, weight: .semibold)).kerning(1).foregroundStyle(Color.muted)
+        }
     }
 
     // MARK: Pieces

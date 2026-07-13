@@ -17,6 +17,7 @@ final class AppModel {
     let connection: ConnectionController
     let recording: RecordingCoordinator
     let gearEstimator = GearEstimator()
+    let metrics: SessionMetrics
 
     private let sensors = PhoneSensorSuite()
     private var launched = false
@@ -25,6 +26,7 @@ final class AppModel {
         let bus = self.bus
         connection = ConnectionController(bus: bus)
         recording = RecordingCoordinator(store: store, bus: bus)
+        metrics = SessionMetrics(bus: bus)
         connection.onObdLinkLost = { [recording] in
             recording.noteObdLinkLost()
         }
@@ -65,6 +67,15 @@ final class AppModel {
 
     func startRecording(metricUnits: Bool) {
         sensors.recalibrate() // fresh mount alignment every session
+        // Track for lap timing / map: the demo's track, else auto-match by GPS.
+        var track = connection.activeTrack
+        if track == nil {
+            let snap = bus.snapshot()
+            if let lat = snap[.gpsLatitude]?.value, let lon = snap[.gpsLongitude]?.value {
+                track = TrackDatabase.nearest(lat: lat, lon: lon)
+            }
+        }
+        metrics.start(track: track)
         Task {
             await recording.start(
                 car: connection.carInfo,
@@ -75,6 +86,7 @@ final class AppModel {
     }
 
     func stopRecording() {
+        metrics.stop()
         Task {
             await recording.stop()
         }

@@ -71,6 +71,25 @@ enum TrackDatabase {
 
     static func track(id: String) -> Track? { all.first { $0.id == id } }
 
+    /// The bundled track whose centerline passes nearest to a coordinate, if any
+    /// is within `maxMeters`. Used to auto-select the track at the start of a real
+    /// session so the map/lap timing "just work" on a known track.
+    static func nearest(lat: Double, lon: Double, maxMeters: Double = 3000) -> Track? {
+        let mLon = 111_320.0 * cos(lat * .pi / 180)
+        var best: (track: Track, dist: Double)?
+        for t in all {
+            var minSq = Double.infinity
+            for c in t.centerline {
+                let dx = (c[1] - lon) * mLon, dy = (c[0] - lat) * 110_540.0
+                minSq = min(minSq, dx * dx + dy * dy)
+            }
+            let d = minSq.squareRoot()
+            if d < (best?.dist ?? .infinity) { best = (t, d) }
+        }
+        if let best, best.dist <= maxMeters { return best.track }
+        return nil
+    }
+
     private static func load() -> [Track] {
         let decoder = JSONDecoder()
         // Bundled resources from a synchronized folder land in the bundle root.
