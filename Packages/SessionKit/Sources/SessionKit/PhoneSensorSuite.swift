@@ -19,6 +19,22 @@ public final class PhoneSensorSuite: NSObject, @unchecked Sendable {
     private var healthTimer: Timer?
     private var handler: SampleHandler?
 
+    // Auto G-calibration state (guarded by calibrationLock: the location
+    // delegate and the 100Hz motion handler run on different queues).
+    private let calibrationLock = NSLock()
+    private var calibrator = CarFrameCalibrator()
+    private var smoothedLatG: Double?
+    private var smoothedLongG: Double?
+
+    /// Restart calibration (called at each session start — mounts move between drives).
+    public func recalibrate() {
+        calibrationLock.lock()
+        calibrator.reset()
+        smoothedLatG = nil
+        smoothedLongG = nil
+        calibrationLock.unlock()
+    }
+
     public override init() {
         super.init()
         motionQueue.maxConcurrentOperationCount = 1
@@ -64,6 +80,26 @@ public final class PhoneSensorSuite: NSObject, @unchecked Sendable {
                 emit(.imuPitchRate, motion.rotationRate.x, t)
                 emit(.imuRollRate, motion.rotationRate.y, t)
                 if motion.heading >= 0 { emit(.imuHeading, motion.heading, t) }
+
+                // Car-frame G, once the auto-calibration has leveled + aligned.
+                let gravity = Vector3(motion.gravity.x, motion.gravity.y, motion.gravity.z)
+                let accel = Vector3(motion.userAcceleration.x, motion.userAcceleration.y, motion.userAcceleration.z)
+                self.calibrationLock.lock()
+                self.calibrator.ingestMotion(gravity: gravity, userAccel: accel)
+                if let g = self.calibrator.carFrame(userAccel: accel) {
+                    // Light EMA (~4 Hz at 100 Hz sampling): keeps the gauge readable
+                    // without hiding real transients. Raw imu.* stay unfiltered.
+                    let alpha = 0.2
+                    let lat = (self.smoothedLatG ?? g.latG) * (1 - alpha) + g.latG * alpha
+                    let long = (self.smoothedLongG ?? g.longG) * (1 - alpha) + g.longG * alpha
+                    self.smoothedLatG = lat
+                    self.smoothedLongG = long
+                    self.calibrationLock.unlock()
+                    emit(.carLatG, lat, t)
+                    emit(.carLongG, long, t)
+                } else {
+                    self.calibrationLock.unlock()
+                }
             }
         }
 
@@ -108,7 +144,12 @@ extension PhoneSensorSuite: CLLocationManagerDelegate {
             emit(.gpsLongitude, location.coordinate.longitude, t)
             emit(.gpsAltitude, location.altitude, t)
             emit(.gpsHorizontalAccuracy, location.horizontalAccuracy, t)
-            if location.speed >= 0 { emit(.gpsSpeed, location.speed, t) }
+            if location.speed >= 0 {
+                emit(.gpsSpeed, location.speed, t)
+                calibrationLock.lock()
+                calibrator.ingestSpeed(location.speed, at: t)
+                calibrationLock.unlock()
+            }
             if location.course >= 0 { emit(.gpsCourse, location.course, t) }
         }
     }

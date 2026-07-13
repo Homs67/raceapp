@@ -12,6 +12,9 @@ public struct HighlightsAccumulator: Sendable {
     private var maxRpm: Double = 0
     private var peakLatG: Double = 0
     private var peakLongG: Double = 0
+    private var calPeakLatG: Double = 0
+    private var calPeakLongG: Double = 0
+    private var hasCalibratedG = false
     private var elevationGain: Double = 0
     private var lastAltitude: Double?
     private var coolantMin: Double?
@@ -33,10 +36,16 @@ public struct HighlightsAccumulator: Sendable {
             lastSpeedSample = ChannelSample(t: t, value: speed)
         case ChannelId.obd(.rpm):
             maxRpm = max(maxRpm, value)
-        case .imuAccelX: // lateral, in g (mount calibration is a v2 concern)
+        case .carLatG: // auto-calibrated car frame — preferred when present
+            hasCalibratedG = true
+            calPeakLatG = max(calPeakLatG, abs(value))
+        case .carLongG:
+            hasCalibratedG = true
+            calPeakLongG = max(calPeakLongG, abs(value))
+        case .imuAccelX: // raw device frame — fallback until calibration completes
             peakLatG = max(peakLatG, abs(value))
-        case .imuAccelZ, .imuAccelY: // longitudinal candidates; use Y by convention
-            if channel == .imuAccelY { peakLongG = max(peakLongG, abs(value)) }
+        case .imuAccelY:
+            peakLongG = max(peakLongG, abs(value))
         case .baroRelativeAltitude:
             if let last = lastAltitude, value > last {
                 elevationGain += value - last
@@ -57,8 +66,8 @@ public struct HighlightsAccumulator: Sendable {
         highlights.maxSpeedMps = maxSpeed
         highlights.avgSpeedMps = speedCount > 0 ? speedSum / Double(speedCount) : 0
         highlights.maxRpm = maxRpm
-        highlights.peakLatG = peakLatG
-        highlights.peakLongG = peakLongG
+        highlights.peakLatG = hasCalibratedG ? calPeakLatG : peakLatG
+        highlights.peakLongG = hasCalibratedG ? calPeakLongG : peakLongG
         highlights.elevationGainMeters = elevationGain
         highlights.coolantMinC = coolantMin
         highlights.coolantMaxC = coolantMax

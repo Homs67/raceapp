@@ -480,11 +480,17 @@ struct MetricSeries: Identifiable {
         }
         if let s = series("rpm", "RPM", "rpm", .textPrimary, .obd(.rpm)) { result.append(s) }
         if let s = series("throttle", "Throttle", "%", .accent, .obd(.throttle)) { result.append(s) }
-        // Longitudinal g = acceleration (+) and braking (−); our brake proxy (no OBD brake channel)
-        if let s = series("longg", "Acceleration & Braking", "g", .recordRed, .imuAccelY,
-                          symmetricZero: true) { result.append(s) }
-        if let s = series("latg", "Cornering", "g", .textPrimary, .imuAccelX,
-                          symmetricZero: true) { result.append(s) }
+        // Longitudinal g = acceleration (+) and braking (−); our brake proxy (no OBD
+        // brake channel). Prefer auto-calibrated car-frame G; fall back to raw axes
+        // for sessions recorded before calibration completed.
+        if let s = series("longg", "Acceleration & Braking", "g", .recordRed, .carLongG, symmetricZero: true)
+            ?? series("longg", "Acceleration & Braking (uncal.)", "g", .recordRed, .imuAccelY, symmetricZero: true) {
+            result.append(s)
+        }
+        if let s = series("latg", "Cornering", "g", .textPrimary, .carLatG, symmetricZero: true)
+            ?? series("latg", "Cornering (uncal.)", "g", .textPrimary, .imuAccelX, symmetricZero: true) {
+            result.append(s)
+        }
         if let s = series("elev", "Elevation", units.shortDistanceUnit, .mutedStrong, .baroRelativeAltitude,
                           transform: { units.shortDistance(fromMeters: $0) }) { result.append(s) }
         if let s = series("load", "Engine Load", "%", .accent, .obd(.engineLoad)) { result.append(s) }

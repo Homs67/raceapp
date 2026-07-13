@@ -54,6 +54,9 @@ final class DemoTelemetryFeed: @unchecked Sendable {
                 bus.publish(.imuAccelX, latG, at: now)
                 bus.publish(.imuAccelY, longG, at: now)
                 bus.publish(.imuAccelZ, 0.02 * sin(t * 3), at: now)
+                // Demo values are car-frame by construction — publish as calibrated
+                bus.publish(.carLatG, latG, at: now)
+                bus.publish(.carLongG, longG, at: now)
                 bus.publish(.imuYawRate, latG * 0.6, at: now)
                 bus.publish(.baroRelativeAltitude, 60 * sin(t / 20), at: now)
                 bus.publish(.deviceBattery, 0.82, at: now)

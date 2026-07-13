@@ -29,6 +29,12 @@ public extension ChannelId {
     static let imuRollRate = ChannelId("imu.rollRate")
     static let imuHeading = ChannelId("imu.heading")        // degrees
 
+    // Car-frame G (auto-calibrated: leveled from gravity, aligned from the
+    // first clean acceleration; lightly low-passed for gauge/graph use).
+    // Raw device-frame imu.* channels are still recorded for reprocessing.
+    static let carLatG = ChannelId("car.latG")   // +right / −left, g
+    static let carLongG = ChannelId("car.longG") // +accel / −braking, g
+
     // Barometer
     static let baroRelativeAltitude = ChannelId("baro.relAltitude") // m
 

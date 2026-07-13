@@ -11,6 +11,7 @@ public enum SessionExporter {
     static func orderedChannels(_ channels: [ChannelId]) -> [ChannelId] {
         let preferred: [ChannelId] = [
             .gpsLatitude, .gpsLongitude, .gpsSpeed, .gpsAltitude, .gpsCourse, .gpsHorizontalAccuracy,
+            .carLatG, .carLongG,
             .imuAccelX, .imuAccelY, .imuAccelZ, .imuYawRate, .imuHeading,
             .baroRelativeAltitude,
         ]

@@ -178,6 +178,7 @@ private struct DashboardView: View {
         var gear: Int?
         var latG: Double?
         var longG: Double?
+        var gCalibrated = false
         var combinedG: Double?
         var altitude: Double?
         var yawDegPerS: Double?
@@ -232,8 +233,17 @@ private struct DashboardView: View {
         if let rpm = live.rpm, let speedMps = live.speedMps {
             live.gear = model.gearEstimator.gear(rpm: rpm, speedMps: speedMps)
         }
-        live.latG = snapshot.fresh(.imuAccelX, now: now, maxAge: 1)
-        live.longG = snapshot.fresh(.imuAccelY, now: now, maxAge: 1)
+        // Prefer auto-calibrated car-frame G; fall back to raw device axes
+        // until leveling + alignment complete (flagged so the UI stays honest).
+        if let lat = snapshot.fresh(.carLatG, now: now, maxAge: 1),
+           let long = snapshot.fresh(.carLongG, now: now, maxAge: 1) {
+            live.latG = lat
+            live.longG = long
+            live.gCalibrated = true
+        } else {
+            live.latG = snapshot.fresh(.imuAccelX, now: now, maxAge: 1)
+            live.longG = snapshot.fresh(.imuAccelY, now: now, maxAge: 1)
+        }
         if let lat = live.latG, let long = live.longG {
             live.combinedG = (lat * lat + long * long).squareRoot()
         }
@@ -296,6 +306,11 @@ private struct DashboardView: View {
                     Text("PEAK \(String(format: "%.2f", peakG)) g")
                         .font(.system(size: 11, weight: .semibold)).kerning(0.5)
                         .foregroundStyle(Color.mutedStrong)
+                    if !live.gCalibrated {
+                        Text("CALIBRATING…")
+                            .font(.system(size: 9, weight: .medium)).kerning(1)
+                            .foregroundStyle(Color.mutedWeak)
+                    }
                 }
                 Spacer()
             }
@@ -352,9 +367,9 @@ private struct DashboardView: View {
                     Text(live.combinedG.map { String(format: "%.2f g", $0) } ?? "—")
                         .font(.system(size: 18, weight: .medium)).monospacedDigit()
                         .foregroundStyle(live.combinedG == nil ? Color.mutedWeak : Color.textPrimary)
-                    Text("PEAK \(String(format: "%.2f", peakG))")
+                    Text(live.gCalibrated ? "PEAK \(String(format: "%.2f", peakG))" : "CALIBRATING…")
                         .font(.system(size: 9, weight: .semibold)).kerning(1)
-                        .foregroundStyle(Color.mutedStrong)
+                        .foregroundStyle(live.gCalibrated ? Color.mutedStrong : Color.mutedWeak)
                 }
                 Divider().overlay(Color.white.opacity(0.1)).frame(height: 40)
                 landscapeStat("ALT", live.altitude.map {

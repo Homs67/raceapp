@@ -58,6 +58,7 @@ final class AppModel {
     }
 
     func startRecording(metricUnits: Bool) {
+        sensors.recalibrate() // fresh mount alignment every session
         Task {
             await recording.start(
                 car: connection.carInfo,
