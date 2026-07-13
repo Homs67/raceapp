@@ -148,7 +148,7 @@ private struct DashboardView: View {
     @State private var trail: [CGPoint] = []
     @AppStorage("dashboardFace") private var face = 0
 
-    private static let faceCount = 6
+    private static let faceCount = 7
 
     private var indicator: ShiftIndicator {
         ShiftIndicator(enabled: shiftEnabled, shiftRPM: shiftRPM)
@@ -242,6 +242,7 @@ private struct DashboardView: View {
         case 3: lapFace(landscape: landscape)
         case 4: dragFace(landscape: landscape)
         case 5: healthFace(now: uptimeNow(), landscape: landscape)
+        case 6: navFace(live: live)
         default:
             if landscape { primaryLandscape(live: live) } else { primaryPortrait(live: live) }
         }
@@ -648,6 +649,36 @@ private struct DashboardView: View {
                 Text(unit).font(.system(size: 14)).foregroundStyle(Color.muted)
             }
             Text(label).font(.system(size: 10, weight: .semibold)).kerning(1).foregroundStyle(Color.muted)
+        }
+    }
+
+    // MARK: 3D nav face
+
+    @ViewBuilder
+    private func navFace(live: Live) -> some View {
+        if let track = model.metrics.track {
+            let car = live.gpsLat.flatMap { lat in
+                live.gpsLon.map { CLLocationCoordinate2D(latitude: lat, longitude: $0) }
+            }
+            ZStack(alignment: .top) {
+                TrackNavCanvas(nav: TrackNav.points(for: track), car: car, heading: live.heading ?? 0)
+                HStack(alignment: .firstTextBaseline) {
+                    microLabel(track.name.uppercased())
+                    Spacer()
+                    Text(live.speedDisplay.map { String(Int($0)) } ?? "—")
+                        .font(.numeral(30, weight: .semibold)).foregroundStyle(Color.textPrimary)
+                    + Text(" \(UnitsFormatter(metric: metric).speedUnit)")
+                        .font(.system(size: 13)).foregroundStyle(Color.muted)
+                }
+                .padding(.horizontal, 20).padding(.top, 8)
+            }
+        } else {
+            VStack(spacing: 10) {
+                Image(systemName: "view.3d").font(.system(size: 40)).foregroundStyle(Color.mutedWeak)
+                Text("No track matched").font(.headline).foregroundStyle(Color.muted)
+                Text("3D nav appears on known tracks.").font(.caption).foregroundStyle(Color.mutedWeak)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
