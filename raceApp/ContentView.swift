@@ -17,6 +17,7 @@ enum LaunchArgs {
         #if DEBUG
         if CommandLine.arguments.contains("-tab-health") { return 1 }
         if CommandLine.arguments.contains("-tab-connection") { return 3 }
+        if CommandLine.arguments.contains("-tab-tracks") { return 4 }
         #endif
         return openLatestSession ? 2 : 0
     }
@@ -37,6 +38,9 @@ struct ContentView: View {
             SessionsView()
                 .tabItem { Label("Sessions", systemImage: "list.bullet") }
                 .tag(2)
+            TracksView()
+                .tabItem { Label("Tracks", systemImage: "map") }
+                .tag(4)
             SettingsView()
                 .tabItem { Label("Settings", systemImage: "gearshape.fill") }
                 .tag(3)
