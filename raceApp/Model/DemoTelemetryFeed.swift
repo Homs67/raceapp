@@ -14,19 +14,20 @@ import ObdKit
 final class DemoTelemetryFeed: @unchecked Sendable {
 
     private let bus: TelemetryBus
+    private let trackDrive: TrackDemoDrive?
     private var task: Task<Void, Never>?
 
-    init(bus: TelemetryBus) {
+    init(bus: TelemetryBus, trackDrive: TrackDemoDrive? = nil) {
         self.bus = bus
+        self.trackDrive = trackDrive
     }
 
     func start() {
         guard task == nil else { return }
-        task = Task.detached { [bus] in
+        task = Task.detached { [bus, trackDrive] in
             let start = monotonicNowSeconds()
-            // Angeles Crest-ish starting point
-            var lat = 34.2537, lon = -118.1443
-            var heading = 80.0
+            // Open-road fallback state (used only when no track drive is supplied)
+            var lat = 34.2537, lon = -118.1443, heading = 80.0
             var lastT = start
             while !Task.isCancelled {
                 try? await Task.sleep(for: .milliseconds(100))
@@ -35,15 +36,23 @@ final class DemoTelemetryFeed: @unchecked Sendable {
                 let dt = now - lastT
                 lastT = now
 
-                let drive = DemoDrive(t: t)
-                let speedMps = drive.speedMps
-                let latG = drive.lateralG
-                let longG = drive.longitudinalG
+                let speedMps: Double, latG: Double, longG: Double
 
-                heading += latG * 12 * dt
-                let headingRad = heading * .pi / 180
-                lat += speedMps * dt * cos(headingRad) / 111_111
-                lon += speedMps * dt * sin(headingRad) / (111_111 * cos(lat * .pi / 180))
+                if let td = trackDrive {
+                    // Drive the real track centerline — the single source of truth.
+                    let s = td.phoneSample()
+                    lat = s.position.lat; lon = s.position.lon
+                    heading = s.headingDeg
+                    speedMps = s.speedMps; latG = s.lateralG; longG = s.longitudinalG
+                } else {
+                    // Angeles Crest-ish open-road integration.
+                    let drive = DemoDrive(t: t)
+                    speedMps = drive.speedMps; latG = drive.lateralG; longG = drive.longitudinalG
+                    heading += latG * 12 * dt
+                    let headingRad = heading * .pi / 180
+                    lat += speedMps * dt * cos(headingRad) / 111_111
+                    lon += speedMps * dt * sin(headingRad) / (111_111 * cos(lat * .pi / 180))
+                }
 
                 bus.publish(.gpsLatitude, lat, at: now)
                 bus.publish(.gpsLongitude, lon, at: now)

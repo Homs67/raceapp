@@ -11,11 +11,24 @@ public final class SimulatedAdapterTransport: ObdTransport, @unchecked Sendable 
     private let continuation: AsyncStream<Data>.Continuation
     private let startUptime: TimeInterval
 
+    private let lock = NSLock()
+    private var driveSource: (@Sendable () -> DemoSample)?
+
     public init() {
         var continuation: AsyncStream<Data>.Continuation!
         self.incoming = AsyncStream { continuation = $0 }
         self.continuation = continuation
         self.startUptime = monotonicNow()
+    }
+
+    /// Inject a drive source (e.g. a track simulator) that supplies the driving
+    /// PIDs; when nil the parametric `DemoDrive` open-road model is used.
+    public func setDriveSource(_ source: (@Sendable () -> DemoSample)?) {
+        lock.lock(); driveSource = source; lock.unlock()
+    }
+
+    private func currentDriveSource() -> (@Sendable () -> DemoSample)? {
+        lock.lock(); defer { lock.unlock() }; return driveSource
     }
 
     public func send(_ data: Data) async throws {
@@ -61,28 +74,28 @@ public final class SimulatedAdapterTransport: ObdTransport, @unchecked Sendable 
             index = next
         }
         let elapsed = monotonicNow() - startUptime
-        let drive = DemoDrive(t: elapsed)
+        let sample = currentDriveSource()?() ?? DemoDrive(t: elapsed).sample
         var payload = "41"
         for pid in pids {
-            guard let bytes = Self.bytes(forPid: pid, drive: drive, elapsed: elapsed) else { continue }
+            guard let bytes = Self.bytes(forPid: pid, sample: sample, elapsed: elapsed) else { continue }
             payload += String(format: "%02X", pid)
             payload += bytes.map { String(format: "%02X", $0) }.joined()
         }
         return payload == "41" ? "NO DATA" : payload
     }
 
-    private static func bytes(forPid pid: UInt8, drive: DemoDrive, elapsed: TimeInterval) -> [UInt8]? {
+    private static func bytes(forPid pid: UInt8, sample: DemoSample, elapsed: TimeInterval) -> [UInt8]? {
         func u16(_ value: Double) -> [UInt8] {
             let v = UInt16(max(0, min(65535, value)))
             return [UInt8(v >> 8), UInt8(v & 0xFF)]
         }
         func pct(_ value: Double) -> [UInt8] { [UInt8(max(0, min(255, value * 255 / 100)))] }
         switch pid {
-        case 0x0C: return u16(drive.rpm * 4)
-        case 0x0D: return [UInt8(max(0, min(255, drive.speedKmh)))]
-        case 0x11: return pct(drive.throttlePct)
-        case 0x49: return pct(drive.throttlePct * 0.9)
-        case 0x04: return pct(drive.throttlePct * 0.8)
+        case 0x0C: return u16(sample.rpm * 4)
+        case 0x0D: return [UInt8(max(0, min(255, sample.speedKmh)))]
+        case 0x11: return pct(sample.throttlePct)
+        case 0x49: return pct(sample.throttlePct * 0.9)
+        case 0x04: return pct(sample.throttlePct * 0.8)
         case 0x05: return [UInt8(90 + 40)]                          // coolant 90°C
         case 0x0F: return [UInt8(31 + 40)]                          // IAT 31°C
         case 0x46: return [UInt8(24 + 40)]                          // ambient 24°C

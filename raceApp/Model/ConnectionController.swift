@@ -143,15 +143,23 @@ final class ConnectionController {
 
     // MARK: - Demo mode (R5.4)
 
-    func startDemo() {
+    func startDemo(track: Track? = nil) {
         teardownConnection()
         isDemo = true
         state = .connecting
-        let feed = DemoTelemetryFeed(bus: bus)
+        // One simulator on a shared clock drives both the phone feed and the OBD
+        // adapter, so GPS speed and OBD speed agree. Defaults to Laguna Seca.
+        let selected = track ?? TrackDatabase.track(id: "laguna-seca")
+        let trackDrive = selected.map { TrackDemoDrive(track: $0) }
+        let feed = DemoTelemetryFeed(bus: bus, trackDrive: trackDrive)
         demoFeed = feed
         feed.start()
+        let transport = SimulatedAdapterTransport()
+        if let td = trackDrive {
+            transport.setDriveSource { td.obdSample() }
+        }
         connectionTask = Task { [weak self] in
-            await self?.handshake(transport: SimulatedAdapterTransport(), elmProtocol: nil)
+            await self?.handshake(transport: transport, elmProtocol: nil)
         }
     }
 

@@ -46,7 +46,13 @@ final class AppModel {
             UserDefaults.standard.set(5500.0, forKey: "shiftRPM") // Street mode
         }
         if CommandLine.arguments.contains("-demo") {
-            connection.startDemo()
+            // Optional `-demo-track <id>` picks the track; otherwise Laguna Seca.
+            var demoTrack: Track?
+            if let i = CommandLine.arguments.firstIndex(of: "-demo-track"),
+               i + 1 < CommandLine.arguments.count {
+                demoTrack = TrackDatabase.track(id: CommandLine.arguments[i + 1])
+            }
+            connection.startDemo(track: demoTrack)
             if CommandLine.arguments.contains("-record") {
                 Task {
                     try? await Task.sleep(for: .seconds(2))

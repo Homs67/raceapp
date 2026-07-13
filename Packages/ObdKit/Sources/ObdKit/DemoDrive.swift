@@ -1,5 +1,17 @@
 import Foundation
 
+/// The driving-PID values a demo source must supply. Lets the simulated adapter
+/// take its RPM/speed/throttle either from the parametric `DemoDrive` (open-road
+/// demo) or from a track simulator (via `DemoDrive.derive`), so OBD and GPS agree.
+public struct DemoSample: Sendable {
+    public let rpm: Double
+    public let speedKmh: Double
+    public let throttlePct: Double
+    public init(rpm: Double, speedKmh: Double, throttlePct: Double) {
+        self.rpm = rpm; self.speedKmh = speedKmh; self.throttlePct = throttlePct
+    }
+}
+
 /// Shared parametric demo drive used by both the simulated OBD adapter and the
 /// demo phone-sensor feed, so RPM, speed, gear and G-forces all agree.
 ///
@@ -72,5 +84,30 @@ public struct DemoDrive {
     /// Lateral acceleration in g (canyon corners), independent of the pull.
     public var lateralG: Double {
         0.7 * sin(t / 3.0) + 0.12 * sin(t / 1.1)
+    }
+
+    /// This drive's driving-PID values, for the default (open-road) demo path.
+    public var sample: DemoSample {
+        DemoSample(rpm: rpm, speedKmh: speedKmh, throttlePct: throttlePct)
+    }
+
+    /// Derive coherent RPM/gear/throttle for a given road speed (m/s), using the
+    /// full ND2 6-speed ratios. Used when a track simulator supplies the speed:
+    /// picks the highest gear that keeps RPM in a healthy band, and infers
+    /// throttle from longitudinal acceleration (on-power vs. braking vs. cruise).
+    public static func derive(speedMps: Double, longitudinalG: Double) -> DemoSample {
+        let ratios6 = [5.087, 2.991, 2.035, 1.594, 1.286, 1.000]
+        let speedKmh = max(0, speedMps * 3.6)
+        func rpm(gear g: Int) -> Double {
+            speedKmh / (tireCircumference / 60 * 3.6) * ratios6[g] * finalDrive
+        }
+        var gear = 0
+        for g in 1..<ratios6.count where rpm(gear: g) >= 2000 { gear = g }
+        let r = min(6600, max(850, rpm(gear: gear)))
+        let throttle: Double
+        if longitudinalG > 0.03 { throttle = min(100, 45 + longitudinalG * 90) }
+        else if longitudinalG < -0.03 { throttle = 0 }
+        else { throttle = 18 }
+        return DemoSample(rpm: r, speedKmh: speedKmh, throttlePct: throttle)
     }
 }
