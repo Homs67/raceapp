@@ -15,12 +15,14 @@ final class GForceValidatorTests: XCTestCase {
     }
 
     /// v(t) = 20 + 10·sin(t/5) m/s → a(t) = 2·cos(t/5) m/s².
-    /// Writes GPS speed at 1 Hz and car.longG at 20 Hz scaled by `gScale`.
-    private func writeSyntheticDrive(gScale: Double, seconds: Int = 240) async throws {
+    /// Writes GPS speed at 1 Hz (optionally lagged, like real doppler-filtered
+    /// iPhone GPS) and car.longG at 20 Hz scaled by `gScale`.
+    private func writeSyntheticDrive(gScale: Double, gpsLag: Double = 0, seconds: Int = 240) async throws {
         let writer = try SessionWriter(sessionDirectory: directory)
         for second in 0..<seconds {
             let t = Double(second)
-            await writer.append(.gpsSpeed, value: 20 + 10 * sin(t / 5), at: 100 + t)
+            // GPS reports the speed that was true `gpsLag` seconds ago
+            await writer.append(.gpsSpeed, value: 20 + 10 * sin((t - gpsLag) / 5), at: 100 + t)
             for sub in 0..<20 {
                 let ts = t + Double(sub) / 20
                 let accelG = 2 * cos(ts / 5) / 9.81
@@ -28,7 +30,6 @@ final class GForceValidatorTests: XCTestCase {
                 let noise = 0.01 * sin(ts * 13)
                 await writer.append(.carLongG, value: accelG * gScale + noise, at: 100 + ts)
                 await writer.append(.carLatG, value: 0.2 * sin(ts / 7), at: 100 + ts)
-                await writer.append(.imuYawRate, value: 0.05 * sin(ts / 7), at: 100 + ts)
             }
         }
         _ = await writer.close()
@@ -41,6 +42,16 @@ final class GForceValidatorTests: XCTestCase {
         XCTAssertGreaterThan(result.longCorrelation ?? 0, 0.9)
         XCTAssertEqual(result.longScale ?? 0, 1.0, accuracy: 0.1)
         XCTAssertGreaterThan(result.pairCount, 100)
+    }
+
+    func testLaggedGpsStillVerifies() async throws {
+        // iPhone GPS speed lags the IMU by ~2 s (observed on real drives).
+        // The lag search must recover the alignment and verify.
+        try await writeSyntheticDrive(gScale: 1.0, gpsLag: 2.0)
+        let result = GForceValidation.validate(sessionDirectory: directory)
+        XCTAssertEqual(result.verdict, .verified)
+        XCTAssertEqual(result.gpsLagSeconds ?? 0, 2.0, accuracy: 0.6)
+        XCTAssertGreaterThan(result.longCorrelation ?? 0, 0.9)
     }
 
     func testMisScaledCalibrationFails() async throws {

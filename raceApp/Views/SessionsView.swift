@@ -461,7 +461,10 @@ private struct GCalibrationCard: View {
                                     r, s, validation.pairCount))
             }
             if let latR = validation.latCorrelation {
-                parts.append(String(format: "Cornering vs yaw×speed: r %.2f", latR))
+                parts.append(String(format: "Cornering vs GPS course-rate: r %.2f", latR))
+            }
+            if let lag = validation.gpsLagSeconds, lag > 0 {
+                parts.append(String(format: "GPS lag compensation: %.1f s", lag))
             }
             return parts.isEmpty ? nil : parts.joined(separator: "\n")
         }

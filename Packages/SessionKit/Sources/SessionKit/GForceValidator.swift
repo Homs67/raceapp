@@ -1,14 +1,15 @@
 import Foundation
 
-/// Post-session check that calibrated G-force is physically consistent:
+/// Post-session check that calibrated G-force is physically consistent with GPS
+/// — two fully independent sensors (IMU chip vs. satellite doppler).
 ///
-/// **Longitudinal:** car.longG must track d(gps.speed)/dt — two fully
-/// independent sensors (IMU vs GPS doppler). High correlation with a scale
-/// near 1.0 means leveling + forward alignment worked.
+/// **Longitudinal:** car.longG vs d(gps.speed)/dt.
+/// **Lateral:** car.latG vs signed centripetal acceleration v·d(course)/dt
+/// (GPS course-rate — mount-independent, unlike device yaw).
 ///
-/// **Lateral (informational):** |car.latG| should track speed × |rotation rate|
-/// (centripetal acceleration). Uses rotation magnitude as a yaw proxy, so it's
-/// noisier — reported but not part of the verdict.
+/// iPhone GPS speed/course are doppler-filtered and lag the IMU by ~1–3 s, so
+/// the validator searches a small lag range and reports the best alignment
+/// (calibrated real-world data: r≈0.88 long / r≈0.79 lat at ~2 s lag).
 public struct GForceValidation: Sendable, Equatable {
 
     public enum Verdict: String, Sendable {
@@ -23,100 +24,138 @@ public struct GForceValidation: Sendable, Equatable {
     public var longCorrelation: Double?
     public var longScale: Double?       // slope car.longG vs GPS accel; ~1.0 = correct
     public var latCorrelation: Double?
+    public var gpsLagSeconds: Double?   // IMU-vs-GPS timing offset used
     public var pairCount: Int
 
     public static func validate(sessionDirectory directory: URL) -> GForceValidation {
         let longG = ChannelReader.samples(for: .carLongG, inSessionDirectory: directory)
         guard longG.count > 50 else {
-            return GForceValidation(verdict: .noCalibratedData, longCorrelation: nil,
-                                    longScale: nil, latCorrelation: nil, pairCount: 0)
+            return GForceValidation(verdict: .noCalibratedData, longCorrelation: nil, longScale: nil,
+                                    latCorrelation: nil, gpsLagSeconds: nil, pairCount: 0)
         }
-        // Downsample speed to ~1 Hz so windowing is GPS-cadence independent
-        // (real GPS is 1 Hz; demo publishes at 10 Hz).
-        let speed = downsample(
-            ChannelReader.samples(for: .gpsSpeed, inSessionDirectory: directory), minDt: 0.9)
+        // ~1 Hz speed regardless of source cadence (real GPS 1 Hz, demo 10 Hz)
+        let speed = downsample(ChannelReader.samples(for: .gpsSpeed, inSessionDirectory: directory), minDt: 0.9)
+        let course = downsample(ChannelReader.samples(for: .gpsCourse, inSessionDirectory: directory), minDt: 0.9)
+        let latG = ChannelReader.samples(for: .carLatG, inSessionDirectory: directory)
 
-        // Pair each consecutive GPS interval's acceleration with the mean
-        // calibrated longitudinal G over the same window.
-        var gpsAccel: [Double] = []
-        var imuLong: [Double] = []
-        var cursor = 0
-        for i in 1..<max(1, speed.count) {
-            let t0 = speed[i - 1].t
-            let t1 = speed[i].t
-            let dt = t1 - t0
-            guard dt > 0.4, dt < 3 else { continue }
-            let accelG = (speed[i].value - speed[i - 1].value) / dt / 9.81
-            while cursor < longG.count, longG[cursor].t < t0 { cursor += 1 }
-            var j = cursor
-            var sum = 0.0
-            var n = 0
-            while j < longG.count, longG[j].t <= t1 {
-                sum += longG[j].value
-                n += 1
-                j += 1
+        // GPS-acceleration windows (~2 s), remembering each window's bounds
+        struct Window {
+            let t0: TimeInterval
+            let t1: TimeInterval
+            let accelG: Double
+        }
+        var windows: [Window] = []
+        for i in 2..<max(2, speed.count) {
+            let s0 = speed[i - 2]
+            let s1 = speed[i]
+            let dt = s1.t - s0.t
+            guard dt > 1.2, dt < 5 else { continue }
+            windows.append(Window(t0: s0.t, t1: s1.t, accelG: (s1.value - s0.value) / dt / 9.81))
+        }
+        guard windows.count >= 20, spread(windows.map(\.accelG)) > 0.02 else {
+            return GForceValidation(verdict: .insufficientData, longCorrelation: nil, longScale: nil,
+                                    latCorrelation: nil, gpsLagSeconds: nil, pairCount: windows.count)
+        }
+
+        // Search the GPS lag that best aligns IMU to GPS (0…3 s, 0.5 s steps)
+        let longAverager = WindowAverager(samples: longG)
+        var best: (lag: Double, r: Double, scale: Double, n: Int)?
+        for lag in stride(from: 0.0, through: 3.0, by: 0.5) {
+            var xs: [Double] = []
+            var ys: [Double] = []
+            for w in windows {
+                guard let mean = longAverager.mean(from: w.t0 - lag, to: w.t1 - lag) else { continue }
+                xs.append(w.accelG)
+                ys.append(mean)
             }
-            guard n >= 5 else { continue }
-            gpsAccel.append(accelG)
-            imuLong.append(sum / Double(n))
+            guard xs.count >= 20, let r = pearson(xs, ys), let s = slopeThroughOrigin(x: xs, y: ys) else { continue }
+            if best == nil || r > best!.r {
+                best = (lag, r, s, xs.count)
+            }
+        }
+        guard let best else {
+            return GForceValidation(verdict: .insufficientData, longCorrelation: nil, longScale: nil,
+                                    latCorrelation: nil, gpsLagSeconds: nil, pairCount: 0)
         }
 
-        guard gpsAccel.count >= 20, spread(gpsAccel) > 0.02 else {
-            return GForceValidation(verdict: .insufficientData, longCorrelation: nil,
-                                    longScale: nil, latCorrelation: nil, pairCount: gpsAccel.count)
-        }
-
-        let r = pearson(gpsAccel, imuLong)
-        let scale = slopeThroughOrigin(x: gpsAccel, y: imuLong)
-        let latR = lateralCorrelation(directory: directory, speed: speed)
+        let latR = lateralCorrelation(latG: latG, speed: speed, course: course, lag: best.lag)
 
         let verdict: Verdict
-        switch (r, scale) {
-        case (let r?, let s?) where r >= 0.75 && (0.6...1.4).contains(s): verdict = .verified
-        case (let r?, _) where r >= 0.5: verdict = .marginal
-        default: verdict = .failed
+        if best.r >= 0.75, (0.5...1.5).contains(best.scale) {
+            verdict = .verified
+        } else if best.r >= 0.5 {
+            verdict = .marginal
+        } else {
+            verdict = .failed
         }
-        return GForceValidation(verdict: verdict, longCorrelation: r, longScale: scale,
-                                latCorrelation: latR, pairCount: gpsAccel.count)
+        return GForceValidation(verdict: verdict, longCorrelation: best.r, longScale: best.scale,
+                                latCorrelation: latR, gpsLagSeconds: best.lag, pairCount: best.n)
     }
 
-    // MARK: - Lateral (yaw-proxy, informational)
+    // MARK: - Lateral: signed centripetal vs GPS course-rate
 
-    private static func lateralCorrelation(directory: URL, speed: [ChannelSample]) -> Double? {
-        let latG = ChannelReader.samples(for: .carLatG, inSessionDirectory: directory)
-        let yaw = ChannelReader.samples(for: .imuYawRate, inSessionDirectory: directory)
-        guard latG.count > 50, yaw.count > 50, speed.count > 10 else { return nil }
+    private static func lateralCorrelation(latG: [ChannelSample], speed: [ChannelSample],
+                                           course: [ChannelSample], lag: Double) -> Double? {
+        guard latG.count > 50, course.count > 10, speed.count > 10 else { return nil }
+        let latAverager = WindowAverager(samples: latG)
+        let speedAverager = WindowAverager(samples: speed)
         var predicted: [Double] = []
         var measured: [Double] = []
-        var latCursor = 0
-        var yawCursor = 0
-        for i in 1..<speed.count {
-            let t0 = speed[i - 1].t
-            let t1 = speed[i].t
-            guard t1 - t0 > 0.4, t1 - t0 < 3 else { continue }
-            let v = (speed[i].value + speed[i - 1].value) / 2
-            guard v > 3 else { continue } // centripetal check meaningless when crawling
-            func meanAbs(_ samples: [ChannelSample], _ cursor: inout Int) -> Double? {
-                while cursor < samples.count, samples[cursor].t < t0 { cursor += 1 }
-                var j = cursor
-                var sum = 0.0
-                var n = 0
-                while j < samples.count, samples[j].t <= t1 {
-                    sum += abs(samples[j].value)
-                    n += 1
-                    j += 1
-                }
-                return n >= 5 ? sum / Double(n) : nil
-            }
-            guard let lat = meanAbs(latG, &latCursor), let omega = meanAbs(yaw, &yawCursor) else { continue }
-            predicted.append(v * omega / 9.81)
+        for i in 2..<course.count {
+            let c0 = course[i - 2]
+            let c1 = course[i]
+            let dt = c1.t - c0.t
+            guard dt > 1.2, dt < 5 else { continue }
+            var dpsi = (c1.value - c0.value).truncatingRemainder(dividingBy: 360)
+            if dpsi > 180 { dpsi -= 360 }
+            if dpsi < -180 { dpsi += 360 }
+            guard abs(dpsi) < 90 else { continue } // standstill course jumps
+            guard let v = speedAverager.mean(from: c0.t, to: c1.t), v > 4 else { continue }
+            guard let lat = latAverager.mean(from: c0.t - lag, to: c1.t - lag) else { continue }
+            // GPS course is clockwise-positive (right turn) → +lat under our convention
+            predicted.append(v * (dpsi * .pi / 180) / dt / 9.81)
             measured.append(lat)
         }
         guard predicted.count >= 20 else { return nil }
         return pearson(predicted, measured)
     }
 
-    // MARK: - Math
+    // MARK: - Helpers
+
+    /// O(log n) range means over a time-sorted channel via prefix sums.
+    private struct WindowAverager {
+        private let times: [TimeInterval]
+        private let prefix: [Double]
+
+        init(samples: [ChannelSample]) {
+            times = samples.map(\.t)
+            var acc = 0.0
+            var sums: [Double] = [0]
+            sums.reserveCapacity(samples.count + 1)
+            for sample in samples {
+                acc += sample.value
+                sums.append(acc)
+            }
+            prefix = sums
+        }
+
+        func mean(from t0: TimeInterval, to t1: TimeInterval) -> Double? {
+            let lo = lowerBound(t0)
+            let hi = lowerBound(t1)
+            guard hi - lo >= 5 else { return nil }
+            return (prefix[hi] - prefix[lo]) / Double(hi - lo)
+        }
+
+        private func lowerBound(_ t: TimeInterval) -> Int {
+            var lo = 0
+            var hi = times.count
+            while lo < hi {
+                let mid = (lo + hi) / 2
+                if times[mid] < t { lo = mid + 1 } else { hi = mid }
+            }
+            return lo
+        }
+    }
 
     private static func downsample(_ samples: [ChannelSample], minDt: TimeInterval) -> [ChannelSample] {
         var result: [ChannelSample] = []
