@@ -50,9 +50,24 @@ public struct DemoDrive {
     }
     public var speedMps: Double { speedKmh / 3.6 }
 
-    /// Longitudinal acceleration in g: strong under power, negative on the brake.
+    /// Longitudinal acceleration in g — the true derivative of this model's
+    /// speed profile, so demo G-data is physically consistent with demo GPS
+    /// (the in-app G-calibration verification cross-checks exactly this).
     public var longitudinalG: Double {
-        (phase.accelerating ? 0.42 : -0.30) + 0.05 * sin(t * 2.3)
+        let p = phase
+        let kmhPerRpm = Self.tireCircumference / 60 * 3.6
+            / (Self.ratios[min(Self.ratios.count - 1, max(0, p.gear - 1))] * Self.finalDrive)
+        let rpmRate: Double // rpm per second in the current phase
+        if p.accelerating {
+            let startRpm = p.gear == 1
+                ? Self.launchRpm
+                : Self.shiftRpm * Self.ratios[p.gear - 1] / Self.ratios[p.gear - 2]
+            rpmRate = (Self.shiftRpm - startRpm) / Self.accelPerGear
+        } else {
+            rpmRate = -(Self.shiftRpm - 1600) / Self.decel
+        }
+        let mps2 = rpmRate * kmhPerRpm / 3.6
+        return mps2 / 9.81 + 0.03 * sin(t * 2.3)
     }
     /// Lateral acceleration in g (canyon corners), independent of the pull.
     public var lateralG: Double {

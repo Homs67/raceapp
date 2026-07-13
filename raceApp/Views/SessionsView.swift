@@ -155,6 +155,7 @@ struct SessionDetailView: View {
 
     @State private var manifest: SessionManifest?
     @State private var trace: [CLLocationCoordinate2D] = []
+    @State private var gValidation: GForceValidation?
     @State private var graphs: [MetricSeries] = []
     @State private var loadingGraphs = true
     @State private var expandedSeries: MetricSeries?
@@ -170,6 +171,7 @@ struct SessionDetailView: View {
                     header(manifest)
                     if !trace.isEmpty { mapCard }
                     highlightsGrid(manifest)
+                    if let gValidation { GCalibrationCard(validation: gValidation) }
                     graphsSection
                     noteField(manifest)
                     exportButton
@@ -227,10 +229,12 @@ struct SessionDetailView: View {
                 }
             }
             let series = loaded.map { MetricSeries.build(directory: directory, manifest: $0, metric: metric) } ?? []
+            let validation = GForceValidation.validate(sessionDirectory: directory)
             let finalCoords = coords
             await MainActor.run {
                 trace = finalCoords
                 graphs = series
+                gValidation = validation
                 loadingGraphs = false
                 if LaunchArgs.openLatestGraph, expandedSeries == nil {
                     expandedSeries = series.first
@@ -418,6 +422,78 @@ struct ActivityView: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
+}
+
+// MARK: - G calibration verdict
+
+/// Physics cross-check card: was the calibrated G data consistent with GPS?
+private struct GCalibrationCard: View {
+    let validation: GForceValidation
+
+    private var title: String {
+        switch validation.verdict {
+        case .verified: return "Verified against GPS"
+        case .marginal: return "Marginal — partially consistent"
+        case .failed: return "Failed — inconsistent with GPS"
+        case .noCalibratedData: return "No calibrated data"
+        case .insufficientData: return "Not enough speed variation to verify"
+        }
+    }
+
+    private var color: Color {
+        switch validation.verdict {
+        case .verified: return .accent
+        case .marginal, .insufficientData, .noCalibratedData: return .mutedStrong
+        case .failed: return .recordRed
+        }
+    }
+
+    private var detail: String? {
+        switch validation.verdict {
+        case .noCalibratedData:
+            return "Recorded before mount calibration completed — G values are raw phone-frame."
+        case .insufficientData:
+            return "Verification needs some acceleration and braking during the session."
+        default:
+            var parts: [String] = []
+            if let r = validation.longCorrelation, let s = validation.longScale {
+                parts.append(String(format: "Longitudinal vs GPS: r %.2f · scale %.2f · %d windows",
+                                    r, s, validation.pairCount))
+            }
+            if let latR = validation.latCorrelation {
+                parts.append(String(format: "Cornering vs yaw×speed: r %.2f", latR))
+            }
+            return parts.isEmpty ? nil : parts.joined(separator: "\n")
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Text("G CALIBRATION")
+                    .font(.microLabel(9)).kerning(1.2)
+                    .foregroundStyle(Color.muted)
+                Spacer()
+            }
+            HStack(spacing: 7) {
+                Image(systemName: validation.verdict == .verified ? "checkmark.seal.fill"
+                      : validation.verdict == .failed ? "xmark.seal.fill" : "questionmark.circle")
+                    .font(.system(size: 13))
+                    .foregroundStyle(color)
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Color.textPrimary)
+            }
+            if let detail {
+                Text(detail)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(Color.mutedStrong)
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.cardGray, in: RoundedRectangle(cornerRadius: 16))
+    }
 }
 
 // MARK: - Session graphs
