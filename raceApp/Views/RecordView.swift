@@ -10,6 +10,7 @@
 import SwiftUI
 import SessionKit
 import ObdKit
+import CoreLocation
 
 struct RecordView: View {
     @Environment(AppModel.self) private var model
@@ -145,6 +146,9 @@ private struct DashboardView: View {
 
     @State private var peakG: Double = 0
     @State private var trail: [CGPoint] = []
+    @AppStorage("dashboardFace") private var face = 0
+
+    private static let faceCount = 3
 
     private var indicator: ShiftIndicator {
         ShiftIndicator(enabled: shiftEnabled, shiftRPM: shiftRPM)
@@ -184,6 +188,8 @@ private struct DashboardView: View {
         var yawDegPerS: Double?
         var heading: Double?
         var gpsAccuracy: Double?
+        var gpsLat: Double?
+        var gpsLon: Double?
         var obdHz: Double = 0
     }
 
@@ -193,14 +199,29 @@ private struct DashboardView: View {
             let live = readLive(now: now)
             let elapsed = model.recording.startedAt.map { context.date.timeIntervalSince($0) } ?? 0
 
-            Group {
-                if verticalSizeClass == .compact {
-                    landscape(live: live, elapsed: elapsed)
-                } else {
-                    portrait(live: live, elapsed: elapsed)
+            let isLandscape = verticalSizeClass == .compact
+
+            VStack(spacing: 0) {
+                TabView(selection: $face) {
+                    ForEach(0..<Self.faceCount, id: \.self) { i in
+                        faceView(i, live: live, landscape: isLandscape)
+                            .tag(i)
+                    }
                 }
+                .tabViewStyle(.page(indexDisplayMode: .never))
+                .animation(.easeInOut(duration: 0.2), value: face)
+
+                bottomBar(elapsed: elapsed, landscape: isLandscape)
             }
             .background(Color.black)
+            #if DEBUG
+            .onAppear {
+                if let i = CommandLine.arguments.firstIndex(of: "-dash-face"),
+                   i + 1 < CommandLine.arguments.count, let f = Int(CommandLine.arguments[i + 1]) {
+                    face = f
+                }
+            }
+            #endif
             .onChange(of: GSample(lat: live.latG ?? 0, long: live.longG ?? 0)) { _, sample in
                 let combined = (sample.lat * sample.lat + sample.long * sample.long).squareRoot()
                 peakG = max(peakG, combined)
@@ -209,6 +230,121 @@ private struct DashboardView: View {
             }
         }
         .persistentSystemOverlays(.hidden)
+    }
+
+    // MARK: - Faces (swipe left/right)
+
+    @ViewBuilder
+    private func faceView(_ index: Int, live: Live, landscape: Bool) -> some View {
+        switch index {
+        case 1: gforceFace(live: live, landscape: landscape)
+        case 2: trackMapFace(live: live, landscape: landscape)
+        default:
+            if landscape { primaryLandscape(live: live) } else { primaryPortrait(live: live) }
+        }
+    }
+
+    /// Persistent bottom bar: page dots + the stop control, in every face.
+    private func bottomBar(elapsed: TimeInterval, landscape: Bool) -> some View {
+        let dots = HStack(spacing: 7) {
+            ForEach(0..<Self.faceCount, id: \.self) { i in
+                Circle()
+                    .fill(i == face ? Color.accent : Color.mutedWeak)
+                    .frame(width: 7, height: 7)
+            }
+        }
+        return Group {
+            if landscape {
+                HStack(spacing: 16) {
+                    dots
+                    Spacer()
+                    SessionButton(isRecording: true, compact: true, elapsed: elapsed)
+                }
+                .padding(.horizontal, 24).padding(.vertical, 8)
+            } else {
+                VStack(spacing: 12) {
+                    dots
+                    SessionButton(isRecording: true, elapsed: elapsed)
+                }
+                .padding(.horizontal, 22).padding(.bottom, 16).padding(.top, 6)
+            }
+        }
+    }
+
+    // MARK: G-force face
+
+    private func gforceFace(live: Live, landscape: Bool) -> some View {
+        let meter = GMeterView(latG: live.latG, longG: live.longG, peakG: peakG, trail: trail)
+        return VStack(spacing: landscape ? 8 : 18) {
+            HStack {
+                microLabel("G-FORCE")
+                Spacer()
+                if !live.gCalibrated {
+                    Text("CALIBRATING…")
+                        .font(.system(size: 9, weight: .medium)).kerning(1)
+                        .foregroundStyle(Color.mutedWeak)
+                }
+            }
+            meter
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .aspectRatio(1, contentMode: .fit)
+            HStack(spacing: 28) {
+                gStat("LAT", live.latG)
+                gStat("LONG", live.longG)
+                gStat("COMBINED", live.combinedG)
+                gStat("PEAK", peakG)
+            }
+        }
+        .padding(.horizontal, landscape ? 24 : 22)
+        .padding(.top, landscape ? 10 : 8)
+    }
+
+    private func gStat(_ label: String, _ value: Double?) -> some View {
+        VStack(spacing: 2) {
+            Text(value.map { String(format: "%.2f", $0) } ?? "—")
+                .font(.numeral(22, weight: .semibold))
+                .foregroundStyle(value == nil ? Color.mutedWeak : Color.textPrimary)
+            Text(label)
+                .font(.system(size: 9, weight: .semibold)).kerning(1)
+                .foregroundStyle(Color.muted)
+        }
+    }
+
+    // MARK: Track-map face
+
+    @ViewBuilder
+    private func trackMapFace(live: Live, landscape: Bool) -> some View {
+        if let track = model.connection.activeTrack {
+            let position = (live.gpsLat).flatMap { lat in live.gpsLon.map { CLLocationCoordinate2D(latitude: lat, longitude: $0) } }
+            VStack(alignment: .leading, spacing: landscape ? 6 : 12) {
+                HStack {
+                    microLabel(track.name.uppercased())
+                    Spacer()
+                    Text(String(format: "%.2f mi", track.lengthMiles))
+                        .font(.system(size: 11, weight: .medium)).monospacedDigit()
+                        .foregroundStyle(Color.muted)
+                }
+                TrackMapCanvas(track: track, position: position)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                HStack(spacing: 28) {
+                    metricBlock(value: live.speedDisplay.map { String(Int($0)) }, label: "SPEED",
+                                size: landscape ? 44 : 56, color: .textPrimary,
+                                unit: UnitsFormatter(metric: metric).speedUnit)
+                    metricBlock(value: live.gear.map(String.init), label: "GEAR",
+                                size: landscape ? 44 : 56, color: .accent)
+                }
+            }
+            .padding(.horizontal, landscape ? 24 : 22)
+            .padding(.top, landscape ? 10 : 8)
+        } else {
+            VStack(spacing: 10) {
+                Image(systemName: "map").font(.system(size: 40)).foregroundStyle(Color.mutedWeak)
+                Text("No track matched").font(.headline).foregroundStyle(Color.muted)
+                Text("The map appears on known tracks.")
+                    .font(.caption).foregroundStyle(Color.mutedWeak)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
     }
 
     private struct GSample: Equatable {
@@ -251,13 +387,15 @@ private struct DashboardView: View {
         live.yawDegPerS = snapshot.fresh(.imuYawRate, now: now, maxAge: 1).map { $0 * 180 / .pi }
         live.heading = snapshot.fresh(.gpsCourse, now: now, maxAge: 10)
         live.gpsAccuracy = snapshot.fresh(.gpsHorizontalAccuracy, now: now, maxAge: 10)
+        live.gpsLat = snapshot.fresh(.gpsLatitude, now: now, maxAge: 5)
+        live.gpsLon = snapshot.fresh(.gpsLongitude, now: now, maxAge: 5)
         live.obdHz = model.bus.obdHz(now: now)
         return live
     }
 
     // MARK: Portrait
 
-    private func portrait(live: Live, elapsed: TimeInterval) -> some View {
+    private func primaryPortrait(live: Live) -> some View {
         VStack(alignment: .leading, spacing: 18) {
             HStack(spacing: 12) {
                 Text("OBD \(String(format: "%.0f", live.obdHz)) Hz")
@@ -316,17 +454,14 @@ private struct DashboardView: View {
             }
 
             Spacer(minLength: 8)
-
-            SessionButton(isRecording: true, elapsed: elapsed)
         }
         .padding(.horizontal, 22)
         .padding(.top, 8)
-        .padding(.bottom, 16)
     }
 
     // MARK: Landscape
 
-    private func landscape(live: Live, elapsed: TimeInterval) -> some View {
+    private func primaryLandscape(live: Live) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             VStack(spacing: 4) {
                 if shiftEnabled {
@@ -379,11 +514,10 @@ private struct DashboardView: View {
                 landscapeStat("YAW", live.yawDegPerS.map { String(format: "%.0f°/s", $0) })
                 landscapeStat("HDG", live.heading.map { String(format: "%03.0f°", $0) })
                 Spacer()
-                SessionButton(isRecording: true, compact: true, elapsed: elapsed)
             }
         }
         .padding(.horizontal, 24)
-        .padding(.vertical, 12)
+        .padding(.top, 12)
     }
 
     // MARK: Pieces

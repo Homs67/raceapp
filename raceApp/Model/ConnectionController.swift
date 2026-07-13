@@ -31,6 +31,8 @@ final class ConnectionController {
     private(set) var dtcCount: Int?
     private(set) var lastError: String?
     private(set) var isDemo = false
+    /// The track the current session is on, when known (demo, or later auto-matched).
+    private(set) var activeTrack: Track?
     /// Recorder hook — set by AppModel so link drops mark gaps (R1.8).
     var onObdLinkLost: (@MainActor () -> Void)?
 
@@ -150,6 +152,7 @@ final class ConnectionController {
         // One simulator on a shared clock drives both the phone feed and the OBD
         // adapter, so GPS speed and OBD speed agree. Defaults to Laguna Seca.
         let selected = track ?? TrackDatabase.track(id: "laguna-seca")
+        activeTrack = selected
         let trackDrive = selected.map { TrackDemoDrive(track: $0) }
         let feed = DemoTelemetryFeed(bus: bus, trackDrive: trackDrive)
         demoFeed = feed
