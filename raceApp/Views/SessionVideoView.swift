@@ -28,6 +28,8 @@ struct SessionVideoView: View {
     @State private var selectedSeriesId: String?
     @State private var currentT: TimeInterval = 0
     @State private var isPlaying = false
+    @State private var scrubT: TimeInterval?
+    @State private var lastSeekAt: CFTimeInterval = 0
     @State private var timeObserver: Any?
     @State private var cursors: [String: ChannelSampleCursor] = [:]
     @State private var showSync = false
@@ -224,17 +226,23 @@ struct SessionVideoView: View {
                 }
             }
             if let current = series.first(where: { $0.id == selectedSeriesId }) ?? series.first {
-                PlayheadChart(
-                    series: current,
-                    playhead: currentT,
-                    window: 20,
-                    sessionDuration: sessionDuration,
-                    onScrubBegan: {
-                        player.pause()
-                        isPlaying = false
-                    },
-                    onScrub: { t in seek(to: t) }
-                )
+                // Frame-rate clock: the chart reads the player's time every display
+                // frame (not the 10Hz observer), so the window glides smoothly.
+                TimelineView(.animation(minimumInterval: 1.0 / 60.0,
+                                        paused: !isPlaying && scrubT == nil)) { _ in
+                    PlayheadChart(
+                        series: current,
+                        playhead: scrubT ?? (isPlaying ? player.currentTime().seconds : currentT),
+                        window: 20,
+                        sessionDuration: sessionDuration,
+                        onScrubBegan: {
+                            player.pause()
+                            isPlaying = false
+                        },
+                        onScrub: { t in scrub(to: t) },
+                        onScrubEnded: { finishScrub() }
+                    )
+                }
                 .frame(maxHeight: .infinity)
             } else {
                 Spacer()
@@ -248,6 +256,29 @@ struct SessionVideoView: View {
         player.seek(to: CMTime(seconds: clamped, preferredTimescale: 600),
                     toleranceBefore: CMTime(seconds: 0.15, preferredTimescale: 600),
                     toleranceAfter: CMTime(seconds: 0.15, preferredTimescale: 600))
+    }
+
+    /// Finger-driven scrub: the graph follows `scrubT` frame-perfectly while
+    /// video seeks are throttled (~20/s) so AVPlayer can keep up.
+    private func scrub(to t: TimeInterval) {
+        let clamped = max(0, min(sessionDuration, t))
+        scrubT = clamped
+        currentT = clamped // keeps the value strip + transport in step
+        let now = CACurrentMediaTime()
+        guard now - lastSeekAt > 0.05 else { return }
+        lastSeekAt = now
+        player.seek(to: CMTime(seconds: clamped, preferredTimescale: 600),
+                    toleranceBefore: CMTime(seconds: 0.1, preferredTimescale: 600),
+                    toleranceAfter: CMTime(seconds: 0.1, preferredTimescale: 600))
+    }
+
+    private func finishScrub() {
+        if let t = scrubT {
+            player.seek(to: CMTime(seconds: t, preferredTimescale: 600),
+                        toleranceBefore: CMTime(seconds: 0.02, preferredTimescale: 600),
+                        toleranceAfter: CMTime(seconds: 0.02, preferredTimescale: 600))
+        }
+        scrubT = nil
     }
 
     private func timeLabel(_ t: TimeInterval) -> String {
@@ -390,13 +421,42 @@ private struct PlayheadChart: View {
     let sessionDuration: TimeInterval
     let onScrubBegan: () -> Void
     let onScrub: (TimeInterval) -> Void
+    let onScrubEnded: () -> Void
 
     @State private var dragStartT: TimeInterval?
 
+    /// Window slice via binary search (cheap at frame rate), ending with a
+    /// point interpolated at exactly `playhead` so the line meets the needle
+    /// continuously instead of stepping sample-to-sample.
     private var visiblePoints: [SeriesPoint] {
         let source = series.finePoints.isEmpty ? series.points : series.finePoints
-        let start = playhead - window
-        return source.filter { $0.x >= start && $0.x <= playhead }
+        guard !source.isEmpty else { return [] }
+        let lo = lowerBound(source, playhead - window)
+        let hi = lowerBound(source, playhead)
+        var points = Array(source[lo..<hi])
+        if hi > 0 {
+            let a = source[hi - 1]
+            if hi < source.count {
+                let b = source[hi]
+                if b.x > a.x, playhead >= a.x, playhead - a.x < 3 {
+                    let f = (playhead - a.x) / (b.x - a.x)
+                    points.append(SeriesPoint(x: playhead, y: a.y + (b.y - a.y) * f))
+                }
+            } else if playhead - a.x < 1 {
+                points.append(SeriesPoint(x: playhead, y: a.y))
+            }
+        }
+        return points
+    }
+
+    private func lowerBound(_ points: [SeriesPoint], _ x: Double) -> Int {
+        var lo = 0
+        var hi = points.count
+        while lo < hi {
+            let mid = (lo + hi) / 2
+            if points[mid].x < x { lo = mid + 1 } else { hi = mid }
+        }
+        return lo
     }
 
     var body: some View {
@@ -442,6 +502,7 @@ private struct PlayheadChart: View {
         }
         .chartXScale(domain: (playhead - window)...max(playhead, playhead - window + 0.5))
         .chartYScale(domain: series.yDomain)
+        .transaction { $0.animation = nil } // frame-driven: no implicit tweening
         .chartXAxis {
             AxisMarks(values: .automatic(desiredCount: 3)) { value in
                 AxisGridLine().foregroundStyle(Color.white.opacity(0.06))
@@ -482,6 +543,7 @@ private struct PlayheadChart: View {
                             }
                             .onEnded { _ in
                                 dragStartT = nil
+                                onScrubEnded()
                             }
                     )
             }
@@ -489,6 +551,7 @@ private struct PlayheadChart: View {
     }
 
     private func label(_ seconds: Double) -> String {
+        guard seconds >= -0.01 else { return "" } // pre-session part of the window
         let total = Int(max(0, seconds))
         return String(format: "%d:%02d", total / 60, total % 60)
     }
