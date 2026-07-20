@@ -9,6 +9,7 @@
 import SwiftUI
 import MapKit
 import Charts
+import PhotosUI
 import SessionKit
 import ObdKit
 
@@ -163,6 +164,11 @@ struct SessionDetailView: View {
     @State private var exportUrls: [URL]?
     @State private var exporting = false
     @State private var confirmingDelete = false
+    @State private var photoItems: [PhotosPickerItem] = []
+    @State private var showPhotosPicker = false
+    @State private var showFileImporter = false
+    @State private var importingVideos = false
+    @State private var showVideoPlayer = false
 
     var body: some View {
         ScrollView {
@@ -171,6 +177,7 @@ struct SessionDetailView: View {
                     header(manifest)
                     if !trace.isEmpty { mapCard }
                     highlightsGrid(manifest)
+                    videoSection(manifest)
                     if let gValidation { GCalibrationCard(validation: gValidation) }
                     graphsSection
                     noteField(manifest)
@@ -207,12 +214,186 @@ struct SessionDetailView: View {
                 dismiss()
             }
         }
+        .fullScreenCover(isPresented: $showVideoPlayer) {
+            SessionVideoView(sessionId: sessionId)
+        }
+        .photosPicker(isPresented: $showPhotosPicker, selection: $photoItems, matching: .videos)
+        .onChange(of: photoItems) { importPickedPhotos() }
+        .fileImporter(isPresented: $showFileImporter,
+                      allowedContentTypes: [.movie, .mpeg4Movie],
+                      allowsMultipleSelection: true) { result in
+            if case .success(let urls) = result { importFiles(urls) }
+        }
+    }
+
+    // MARK: - Video section
+
+    @ViewBuilder
+    private func videoSection(_ manifest: SessionManifest) -> some View {
+        let videos = manifest.videos ?? []
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("VIDEO")
+                    .font(.microLabel(9)).kerning(1.2)
+                    .foregroundStyle(Color.muted)
+                Spacer()
+                if importingVideos {
+                    ProgressView().tint(.gray).scaleEffect(0.7)
+                } else {
+                    addVideoMenu(compact: !videos.isEmpty)
+                }
+            }
+            if !videos.isEmpty {
+                Button {
+                    showVideoPlayer = true
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "play.circle.fill")
+                            .font(.system(size: 28))
+                            .foregroundStyle(Color.accent)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Watch with data")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundStyle(Color.textPrimary)
+                            Text(coverageText(videos, manifest: manifest))
+                                .font(.system(size: 11))
+                                .foregroundStyle(Color.muted)
+                        }
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 12))
+                            .foregroundStyle(Color.muted)
+                    }
+                }
+                .buttonStyle(.plain)
+                ForEach(videos) { asset in
+                    videoRow(asset, manifest: manifest)
+                }
+            }
+        }
+        .padding(14)
+        .background(Color.cardGray, in: RoundedRectangle(cornerRadius: 16))
+    }
+
+    private func addVideoMenu(compact: Bool) -> some View {
+        Menu {
+            Button("From Photos", systemImage: "photo.on.rectangle") { showPhotosPicker = true }
+            Button("From Files", systemImage: "folder") { showFileImporter = true }
+        } label: {
+            if compact {
+                Image(systemName: "plus.circle")
+                    .font(.system(size: 16))
+                    .foregroundStyle(Color.accent)
+            } else {
+                Text("Add videos")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(Color.accent)
+            }
+        }
+    }
+
+    private func videoRow(_ asset: VideoAsset, manifest: SessionManifest) -> some View {
+        HStack {
+            Text(asset.fileName.split(separator: "-").dropFirst().joined(separator: "-"))
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(Color.mutedStrong)
+                .lineLimit(1)
+            Spacer()
+            Text(placementText(asset, manifest: manifest))
+                .font(.system(size: 10))
+                .foregroundStyle(placementText(asset, manifest: manifest) == "outside session"
+                                 ? Color.recordRed : Color.muted)
+            Button {
+                deleteVideo(asset)
+            } label: {
+                Image(systemName: "trash")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.muted)
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private func coverageText(_ videos: [VideoAsset], manifest: SessionManifest) -> String {
+        let duration = manifest.highlights?.durationSeconds ?? 0
+        let segments = VideoTimeline.segments(assets: videos, sessionStartUTC: manifest.startedAtUTC,
+                                              sessionDuration: duration,
+                                              syncOffset: manifest.videoSyncOffset ?? 0)
+        let coverage = VideoTimeline.coverage(segments: segments, sessionDuration: duration)
+        let size = ByteCountFormatter.string(fromByteCount: VideoLibrary.totalBytes(videos), countStyle: .file)
+        return "\(videos.count) clip\(videos.count == 1 ? "" : "s") · covers \(Int(coverage * 100))% of session · \(size)"
+    }
+
+    private func placementText(_ asset: VideoAsset, manifest: SessionManifest) -> String {
+        let duration = manifest.highlights?.durationSeconds ?? 0
+        let start = asset.wallClockStart.timeIntervalSince(manifest.startedAtUTC)
+            + (manifest.videoSyncOffset ?? 0)
+        let end = start + asset.duration
+        guard end > 0, start < duration else { return "outside session" }
+        func fmt(_ t: TimeInterval) -> String {
+            let s = Int(max(0, min(duration, t)))
+            return String(format: "%d:%02d", s / 60, s % 60)
+        }
+        return "\(fmt(start))–\(fmt(end))"
+    }
+
+    // MARK: - Import
+
+    private func importPickedPhotos() {
+        guard !photoItems.isEmpty else { return }
+        let items = photoItems
+        photoItems = []
+        importingVideos = true
+        Task {
+            for item in items {
+                if let movie = try? await item.loadTransferable(type: PickedMovie.self) {
+                    await importOne(from: movie.url)
+                    try? FileManager.default.removeItem(at: movie.url)
+                }
+            }
+            importingVideos = false
+        }
+    }
+
+    private func importFiles(_ urls: [URL]) {
+        importingVideos = true
+        Task {
+            for url in urls {
+                let scoped = url.startAccessingSecurityScopedResource()
+                await importOne(from: url)
+                if scoped { url.stopAccessingSecurityScopedResource() }
+            }
+            importingVideos = false
+        }
+    }
+
+    private func importOne(from url: URL) async {
+        guard var manifest else { return }
+        let directory = model.store.directory(for: sessionId)
+        guard let asset = try? await VideoLibrary.importVideo(
+            from: url, sessionDirectory: directory, fallbackStart: manifest.startedAtUTC) else { return }
+        manifest.videos = (manifest.videos ?? []) + [asset]
+        try? model.store.save(manifest)
+        self.manifest = manifest
+        model.recording.sessionUpdated()
+    }
+
+    private func deleteVideo(_ asset: VideoAsset) {
+        guard var manifest else { return }
+        VideoLibrary.deleteFile(for: asset, sessionDirectory: model.store.directory(for: sessionId))
+        manifest.videos = (manifest.videos ?? []).filter { $0.id != asset.id }
+        try? model.store.save(manifest)
+        self.manifest = manifest
+        model.recording.sessionUpdated()
     }
 
     private func load() {
         let loaded = try? model.store.manifest(for: sessionId)
         manifest = loaded
         note = loaded?.note ?? ""
+        if LaunchArgs.openLatestVideo, loaded?.videos?.isEmpty == false, !showVideoPlayer {
+            showVideoPlayer = true
+        }
         let directory = model.store.directory(for: sessionId)
         let metric = self.metric
         Task.detached {

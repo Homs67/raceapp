@@ -81,6 +81,10 @@ public struct SessionManifest: Codable, Equatable, Sendable, Identifiable {
     public var highlights: Highlights?
     /// Mode-01 PIDs the ECU reported as supported at connect (capability record).
     public var supportedPids: [Int]?
+    /// Imported video clips (stored in the session's videos/ directory).
+    public var videos: [VideoAsset]?
+    /// Camera-clock correction applied to all clips (seconds; user-nudged).
+    public var videoSyncOffset: TimeInterval?
 
     public init(id: UUID = UUID(), startedAtUTC: Date, startUptime: TimeInterval,
                 status: Status = .recording, appVersion: String? = nil, units: String? = nil,

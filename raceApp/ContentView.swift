@@ -7,11 +7,15 @@ import SwiftUI
 
 enum LaunchArgs {
     #if DEBUG
-    static var openLatestSession: Bool { CommandLine.arguments.contains("-open-latest-session") || openLatestGraph }
+    static var openLatestSession: Bool {
+        CommandLine.arguments.contains("-open-latest-session") || openLatestGraph || openLatestVideo
+    }
     static var openLatestGraph: Bool { CommandLine.arguments.contains("-open-latest-graph") }
+    static var openLatestVideo: Bool { CommandLine.arguments.contains("-open-latest-video") }
     #else
     static var openLatestSession: Bool { false }
     static var openLatestGraph: Bool { false }
+    static var openLatestVideo: Bool { false }
     #endif
     static var initialTab: Int {
         #if DEBUG

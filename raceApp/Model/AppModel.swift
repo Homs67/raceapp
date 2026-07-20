@@ -42,6 +42,15 @@ final class AppModel {
         }
         connection.onLaunch()
         #if DEBUG
+        // Synthesize dashcam-style test clips for the latest session
+        if CommandLine.arguments.contains("-make-test-videos") {
+            Task {
+                if let latest = store.list().first {
+                    await DebugVideoFactory.populate(manifest: latest, store: store)
+                    recording.sessionUpdated()
+                }
+            }
+        }
         // Dev/screenshot hooks: `simctl launch ... -demo [-record] [-shift-demo]`
         if CommandLine.arguments.contains("-shift-demo") {
             UserDefaults.standard.set(true, forKey: "shiftEnabled")
