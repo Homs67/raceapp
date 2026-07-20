@@ -27,6 +27,7 @@ struct SessionVideoView: View {
     @State private var series: [MetricSeries] = []
     @State private var selectedSeriesId: String?
     @State private var currentT: TimeInterval = 0
+    @State private var isPlaying = false
     @State private var timeObserver: Any?
     @State private var cursors: [String: ChannelSampleCursor] = [:]
     @State private var showSync = false
@@ -72,6 +73,7 @@ struct SessionVideoView: View {
                     .frame(maxWidth: .infinity)
                 VStack(spacing: 10) {
                     valueStrip
+                    transportRow
                     graphPane
                 }
                 .frame(maxWidth: .infinity)
@@ -83,11 +85,53 @@ struct SessionVideoView: View {
                     .frame(maxHeight: .infinity)
                 VStack(spacing: 10) {
                     valueStrip
+                    transportRow
                     graphPane
                 }
                 .frame(maxHeight: .infinity)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 10)
+            }
+        }
+    }
+
+    // MARK: - Transport
+
+    private var transportRow: some View {
+        HStack(spacing: 12) {
+            Button {
+                if isPlaying {
+                    player.pause()
+                    isPlaying = false
+                } else {
+                    player.play()
+                    isPlaying = true
+                }
+            } label: {
+                Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                    .font(.system(size: 30))
+                    .foregroundStyle(Color.accent)
+            }
+            .buttonStyle(.plain)
+            .disabled(loading)
+
+            Text("\(timeLabel(currentT)) / \(timeLabel(sessionDuration))")
+                .font(.system(size: 13, weight: .medium)).monospacedDigit()
+                .foregroundStyle(Color.textPrimary)
+
+            Spacer()
+
+            if isPlaying {
+                HStack(spacing: 5) {
+                    Circle().fill(Color.accent).frame(width: 6, height: 6)
+                    Text("LIVE")
+                        .font(.system(size: 10, weight: .semibold)).kerning(1)
+                        .foregroundStyle(Color.accent)
+                }
+            } else if !loading {
+                Text("Drag graph to scrub")
+                    .font(.system(size: 10))
+                    .foregroundStyle(Color.mutedWeak)
             }
         }
     }
@@ -180,9 +224,16 @@ struct SessionVideoView: View {
                 }
             }
             if let current = series.first(where: { $0.id == selectedSeriesId }) ?? series.first {
-                PlayheadChart(series: current, playhead: currentT) { t in
-                    seek(to: t)
-                }
+                PlayheadChart(
+                    series: current,
+                    playhead: currentT,
+                    liveWindow: isPlaying ? 20 : nil,
+                    onScrub: { t in seek(to: t) },
+                    onTapWhileLive: {
+                        player.pause()
+                        isPlaying = false
+                    }
+                )
                 .frame(maxHeight: .infinity)
             } else {
                 Spacer()
@@ -289,7 +340,16 @@ struct SessionVideoView: View {
             forInterval: CMTime(seconds: 0.1, preferredTimescale: 600), queue: .main
         ) { time in
             currentT = time.seconds
+            // Tracks the native video controls too (play/pause from either place)
+            isPlaying = player.rate > 0
         }
+        player.pause() // open paused, in overview mode
+        #if DEBUG
+        if CommandLine.arguments.contains("-video-autoplay") {
+            player.play()
+            isPlaying = true
+        }
+        #endif
         loading = false
     }
 
@@ -309,12 +369,25 @@ struct SessionVideoView: View {
     }
 }
 
-// MARK: - Chart with playhead + drag-to-seek
+// MARK: - Chart: live rolling window while playing, full overview when paused
 
 private struct PlayheadChart: View {
     let series: MetricSeries
     let playhead: TimeInterval
+    /// Width of the rolling window while playing; nil = paused overview mode.
+    let liveWindow: TimeInterval?
     let onScrub: (TimeInterval) -> Void
+    let onTapWhileLive: () -> Void
+
+    private var isLive: Bool { liveWindow != nil }
+
+    /// Live mode: high-res points inside the window, nothing after "now".
+    private var visiblePoints: [SeriesPoint] {
+        guard let liveWindow else { return series.points }
+        let source = series.finePoints.isEmpty ? series.points : series.finePoints
+        let start = playhead - liveWindow
+        return source.filter { $0.x >= start && $0.x <= playhead }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -327,63 +400,99 @@ private struct PlayheadChart: View {
                     .font(.system(size: 10))
                     .foregroundStyle(Color.muted)
             }
-            Chart {
-                if series.symmetricZero {
-                    RuleMark(y: .value("zero", 0))
-                        .foregroundStyle(Color.white.opacity(0.12))
-                        .lineStyle(StrokeStyle(lineWidth: 1))
-                }
-                ForEach(series.points) { point in
-                    LineMark(x: .value("t", point.x), y: .value("v", point.y))
-                        .foregroundStyle(series.color)
-                        .lineStyle(StrokeStyle(lineWidth: 1.5))
-                        .interpolationMethod(.catmullRom)
-                }
-                RuleMark(x: .value("playhead", playhead))
-                    .foregroundStyle(Color.textPrimary.opacity(0.85))
-                    .lineStyle(StrokeStyle(lineWidth: 1.5))
-            }
-            .chartXAxis {
-                AxisMarks(values: .automatic(desiredCount: 4)) { value in
-                    AxisGridLine().foregroundStyle(Color.white.opacity(0.06))
-                    AxisValueLabel {
-                        if let seconds = value.as(Double.self) {
-                            Text(label(seconds))
-                                .font(.system(size: 9))
-                                .foregroundStyle(Color.muted)
-                        }
-                    }
-                }
-            }
-            .chartYAxis {
-                AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) { _ in
-                    AxisGridLine().foregroundStyle(Color.white.opacity(0.06))
-                    AxisValueLabel()
-                        .font(.system(size: 9))
-                        .foregroundStyle(Color.muted)
-                }
-            }
-            .chartOverlay { proxy in
-                GeometryReader { geo in
-                    Rectangle().fill(.clear).contentShape(Rectangle())
-                        .gesture(
-                            DragGesture(minimumDistance: 0)
-                                .onChanged { drag in
-                                    let origin = geo[proxy.plotFrame!].origin
-                                    if let t: Double = proxy.value(atX: drag.location.x - origin.x) {
-                                        onScrub(t)
-                                    }
-                                }
-                        )
-                }
-            }
+            chart
         }
         .padding(12)
         .background(Color.cardGray, in: RoundedRectangle(cornerRadius: 14))
     }
 
+    private var chart: some View {
+        let points = visiblePoints
+        return Chart {
+            if series.symmetricZero {
+                RuleMark(y: .value("zero", 0))
+                    .foregroundStyle(Color.white.opacity(0.12))
+                    .lineStyle(StrokeStyle(lineWidth: 1))
+            }
+            ForEach(points) { point in
+                LineMark(x: .value("t", point.x), y: .value("v", point.y))
+                    .foregroundStyle(series.color)
+                    .lineStyle(StrokeStyle(lineWidth: isLive ? 1.8 : 1.5))
+                    .interpolationMethod(.catmullRom)
+            }
+            if isLive {
+                // "Now" marker: glowing dot at the newest value
+                if let last = points.last {
+                    PointMark(x: .value("t", last.x), y: .value("v", last.y))
+                        .foregroundStyle(series.color)
+                        .symbolSize(70)
+                }
+            } else {
+                RuleMark(x: .value("playhead", playhead))
+                    .foregroundStyle(Color.textPrimary.opacity(0.85))
+                    .lineStyle(StrokeStyle(lineWidth: 1.5))
+            }
+        }
+        .modifier(LiveDomainModifier(
+            xDomain: liveWindow.map { (playhead - $0)...max(playhead, playhead - $0 + 1) },
+            yDomain: isLive ? series.yDomain : nil))
+        .chartXAxis {
+            AxisMarks(values: .automatic(desiredCount: isLive ? 3 : 4)) { value in
+                AxisGridLine().foregroundStyle(Color.white.opacity(0.06))
+                AxisValueLabel {
+                    if let seconds = value.as(Double.self) {
+                        Text(label(seconds))
+                            .font(.system(size: 9))
+                            .foregroundStyle(Color.muted)
+                    }
+                }
+            }
+        }
+        .chartYAxis {
+            AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) { _ in
+                AxisGridLine().foregroundStyle(Color.white.opacity(0.06))
+                AxisValueLabel()
+                    .font(.system(size: 9))
+                    .foregroundStyle(Color.muted)
+            }
+        }
+        .chartOverlay { proxy in
+            GeometryReader { geo in
+                Rectangle().fill(.clear).contentShape(Rectangle())
+                    .gesture(
+                        DragGesture(minimumDistance: 0)
+                            .onChanged { drag in
+                                guard !isLive else { return }
+                                let origin = geo[proxy.plotFrame!].origin
+                                if let t: Double = proxy.value(atX: drag.location.x - origin.x) {
+                                    onScrub(t)
+                                }
+                            }
+                            .onEnded { _ in
+                                if isLive { onTapWhileLive() }
+                            }
+                    )
+            }
+        }
+    }
+
     private func label(_ seconds: Double) -> String {
         let total = Int(max(0, seconds))
         return String(format: "%d:%02d", total / 60, total % 60)
+    }
+}
+
+/// Applies fixed x/y domains in live mode; leaves Charts' automatic domains in overview.
+private struct LiveDomainModifier: ViewModifier {
+    let xDomain: ClosedRange<Double>?
+    let yDomain: ClosedRange<Double>?
+
+    func body(content: Content) -> some View {
+        switch (xDomain, yDomain) {
+        case let (x?, y?): content.chartXScale(domain: x).chartYScale(domain: y)
+        case let (x?, nil): content.chartXScale(domain: x)
+        case let (nil, y?): content.chartYScale(domain: y)
+        default: content
+        }
     }
 }

@@ -696,7 +696,24 @@ struct MetricSeries: Identifiable {
     let unit: String
     let color: Color
     let points: [SeriesPoint]
+    /// High-resolution points (~5 Hz) for the live rolling-window video graph;
+    /// the 360-bucket `points` stay coarse for full-session overviews.
+    var finePoints: [SeriesPoint] = []
     var symmetricZero = false   // G channels: draw a zero baseline, center the axis
+
+    /// Stable y-range for live mode so the axis doesn't jump as the window slides.
+    var yDomain: ClosedRange<Double> {
+        let ys = points.map(\.y)
+        guard var lo = ys.min(), var hi = ys.max() else { return 0...1 }
+        if symmetricZero {
+            let bound = max(abs(lo), abs(hi), 0.1) * 1.1
+            return -bound...bound
+        }
+        let pad = max((hi - lo) * 0.08, 0.5)
+        lo -= pad
+        hi += pad
+        return min(lo, 0)...hi
+    }
 
     static func build(directory: URL, manifest: SessionManifest, metric: Bool) -> [MetricSeries] {
         let units = UnitsFormatter(metric: metric)
@@ -704,29 +721,35 @@ struct MetricSeries: Identifiable {
         let duration = manifest.highlights?.durationSeconds ?? 0
         guard duration > 0 else { return [] }
         let buckets = 360
+        let fineBuckets = min(6000, max(buckets, Int(duration * 5))) // ~5 Hz
 
         func series(_ id: String, _ title: String, _ unit: String, _ color: Color,
                     _ channel: ChannelId, symmetricZero: Bool = false,
                     transform: (Double) -> Double = { $0 }) -> MetricSeries? {
             let samples = ChannelReader.samples(for: channel, inSessionDirectory: directory)
             guard !samples.isEmpty else { return nil }
-            var sums = [Double](repeating: 0, count: buckets)
-            var counts = [Int](repeating: 0, count: buckets)
-            for sample in samples {
-                let elapsed = sample.t - start
-                guard elapsed >= 0, elapsed <= duration else { continue }
-                let bucket = min(buckets - 1, Int(elapsed / duration * Double(buckets)))
-                sums[bucket] += transform(sample.value)
-                counts[bucket] += 1
+            func bucketize(_ count: Int) -> [SeriesPoint] {
+                var sums = [Double](repeating: 0, count: count)
+                var counts = [Int](repeating: 0, count: count)
+                for sample in samples {
+                    let elapsed = sample.t - start
+                    guard elapsed >= 0, elapsed <= duration else { continue }
+                    let bucket = min(count - 1, Int(elapsed / duration * Double(count)))
+                    sums[bucket] += transform(sample.value)
+                    counts[bucket] += 1
+                }
+                var points: [SeriesPoint] = []
+                for bucket in 0..<count where counts[bucket] > 0 {
+                    let x = (Double(bucket) + 0.5) / Double(count) * duration
+                    points.append(SeriesPoint(x: x, y: sums[bucket] / Double(counts[bucket])))
+                }
+                return points
             }
-            var points: [SeriesPoint] = []
-            for bucket in 0..<buckets where counts[bucket] > 0 {
-                let x = (Double(bucket) + 0.5) / Double(buckets) * duration
-                points.append(SeriesPoint(x: x, y: sums[bucket] / Double(counts[bucket])))
-            }
+            let points = bucketize(buckets)
             guard points.count > 1 else { return nil }
             return MetricSeries(id: id, title: title, unit: unit, color: color,
-                                points: points, symmetricZero: symmetricZero)
+                                points: points, finePoints: bucketize(fineBuckets),
+                                symmetricZero: symmetricZero)
         }
 
         var result: [MetricSeries] = []
