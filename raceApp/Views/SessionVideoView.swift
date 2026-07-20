@@ -129,7 +129,7 @@ struct SessionVideoView: View {
                         .foregroundStyle(Color.accent)
                 }
             } else if !loading {
-                Text("Drag graph to scrub")
+                Text("Scroll graph to move through time")
                     .font(.system(size: 10))
                     .foregroundStyle(Color.mutedWeak)
             }
@@ -227,12 +227,13 @@ struct SessionVideoView: View {
                 PlayheadChart(
                     series: current,
                     playhead: currentT,
-                    liveWindow: isPlaying ? 20 : nil,
-                    onScrub: { t in seek(to: t) },
-                    onTapWhileLive: {
+                    window: 20,
+                    sessionDuration: sessionDuration,
+                    onScrubBegan: {
                         player.pause()
                         isPlaying = false
-                    }
+                    },
+                    onScrub: { t in seek(to: t) }
                 )
                 .frame(maxHeight: .infinity)
             } else {
@@ -309,6 +310,13 @@ struct SessionVideoView: View {
     // MARK: - Loading
 
     private func load() async {
+        // Play audio through the speaker even with the silent switch on
+        // (dashcam/GoPro sound is the point of video review).
+        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
+        try? AVAudioSession.sharedInstance().setActive(true)
+        player.isMuted = false
+        player.volume = 1
+
         manifest = try? model.store.manifest(for: sessionId)
         guard let manifest else { return }
         syncOffset = manifest.videoSyncOffset ?? 0
@@ -369,23 +377,25 @@ struct SessionVideoView: View {
     }
 }
 
-// MARK: - Chart: live rolling window while playing, full overview when paused
+// MARK: - Chart: always-zoomed rolling timeline, editor-style scrub
 
+/// Video-editor timeline: the needle sits at the right edge, the visible
+/// domain is the trailing `window` seconds, and nothing after "now" is drawn.
+/// Playing slides the window; horizontally scrolling the chart pans time
+/// (content follows the finger) and seeks the video, pausing playback.
 private struct PlayheadChart: View {
     let series: MetricSeries
     let playhead: TimeInterval
-    /// Width of the rolling window while playing; nil = paused overview mode.
-    let liveWindow: TimeInterval?
+    let window: TimeInterval
+    let sessionDuration: TimeInterval
+    let onScrubBegan: () -> Void
     let onScrub: (TimeInterval) -> Void
-    let onTapWhileLive: () -> Void
 
-    private var isLive: Bool { liveWindow != nil }
+    @State private var dragStartT: TimeInterval?
 
-    /// Live mode: high-res points inside the window, nothing after "now".
     private var visiblePoints: [SeriesPoint] {
-        guard let liveWindow else { return series.points }
         let source = series.finePoints.isEmpty ? series.points : series.finePoints
-        let start = playhead - liveWindow
+        let start = playhead - window
         return source.filter { $0.x >= start && $0.x <= playhead }
     }
 
@@ -417,27 +427,23 @@ private struct PlayheadChart: View {
             ForEach(points) { point in
                 LineMark(x: .value("t", point.x), y: .value("v", point.y))
                     .foregroundStyle(series.color)
-                    .lineStyle(StrokeStyle(lineWidth: isLive ? 1.8 : 1.5))
+                    .lineStyle(StrokeStyle(lineWidth: 1.8))
                     .interpolationMethod(.catmullRom)
             }
-            if isLive {
-                // "Now" marker: glowing dot at the newest value
-                if let last = points.last {
-                    PointMark(x: .value("t", last.x), y: .value("v", last.y))
-                        .foregroundStyle(series.color)
-                        .symbolSize(70)
-                }
-            } else {
-                RuleMark(x: .value("playhead", playhead))
-                    .foregroundStyle(Color.textPrimary.opacity(0.85))
-                    .lineStyle(StrokeStyle(lineWidth: 1.5))
+            // The needle: current time, always visible at the right edge
+            RuleMark(x: .value("now", playhead))
+                .foregroundStyle(Color.white.opacity(0.9))
+                .lineStyle(StrokeStyle(lineWidth: 1.5))
+            if let last = points.last {
+                PointMark(x: .value("t", last.x), y: .value("v", last.y))
+                    .foregroundStyle(series.color)
+                    .symbolSize(70)
             }
         }
-        .modifier(LiveDomainModifier(
-            xDomain: liveWindow.map { (playhead - $0)...max(playhead, playhead - $0 + 1) },
-            yDomain: isLive ? series.yDomain : nil))
+        .chartXScale(domain: (playhead - window)...max(playhead, playhead - window + 0.5))
+        .chartYScale(domain: series.yDomain)
         .chartXAxis {
-            AxisMarks(values: .automatic(desiredCount: isLive ? 3 : 4)) { value in
+            AxisMarks(values: .automatic(desiredCount: 3)) { value in
                 AxisGridLine().foregroundStyle(Color.white.opacity(0.06))
                 AxisValueLabel {
                     if let seconds = value.as(Double.self) {
@@ -460,16 +466,22 @@ private struct PlayheadChart: View {
             GeometryReader { geo in
                 Rectangle().fill(.clear).contentShape(Rectangle())
                     .gesture(
-                        DragGesture(minimumDistance: 0)
+                        DragGesture(minimumDistance: 2)
                             .onChanged { drag in
-                                guard !isLive else { return }
-                                let origin = geo[proxy.plotFrame!].origin
-                                if let t: Double = proxy.value(atX: drag.location.x - origin.x) {
-                                    onScrub(t)
+                                let plotWidth = geo[proxy.plotFrame!].width
+                                guard plotWidth > 0 else { return }
+                                if dragStartT == nil {
+                                    dragStartT = playhead
+                                    onScrubBegan()
                                 }
+                                // Editor-style: content follows the finger —
+                                // drag left = forward in time, right = back.
+                                let dt = -drag.translation.width / plotWidth * window
+                                let target = (dragStartT ?? playhead) + dt
+                                onScrub(min(max(0, target), sessionDuration))
                             }
                             .onEnded { _ in
-                                if isLive { onTapWhileLive() }
+                                dragStartT = nil
                             }
                     )
             }
@@ -479,20 +491,5 @@ private struct PlayheadChart: View {
     private func label(_ seconds: Double) -> String {
         let total = Int(max(0, seconds))
         return String(format: "%d:%02d", total / 60, total % 60)
-    }
-}
-
-/// Applies fixed x/y domains in live mode; leaves Charts' automatic domains in overview.
-private struct LiveDomainModifier: ViewModifier {
-    let xDomain: ClosedRange<Double>?
-    let yDomain: ClosedRange<Double>?
-
-    func body(content: Content) -> some View {
-        switch (xDomain, yDomain) {
-        case let (x?, y?): content.chartXScale(domain: x).chartYScale(domain: y)
-        case let (x?, nil): content.chartXScale(domain: x)
-        case let (nil, y?): content.chartYScale(domain: y)
-        default: content
-        }
     }
 }
