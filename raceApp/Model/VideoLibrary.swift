@@ -62,7 +62,8 @@ enum VideoLibrary {
         return VideoAsset(fileName: String(fileName),
                           wallClockStart: created ?? fallbackStart,
                           duration: duration,
-                          fileSizeBytes: size ?? nil)
+                          fileSizeBytes: size ?? nil,
+                          hasEmbeddedDate: created != nil)
     }
 
     static func deleteFile(for asset: VideoAsset, sessionDirectory: URL) {

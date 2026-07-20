@@ -299,18 +299,18 @@ struct SessionVideoView: View {
             Text(String(format: "%+.1f s", syncOffset))
                 .font(.numeral(34, weight: .semibold)).monospacedDigit()
                 .foregroundStyle(Color.accent)
-            HStack(spacing: 10) {
-                ForEach([-1.0, -0.1, 0.1, 1.0], id: \.self) { step in
-                    Button {
-                        syncOffset += step
-                    } label: {
-                        Text(String(format: "%+g", step))
-                            .font(.system(size: 14, weight: .semibold)).monospacedDigit()
-                            .frame(width: 64, height: 40)
-                            .background(Color.cardGray, in: RoundedRectangle(cornerRadius: 10))
-                            .foregroundStyle(Color.textPrimary)
+            // Coarse row (camera clocks can be off by minutes — some stamp the
+            // END of recording) + fine row for frame-level alignment.
+            VStack(spacing: 8) {
+                HStack(spacing: 8) {
+                    ForEach([-60.0, -10.0, 10.0, 60.0], id: \.self) { step in
+                        syncButton(step, label: String(format: "%+.0fs", step))
                     }
-                    .buttonStyle(.plain)
+                }
+                HStack(spacing: 8) {
+                    ForEach([-1.0, -0.1, 0.1, 1.0], id: \.self) { step in
+                        syncButton(step, label: String(format: "%+g", step))
+                    }
                 }
             }
             Button {
@@ -326,8 +326,21 @@ struct SessionVideoView: View {
             .buttonStyle(.plain)
         }
         .padding(22)
-        .presentationDetents([.height(300)])
+        .presentationDetents([.height(370)])
         .presentationBackground(Color.bgSheet)
+    }
+
+    private func syncButton(_ step: Double, label: String) -> some View {
+        Button {
+            syncOffset += step
+        } label: {
+            Text(label)
+                .font(.system(size: 13, weight: .semibold)).monospacedDigit()
+                .frame(width: 64, height: 38)
+                .background(Color.cardGray, in: RoundedRectangle(cornerRadius: 10))
+                .foregroundStyle(Color.textPrimary)
+        }
+        .buttonStyle(.plain)
     }
 
     private func applySync() async {

@@ -9,14 +9,19 @@ public struct VideoAsset: Codable, Equatable, Sendable, Identifiable {
     public var wallClockStart: Date
     public var duration: TimeInterval
     public var fileSizeBytes: Int64?
+    /// Whether `wallClockStart` came from the file's own metadata (false =
+    /// fallback placement; the clip needs manual sync).
+    public var hasEmbeddedDate: Bool?
 
     public init(id: UUID = UUID(), fileName: String, wallClockStart: Date,
-                duration: TimeInterval, fileSizeBytes: Int64? = nil) {
+                duration: TimeInterval, fileSizeBytes: Int64? = nil,
+                hasEmbeddedDate: Bool? = nil) {
         self.id = id
         self.fileName = fileName
         self.wallClockStart = wallClockStart
         self.duration = duration
         self.fileSizeBytes = fileSizeBytes
+        self.hasEmbeddedDate = hasEmbeddedDate
     }
 }
 

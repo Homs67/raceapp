@@ -294,10 +294,22 @@ struct SessionDetailView: View {
 
     private func videoRow(_ asset: VideoAsset, manifest: SessionManifest) -> some View {
         HStack {
-            Text(asset.fileName.split(separator: "-").dropFirst().joined(separator: "-"))
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(Color.mutedStrong)
-                .lineLimit(1)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(asset.fileName.split(separator: "-").dropFirst().joined(separator: "-"))
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(Color.mutedStrong)
+                    .lineLimit(1)
+                // Diagnosis line: the clock we read from the file (or the lack of one)
+                if asset.hasEmbeddedDate == false {
+                    Text("no clock in file — placed at session start, use Sync")
+                        .font(.system(size: 9))
+                        .foregroundStyle(Color.recordRed)
+                } else {
+                    Text("camera clock: \(asset.wallClockStart.formatted(date: .omitted, time: .standard))")
+                        .font(.system(size: 9))
+                        .foregroundStyle(Color.muted)
+                }
+            }
             Spacer()
             Text(placementText(asset, manifest: manifest))
                 .font(.system(size: 10))
