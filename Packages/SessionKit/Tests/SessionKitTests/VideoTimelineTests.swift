@@ -90,6 +90,55 @@ final class VideoTimelineTests: XCTestCase {
         XCTAssertEqual(segments[1].sessionEnd, 180, accuracy: 0.01)
     }
 
+    // MARK: - End-stamp detection (real dashcam batch: metadata = start + duration)
+
+    private func utc(_ y: Int, _ mo: Int, _ d: Int, _ h: Int, _ mi: Int, _ s: Int) -> Date {
+        var c = DateComponents(year: y, month: mo, day: d, hour: h, minute: mi, second: s)
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "UTC")!
+        c.timeZone = cal.timeZone
+        return cal.date(from: c)!
+    }
+
+    func testFilenameDateParsesRealDashcamName() {
+        // Import-renamed file keeps the original dashcam suffix
+        let name = "CD8E0A88-3A101614-DE84-4DAE-8B01-A46A2F42361E-20260719214903_000651.mp4"
+        XCTAssertEqual(VideoTimeline.filenameDate(name), utc(2026, 7, 19, 21, 49, 3))
+        XCTAssertNil(VideoTimeline.filenameDate("IMG_1234.mp4"))
+        XCTAssertNil(VideoTimeline.filenameDate("GX010042.MP4"))
+    }
+
+    func testEndStampedCameraCorrectedToFilenameStart() {
+        // Real data: metadata 21:52:03 = filename 21:49:03 + 180s duration
+        let result = VideoTimeline.inferredStart(
+            embeddedDate: utc(2026, 7, 19, 21, 52, 3), duration: 180,
+            fileName: "20260719214903_000651.mp4")
+        XCTAssertEqual(result.start, utc(2026, 7, 19, 21, 49, 3))
+        XCTAssertTrue(result.endStamped)
+    }
+
+    func testStartStampedCameraKeepsMetadata() {
+        // Metadata matches the filename time → already start-stamped
+        let meta = utc(2026, 7, 19, 21, 49, 4)
+        let result = VideoTimeline.inferredStart(
+            embeddedDate: meta, duration: 180, fileName: "20260719214903_000651.mp4")
+        XCTAssertEqual(result.start, meta)
+        XCTAssertFalse(result.endStamped)
+    }
+
+    func testNoMetadataFallsBackToFilename() {
+        let result = VideoTimeline.inferredStart(
+            embeddedDate: nil, duration: 180, fileName: "20260719214903_000651.mp4")
+        XCTAssertEqual(result.start, utc(2026, 7, 19, 21, 49, 3))
+    }
+
+    func testUnrelatedFilenameKeepsMetadataUnchanged() {
+        let meta = utc(2026, 7, 19, 12, 0, 0)
+        let result = VideoTimeline.inferredStart(embeddedDate: meta, duration: 300, fileName: "IMG_5566.MOV")
+        XCTAssertEqual(result.start, meta)
+        XCTAssertFalse(result.endStamped)
+    }
+
     func testChannelSampleCursor() {
         let cursor = ChannelSampleCursor(samples: [
             ChannelSample(t: 100, value: 1),

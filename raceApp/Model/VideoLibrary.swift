@@ -59,11 +59,16 @@ enum VideoLibrary {
         }
         let size = (try? FileManager.default.attributesOfItem(atPath: destination.path)[.size] as? Int64) ?? nil
 
+        // Reconcile metadata vs filename timestamp: end-stamping dashcams get
+        // corrected to the true start automatically.
+        let inferred = VideoTimeline.inferredStart(
+            embeddedDate: created, duration: duration, fileName: sourceURL.lastPathComponent)
+
         return VideoAsset(fileName: String(fileName),
-                          wallClockStart: created ?? fallbackStart,
+                          wallClockStart: inferred.start ?? fallbackStart,
                           duration: duration,
                           fileSizeBytes: size ?? nil,
-                          hasEmbeddedDate: created != nil)
+                          hasEmbeddedDate: inferred.start != nil)
     }
 
     static func deleteFile(for asset: VideoAsset, sessionDirectory: URL) {
