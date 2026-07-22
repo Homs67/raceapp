@@ -9,6 +9,7 @@
 
 import SwiftUI
 import AVKit
+import UIKit
 import Charts
 import SessionKit
 import ObdKit
@@ -22,8 +23,20 @@ struct SessionVideoView: View {
 
     @State private var manifest: SessionManifest?
     @State private var player = AVPlayer()
+    /// Front-camera player for top-left PiP when dual clips exist.
+    @State private var frontPlayer = AVPlayer()
     @State private var segments: [VideoSegment] = []
-    @State private var gaps: [(start: TimeInterval, end: TimeInterval)] = []
+    /// Footage-only playback timeline: segments packed back-to-back, with the
+    /// two-way map between playback time and session/data time.
+    @State private var compact: [VideoTimeline.CompactSegment] = []
+    @State private var frontCompact: [VideoTimeline.CompactSegment] = []
+    @State private var hasFrontPip = false
+    @State private var frontPipCovered = false
+    @State private var frontIsPrimary = false
+    /// Oriented size of the primary (rear) composition — drives portrait layout.
+    @State private var videoDisplaySize: CGSize = CGSize(width: 16, height: 9)
+    @State private var frontDisplaySize: CGSize = CGSize(width: 9, height: 16)
+    @State private var currentCompT: TimeInterval = 0
     @State private var series: [MetricSeries] = []
     @State private var selectedSeriesId: String?
     @State private var currentT: TimeInterval = 0
@@ -38,6 +51,11 @@ struct SessionVideoView: View {
 
     private var sessionDuration: TimeInterval {
         manifest?.highlights?.durationSeconds ?? 0
+    }
+
+    /// Total watchable footage (the compacted timeline's length).
+    private var footageDuration: TimeInterval {
+        compact.last?.compEnd ?? 0
     }
 
     var body: some View {
@@ -63,16 +81,27 @@ struct SessionVideoView: View {
         .onDisappear {
             if let timeObserver { player.removeTimeObserver(timeObserver) }
             player.pause()
+            frontPlayer.pause()
         }
         .sheet(isPresented: $showSync) { syncSheet }
+    }
+
+    private var videoIsLandscape: Bool {
+        videoDisplaySize.width > videoDisplaySize.height + 1
+    }
+
+    private var videoAspectRatio: CGFloat {
+        guard videoDisplaySize.height > 1 else { return 16 / 9 }
+        return videoDisplaySize.width / videoDisplaySize.height
     }
 
     @ViewBuilder
     private func layout(landscape: Bool) -> some View {
         if landscape {
+            // Device landscape: video | data side by side.
             HStack(spacing: 0) {
                 videoPane
-                    .frame(maxWidth: .infinity)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 VStack(spacing: 10) {
                     valueStrip
                     transportRow
@@ -81,9 +110,28 @@ struct SessionVideoView: View {
                 .frame(maxWidth: .infinity)
                 .padding(12)
             }
-        } else {
+        } else if videoIsLandscape {
+            // Portrait device + landscape footage: keep the player landscape-shaped.
             VStack(spacing: 0) {
                 videoPane
+                    .aspectRatio(videoAspectRatio, contentMode: .fit)
+                    .frame(maxWidth: .infinity)
+                    .background(Color.black)
+                VStack(spacing: 10) {
+                    valueStrip
+                    transportRow
+                    graphPane
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+            }
+        } else {
+            // Portrait footage: split the screen between player and data.
+            VStack(spacing: 0) {
+                videoPane
+                    .aspectRatio(videoAspectRatio, contentMode: .fit)
+                    .frame(maxWidth: .infinity)
                     .frame(maxHeight: .infinity)
                 VStack(spacing: 10) {
                     valueStrip
@@ -102,13 +150,7 @@ struct SessionVideoView: View {
     private var transportRow: some View {
         HStack(spacing: 12) {
             Button {
-                if isPlaying {
-                    player.pause()
-                    isPlaying = false
-                } else {
-                    player.play()
-                    isPlaying = true
-                }
+                setPlaying(!isPlaying)
             } label: {
                 Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
                     .font(.system(size: 30))
@@ -117,7 +159,7 @@ struct SessionVideoView: View {
             .buttonStyle(.plain)
             .disabled(loading)
 
-            Text("\(timeLabel(currentT)) / \(timeLabel(sessionDuration))")
+            Text("\(timeLabel(currentCompT)) / \(timeLabel(footageDuration))")
                 .font(.system(size: 13, weight: .medium)).monospacedDigit()
                 .foregroundStyle(Color.textPrimary)
 
@@ -142,26 +184,43 @@ struct SessionVideoView: View {
 
     private var videoPane: some View {
         ZStack {
-            VideoPlayer(player: player)
+            DualCameraSwapStack(
+                frontIsPrimary: $frontIsPrimary,
+                showFront: hasFrontPip,
+                frontVisible: frontPipCovered,
+                rearAspectRatio: videoAspectRatio,
+                frontAspectRatio: frontDisplaySize.height > 1
+                    ? frontDisplaySize.width / frontDisplaySize.height
+                    : 9 / 16
+            ) {
+                // Main feed uses native VideoPlayer controls; PiP stays chrome-free.
+                reviewFeed(player: player, isPrimary: !frontIsPrimary)
+            } front: {
+                reviewFeed(player: frontPlayer, isPrimary: frontIsPrimary)
+            }
+            .onChange(of: frontPipCovered) { _, covered in
+                if !covered, frontIsPrimary {
+                    frontIsPrimary = false
+                }
+            }
+            .onChange(of: hasFrontPip) { _, hasFront in
+                if !hasFront { frontIsPrimary = false }
+            }
+
             if loading {
                 ProgressView().tint(.white)
-            } else if inGap {
-                VStack(spacing: 6) {
-                    Image(systemName: "video.slash")
-                        .font(.system(size: 24))
-                        .foregroundStyle(Color.mutedStrong)
-                    Text("NO FOOTAGE")
-                        .font(.system(size: 11, weight: .semibold)).kerning(1.5)
-                        .foregroundStyle(Color.mutedStrong)
-                }
-                .allowsHitTesting(false)
             }
         }
         .background(Color.black)
     }
 
-    private var inGap: Bool {
-        gaps.contains { currentT >= $0.start + 0.3 && currentT <= $0.end - 0.3 }
+    @ViewBuilder
+    private func reviewFeed(player feed: AVPlayer, isPrimary: Bool) -> some View {
+        if isPrimary {
+            VideoPlayer(player: feed)
+        } else {
+            SilentPlayerView(player: feed)
+        }
     }
 
     // MARK: - Value strip (exact values at the current frame)
@@ -232,7 +291,9 @@ struct SessionVideoView: View {
                                         paused: !isPlaying && scrubT == nil)) { _ in
                     PlayheadChart(
                         series: current,
-                        playhead: scrubT ?? (isPlaying ? player.currentTime().seconds : currentT),
+                        playhead: scrubT ?? (isPlaying
+                            ? VideoTimeline.sessionTime(atCompositionTime: player.currentTime().seconds, in: compact)
+                            : currentT),
                         window: 20,
                         sessionDuration: sessionDuration,
                         onScrubBegan: {
@@ -250,35 +311,90 @@ struct SessionVideoView: View {
         }
     }
 
-    private func seek(to t: TimeInterval) {
-        let clamped = max(0, min(sessionDuration, t))
-        currentT = clamped
-        player.seek(to: CMTime(seconds: clamped, preferredTimescale: 600),
-                    toleranceBefore: CMTime(seconds: 0.15, preferredTimescale: 600),
-                    toleranceAfter: CMTime(seconds: 0.15, preferredTimescale: 600))
-    }
-
-    /// Finger-driven scrub: the graph follows `scrubT` frame-perfectly while
-    /// video seeks are throttled (~20/s) so AVPlayer can keep up.
-    private func scrub(to t: TimeInterval) {
-        let clamped = max(0, min(sessionDuration, t))
-        scrubT = clamped
-        currentT = clamped // keeps the value strip + transport in step
+    /// Finger-driven scrub in SESSION time: snapped into covered footage (gaps
+    /// are skipped), the graph follows frame-perfectly, and the corresponding
+    /// footage-time seeks are throttled (~20/s) so AVPlayer can keep up.
+    private func scrub(to sessionTarget: TimeInterval) {
+        let compTarget = VideoTimeline.compositionTime(atSessionTime: sessionTarget, in: compact)
+        let snapped = VideoTimeline.sessionTime(atCompositionTime: compTarget, in: compact)
+        scrubT = snapped
+        currentT = snapped      // value strip
+        currentCompT = compTarget // transport label
         let now = CACurrentMediaTime()
         guard now - lastSeekAt > 0.05 else { return }
         lastSeekAt = now
-        player.seek(to: CMTime(seconds: clamped, preferredTimescale: 600),
+        player.seek(to: CMTime(seconds: compTarget, preferredTimescale: 600),
                     toleranceBefore: CMTime(seconds: 0.1, preferredTimescale: 600),
                     toleranceAfter: CMTime(seconds: 0.1, preferredTimescale: 600))
+        syncFront(toSession: snapped, force: true)
     }
 
     private func finishScrub() {
         if let t = scrubT {
-            player.seek(to: CMTime(seconds: t, preferredTimescale: 600),
+            let compTarget = VideoTimeline.compositionTime(atSessionTime: t, in: compact)
+            player.seek(to: CMTime(seconds: compTarget, preferredTimescale: 600),
                         toleranceBefore: CMTime(seconds: 0.02, preferredTimescale: 600),
                         toleranceAfter: CMTime(seconds: 0.02, preferredTimescale: 600))
+            syncFront(toSession: t, force: true)
         }
         scrubT = nil
+    }
+
+    private func setPlaying(_ playing: Bool) {
+        if playing {
+            syncFront(toSession: currentT, force: true)
+            player.play()
+            if hasFrontPip, frontPipCovered { frontPlayer.play() }
+        } else {
+            player.pause()
+            frontPlayer.pause()
+        }
+        isPlaying = playing
+    }
+
+    /// Map session time → front composition time when front footage covers it.
+    private func frontCompTime(atSessionTime t: TimeInterval) -> TimeInterval? {
+        for c in frontCompact {
+            if t >= c.segment.sessionStart - 0.001, t <= c.segment.sessionEnd + 0.001 {
+                return c.compStart + (t - c.segment.sessionStart)
+            }
+        }
+        return nil
+    }
+
+    private func syncFront(toSession sessionT: TimeInterval, force: Bool) {
+        guard hasFrontPip else {
+            frontPipCovered = false
+            return
+        }
+        guard let frontT = frontCompTime(atSessionTime: sessionT) else {
+            frontPipCovered = false
+            frontPlayer.pause()
+            return
+        }
+        frontPipCovered = true
+        let current = frontPlayer.currentTime().seconds
+        if force || abs(current - frontT) > 0.25 {
+            frontPlayer.seek(to: CMTime(seconds: frontT, preferredTimescale: 600),
+                             toleranceBefore: CMTime(seconds: 0.05, preferredTimescale: 600),
+                             toleranceAfter: CMTime(seconds: 0.05, preferredTimescale: 600))
+        }
+        if isPlaying, frontPlayer.rate == 0 {
+            frontPlayer.play()
+        } else if !isPlaying {
+            frontPlayer.pause()
+        }
+    }
+
+    /// Keep the rear composition locked to session time when front is the main feed.
+    private func syncRear(toSession sessionT: TimeInterval, force: Bool) {
+        let rearT = VideoTimeline.compositionTime(atSessionTime: sessionT, in: compact)
+        let current = player.currentTime().seconds
+        if force || abs(current - rearT) > 0.25 {
+            player.seek(to: CMTime(seconds: rearT, preferredTimescale: 600),
+                        toleranceBefore: CMTime(seconds: 0.05, preferredTimescale: 600),
+                        toleranceAfter: CMTime(seconds: 0.05, preferredTimescale: 600))
+        }
     }
 
     private func timeLabel(_ t: TimeInterval) -> String {
@@ -390,16 +506,30 @@ struct SessionVideoView: View {
 
         timeObserver = player.addPeriodicTimeObserver(
             forInterval: CMTime(seconds: 0.1, preferredTimescale: 600), queue: .main
-        ) { time in
-            currentT = time.seconds
-            // Tracks the native video controls too (play/pause from either place)
-            isPlaying = player.rate > 0
+        ) { _ in
+            if frontIsPrimary, hasFrontPip, frontPipCovered {
+                // Front VideoPlayer is the scrub/play source; mirror into rear + graphs.
+                let frontT = frontPlayer.currentTime().seconds
+                currentT = VideoTimeline.sessionTime(atCompositionTime: frontT, in: frontCompact)
+                currentCompT = VideoTimeline.compositionTime(atSessionTime: currentT, in: compact)
+                let playing = frontPlayer.rate > 0
+                isPlaying = playing
+                syncRear(toSession: currentT, force: false)
+                if playing, player.rate == 0 { player.play() }
+                else if !playing, player.rate != 0 { player.pause() }
+            } else {
+                let rearT = player.currentTime().seconds
+                currentCompT = rearT
+                currentT = VideoTimeline.sessionTime(atCompositionTime: rearT, in: compact)
+                isPlaying = player.rate > 0
+                syncFront(toSession: currentT, force: false)
+            }
         }
         player.pause() // open paused, in overview mode
+        frontPlayer.pause()
         #if DEBUG
         if CommandLine.arguments.contains("-video-autoplay") {
-            player.play()
-            isPlaying = true
+            setPlaying(true)
         }
         #endif
         loading = false
@@ -408,16 +538,76 @@ struct SessionVideoView: View {
     private func rebuildPlayer() async {
         guard let manifest, let assets = manifest.videos, !assets.isEmpty else { return }
         let directory = model.store.directory(for: sessionId)
-        let duration = sessionDuration
-        segments = VideoTimeline.segments(assets: assets, sessionStartUTC: manifest.startedAtUTC,
-                                          sessionDuration: duration, syncOffset: syncOffset)
-        gaps = VideoTimeline.gaps(segments: segments, sessionDuration: duration)
-        if let composition = try? await VideoLibrary.buildComposition(
-            segments: segments, sessionDirectory: directory, sessionDuration: duration) {
-            let wasAt = currentT
-            player.replaceCurrentItem(with: AVPlayerItem(asset: composition))
-            if wasAt > 0.5 { seek(to: wasAt) }
+        // Rear (+ imported) drives the primary composition; front is PiP.
+        let primary = VideoTimeline.primaryPlaybackAssets(assets)
+        segments = VideoTimeline.segments(assets: primary, sessionStartUTC: manifest.startedAtUTC,
+                                          sessionDuration: sessionDuration, syncOffset: syncOffset)
+        compact = VideoTimeline.compact(segments)
+
+        let frontAssets = VideoTimeline.frontPlaybackAssets(assets)
+        let frontSegments = VideoTimeline.segments(
+            assets: frontAssets, sessionStartUTC: manifest.startedAtUTC,
+            sessionDuration: sessionDuration, syncOffset: syncOffset)
+        frontCompact = VideoTimeline.compact(frontSegments)
+        hasFrontPip = !frontCompact.isEmpty
+        frontPlayer.isMuted = true
+
+        if let built = try? await VideoLibrary.buildComposition(
+            compact: compact, sessionDirectory: directory) {
+            videoDisplaySize = built.displaySize
+            let wasAtSession = currentT
+            let item = AVPlayerItem(asset: built.composition)
+            item.videoComposition = built.videoComposition
+            player.replaceCurrentItem(with: item)
+            if wasAtSession > 0.5 {
+                let compTarget = VideoTimeline.compositionTime(atSessionTime: wasAtSession, in: compact)
+                currentCompT = compTarget
+                currentT = VideoTimeline.sessionTime(atCompositionTime: compTarget, in: compact)
+                await player.seek(to: CMTime(seconds: compTarget, preferredTimescale: 600),
+                                  toleranceBefore: CMTime(seconds: 0.1, preferredTimescale: 600),
+                                  toleranceAfter: CMTime(seconds: 0.1, preferredTimescale: 600))
+            } else {
+                currentT = VideoTimeline.sessionTime(atCompositionTime: 0, in: compact)
+            }
         }
+
+        if hasFrontPip,
+           let frontBuilt = try? await VideoLibrary.buildComposition(
+            compact: frontCompact, sessionDirectory: directory) {
+            frontDisplaySize = frontBuilt.displaySize
+            let item = AVPlayerItem(asset: frontBuilt.composition)
+            item.videoComposition = frontBuilt.videoComposition
+            frontPlayer.replaceCurrentItem(with: item)
+            syncFront(toSession: currentT, force: true)
+        } else {
+            frontPlayer.replaceCurrentItem(with: nil)
+            frontPipCovered = false
+            frontDisplaySize = CGSize(width: 9, height: 16)
+        }
+    }
+}
+
+// MARK: - Chrome-free player layer (main + PiP)
+
+private struct SilentPlayerView: UIViewRepresentable {
+    let player: AVPlayer
+
+    func makeUIView(context: Context) -> PlayerContainerView {
+        let view = PlayerContainerView()
+        view.playerLayer.player = player
+        view.playerLayer.videoGravity = .resizeAspect
+        return view
+    }
+
+    func updateUIView(_ uiView: PlayerContainerView, context: Context) {
+        if uiView.playerLayer.player !== player {
+            uiView.playerLayer.player = player
+        }
+    }
+
+    final class PlayerContainerView: UIView {
+        override class var layerClass: AnyClass { AVPlayerLayer.self }
+        var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
     }
 }
 

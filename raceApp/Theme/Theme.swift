@@ -49,6 +49,19 @@ extension Font {
     }
 }
 
+/// Large condensed page title (SESSIONS / SETTINGS / DEBUG).
+struct ScreenPageTitle: View {
+    var title: String
+
+    var body: some View {
+        Text(title.uppercased())
+            .font(.numeral(40, weight: .bold))
+            .foregroundStyle(Color.textPrimary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityAddTraits(.isHeader)
+    }
+}
+
 /// Status chip (ADAPTER / CAR / OBD Hz / GPS ±m / REC).
 struct StatusChip: View {
     var text: String

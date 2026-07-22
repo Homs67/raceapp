@@ -22,6 +22,9 @@ public struct HighlightsAccumulator: Sendable {
 
     public init() {}
 
+    /// Live distance integrated so far (metres).
+    public var distanceMeters: Double { distance }
+
     public mutating func add(channel: ChannelId, value: Double, t: TimeInterval) {
         switch channel {
         case .gpsSpeed:

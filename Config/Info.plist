@@ -10,6 +10,12 @@
 	<string>Allow Always so recording keeps running with the screen locked or the app in the background during a session. Your location never leaves the device.</string>
 	<key>NSMotionUsageDescription</key>
 	<string>Motion and barometer data are recorded during sessions to measure G-forces and elevation.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>raceApp records the front and rear cameras during a session so footage stays synced with your drive data.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Microphone audio can be saved with session camera footage.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Session camera clips are also saved to Photos so you can re-import them if needed.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>bluetooth-central</string>

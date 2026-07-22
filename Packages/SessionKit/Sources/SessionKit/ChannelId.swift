@@ -19,6 +19,10 @@ public extension ChannelId {
     static let gpsSpeed = ChannelId("gps.speed")            // m/s
     static let gpsCourse = ChannelId("gps.course")          // degrees
     static let gpsHorizontalAccuracy = ChannelId("gps.hAcc") // ±m, honesty channel
+    static let gpsVerticalAccuracy = ChannelId("gps.vAcc")   // ±m
+    static let gpsSpeedAccuracy = ChannelId("gps.speedAcc")  // ±m/s
+    /// CLLocation wall-clock timestamp as unix epoch seconds (for clock audits).
+    static let gpsWallTime = ChannelId("gps.wallTime")
 
     // IMU (CoreMotion, gravity-separated user acceleration in g)
     static let imuAccelX = ChannelId("imu.ax")

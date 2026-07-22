@@ -57,6 +57,33 @@ final class VideoTimelineTests: XCTestCase {
                        240.0 / 600.0, accuracy: 0.001)
     }
 
+    func testCompactTimelineSkipsUncoveredSessionTime() {
+        let segments = VideoTimeline.segments(
+            assets: [
+                clip("a.mp4", startOffset: 60, duration: 120),  // 1:00–3:00
+                clip("b.mp4", startOffset: 300, duration: 120), // 5:00–7:00
+            ],
+            sessionStartUTC: sessionStart, sessionDuration: 600, syncOffset: 0)
+        let compact = VideoTimeline.compact(segments)
+
+        XCTAssertEqual(compact.map(\.compStart), [0, 120])
+        XCTAssertEqual(compact.last?.compEnd, 240)
+        XCTAssertEqual(
+            VideoTimeline.sessionTime(atCompositionTime: 30, in: compact),
+            90, accuracy: 0.001)
+        XCTAssertEqual(
+            VideoTimeline.sessionTime(atCompositionTime: 120, in: compact),
+            300, accuracy: 0.001,
+            "the cut between clips must jump across the uncovered session gap")
+        XCTAssertEqual(
+            VideoTimeline.compositionTime(atSessionTime: 240, in: compact),
+            120, accuracy: 0.001,
+            "scrubbing inside a gap must snap forward to the next footage")
+        XCTAssertEqual(
+            VideoTimeline.compositionTime(atSessionTime: 500, in: compact),
+            240, accuracy: 0.001)
+    }
+
     func testSyncOffsetShiftsPlacement() {
         let session: TimeInterval = 100
         // Camera clock 30 s fast: clip stamped 30 s after its true moment.
@@ -150,5 +177,29 @@ final class VideoTimelineTests: XCTestCase {
         XCTAssertEqual(cursor.value(at: 104.9), 3)
         XCTAssertNil(cursor.value(at: 120), "beyond tolerance")
         XCTAssertNil(ChannelSampleCursor(samples: []).value(at: 100))
+    }
+
+    func testPrimaryPlaybackPrefersRearOverFront() {
+        let rear = VideoAsset(fileName: "rear.mp4", wallClockStart: sessionStart,
+                              duration: 60, role: .rear)
+        let front = VideoAsset(fileName: "front.mp4", wallClockStart: sessionStart,
+                               duration: 60, role: .front)
+        let imported = VideoAsset(fileName: "dash.mp4", wallClockStart: sessionStart,
+                                  duration: 60, role: .imported)
+        let primary = VideoTimeline.primaryPlaybackAssets([rear, front, imported])
+        XCTAssertEqual(primary.map(\.fileName), ["rear.mp4", "dash.mp4"])
+        XCTAssertEqual(VideoTimeline.frontPlaybackAssets([rear, front, imported]).map(\.fileName),
+                       ["front.mp4"])
+    }
+
+    func testVideoAssetRoleDefaultsWhenMissing() throws {
+        let json = """
+        {"id":"00000000-0000-0000-0000-000000000001","fileName":"old.mp4",
+         "wallClockStart":"2026-01-01T00:00:00Z","duration":10}
+        """.data(using: .utf8)!
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let asset = try decoder.decode(VideoAsset.self, from: json)
+        XCTAssertEqual(asset.role, .imported)
     }
 }

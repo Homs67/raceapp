@@ -19,6 +19,7 @@ public actor SessionRecorder {
     private var openObdGapStart: TimeInterval?
     private var obdSampleSeen = false
     private var lastSampleT: TimeInterval = 0
+    private var lastSensorSampleT: [SessionManifest.SensorGap.Source: TimeInterval] = [:]
     private var flushTask: Task<Void, Never>?
 
     public init(store: SessionStore) {
@@ -27,6 +28,7 @@ public actor SessionRecorder {
 
     public var isRecording: Bool { manifest != nil }
     public var currentSessionId: UUID? { manifest?.id }
+    public var currentDistanceMeters: Double { accumulator.distanceMeters }
 
     // MARK: - Lifecycle
 
@@ -58,6 +60,7 @@ public actor SessionRecorder {
         openObdGapStart = nil
         obdSampleSeen = false
         lastSampleT = now
+        lastSensorSampleT = [:]
 
         flushTask = Task { [weak self, flushInterval] in
             while !Task.isCancelled {
@@ -74,6 +77,7 @@ public actor SessionRecorder {
         await writer.append(channel, value: value, at: t)
         accumulator.add(channel: channel, value: value, t: t)
         lastSampleT = max(lastSampleT, t)
+        noteSensorContinuity(channel: channel, at: t)
 
         if channel.rawValue.hasPrefix("obd.") {
             obdSampleSeen = true
@@ -100,6 +104,13 @@ public actor SessionRecorder {
         manifest != nil && autoStop.shouldAutoStop(now: now)
     }
 
+    /// Flush all channel buffers at an app lifecycle boundary without ending
+    /// the session. The manifest is already persisted as `.recording`, so this
+    /// leaves a crash-recoverable checkpoint on disk.
+    public func checkpoint() async {
+        await flush()
+    }
+
     /// Stop and finalize (R1.3). Saving is instant — data was never buffered-only.
     @discardableResult
     public func stop(at now: TimeInterval = monotonicNow()) async throws -> SessionManifest {
@@ -110,14 +121,40 @@ public actor SessionRecorder {
         if let gapStart = openObdGapStart { // session ends mid-dropout
             finalManifest.obdGaps.append(.init(start: gapStart, end: now))
         }
+        for (source, lastT) in lastSensorSampleT {
+            let threshold = Self.gapThreshold(for: source)
+            if now - lastT > threshold {
+                var gaps = finalManifest.sensorGaps ?? []
+                gaps.append(.init(source: source, start: lastT, end: now))
+                finalManifest.sensorGaps = gaps
+            }
+        }
         let counts = await writer.close()
-        finalManifest.channels = counts
-            .map { SessionManifest.ChannelSummary(id: $0.key, sampleCount: $0.value) }
-            .sorted { $0.id < $1.id }
+        let sessionDirectory = store.directory(for: finalManifest.id)
+        // Prefer disk-backed rate stats over close() counts alone.
+        var summaries = ChannelStats.enrichAll(inSessionDirectory: sessionDirectory)
+        if summaries.isEmpty {
+            summaries = counts
+                .map { SessionManifest.ChannelSummary(id: $0.key, sampleCount: $0.value) }
+                .sorted { $0.id < $1.id }
+        }
+        finalManifest.channels = summaries
         let end = max(lastSampleT, finalManifest.startUptime)
         finalManifest.highlights = accumulator.finalize(startUptime: finalManifest.startUptime, endUptime: end)
         finalManifest.endedAtUTC = finalManifest.utcDate(forUptime: end)
         finalManifest.status = .complete
+        let duration = finalManifest.highlights?.durationSeconds ?? max(0, end - finalManifest.startUptime)
+        finalManifest.obdTiming = ChannelStats.obdTiming(
+            inSessionDirectory: sessionDirectory, sessionDuration: duration)
+        finalManifest.gForceValidation = GForceValidation.validate(sessionDirectory: sessionDirectory)
+        // Preserve fields mutated on disk during the session (camera clips, sync, place).
+        if let onDisk = try? store.manifest(for: finalManifest.id) {
+            finalManifest.videos = onDisk.videos
+            finalManifest.videoSyncOffset = onDisk.videoSyncOffset
+            if finalManifest.locationName == nil {
+                finalManifest.locationName = onDisk.locationName
+            }
+        }
         try store.save(finalManifest)
 
         manifest = nil
@@ -127,5 +164,34 @@ public actor SessionRecorder {
 
     private func flush() async {
         await writer?.flushAll()
+    }
+
+    private func noteSensorContinuity(channel: ChannelId, at t: TimeInterval) {
+        guard let source = Self.sensorSource(for: channel) else { return }
+        if let previous = lastSensorSampleT[source],
+           t - previous > Self.gapThreshold(for: source) {
+            var gaps = manifest?.sensorGaps ?? []
+            gaps.append(.init(source: source, start: previous, end: t))
+            manifest?.sensorGaps = gaps
+        }
+        lastSensorSampleT[source] = max(lastSensorSampleT[source] ?? t, t)
+    }
+
+    private static func sensorSource(for channel: ChannelId) -> SessionManifest.SensorGap.Source? {
+        if channel.rawValue.hasPrefix("gps.") { return .gps }
+        if channel.rawValue.hasPrefix("imu.") || channel.rawValue.hasPrefix("car.") {
+            return .motion
+        }
+        if channel.rawValue.hasPrefix("baro.") { return .barometer }
+        if channel.rawValue.hasPrefix("device.") { return .deviceHealth }
+        return nil
+    }
+
+    private static func gapThreshold(for source: SessionManifest.SensorGap.Source) -> TimeInterval {
+        switch source {
+        case .gps, .barometer: 3
+        case .motion: 0.5
+        case .deviceHealth: 12
+        }
     }
 }

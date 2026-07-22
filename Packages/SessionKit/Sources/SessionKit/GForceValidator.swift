@@ -10,9 +10,9 @@ import Foundation
 /// iPhone GPS speed/course are doppler-filtered and lag the IMU by ~1–3 s, so
 /// the validator searches a small lag range and reports the best alignment
 /// (calibrated real-world data: r≈0.88 long / r≈0.79 lat at ~2 s lag).
-public struct GForceValidation: Sendable, Equatable {
+public struct GForceValidation: Codable, Sendable, Equatable {
 
-    public enum Verdict: String, Sendable {
+    public enum Verdict: String, Codable, Sendable {
         case verified          // longitudinal r and scale in range
         case marginal          // correlated but scale/noise off
         case failed            // calibrated data contradicts GPS
@@ -26,6 +26,16 @@ public struct GForceValidation: Sendable, Equatable {
     public var latCorrelation: Double?
     public var gpsLagSeconds: Double?   // IMU-vs-GPS timing offset used
     public var pairCount: Int
+
+    public init(verdict: Verdict, longCorrelation: Double?, longScale: Double?,
+                latCorrelation: Double?, gpsLagSeconds: Double?, pairCount: Int) {
+        self.verdict = verdict
+        self.longCorrelation = longCorrelation
+        self.longScale = longScale
+        self.latCorrelation = latCorrelation
+        self.gpsLagSeconds = gpsLagSeconds
+        self.pairCount = pairCount
+    }
 
     public static func validate(sessionDirectory directory: URL) -> GForceValidation {
         let longG = ChannelReader.samples(for: .carLongG, inSessionDirectory: directory)

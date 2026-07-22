@@ -1,10 +1,9 @@
 //
-//  RecordView.swift
+//  LiveDashboardView.swift
 //  raceApp
 //
-//  Home tab, restyled to the iOS Fitness aesthetic (pure black, rounded
-//  #1F1F1F cards, big bold titles) with the orange/white/red palette.
-//  Idle screen = status card + START hero; recording = live dashboard.
+//  Full-screen live dashboard while recording. Collapse via chevron or
+//  swipe-down returns to Sessions + mini-player; recording continues.
 //
 
 import SwiftUI
@@ -12,146 +11,103 @@ import SessionKit
 import ObdKit
 import CoreLocation
 
-struct RecordView: View {
-    @Environment(AppModel.self) private var model
-
-    var body: some View {
-        Group {
-            if model.recording.isRecording {
-                DashboardView()
-            } else {
-                IdleRecordView()
-            }
-        }
-        .toolbar(model.recording.isRecording ? .hidden : .visible, for: .tabBar)
-    }
-}
-
-// MARK: - Idle (Fitness style)
-
-private struct IdleRecordView: View {
-    var body: some View {
-        TimelineView(.periodic(from: .now, by: 1)) { context in
-            VStack(alignment: .leading, spacing: 0) {
-                header(date: context.date)
-
-                Spacer()
-                idleHero
-                Spacer()
-
-                SessionButton(isRecording: false)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .padding(.horizontal, 22)
-            .padding(.top, 8)
-            .padding(.bottom, 16)
-            .background(Color.black)
-        }
-    }
-
-    private func header(date: Date) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text("Record")
-                .font(.system(size: 34, weight: .bold))
-                .foregroundStyle(Color.textPrimary)
-            Text(date.formatted(.dateTime.weekday(.wide).month().day()))
-                .font(.system(size: 15))
-                .foregroundStyle(Color.muted)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private var idleHero: some View {
-        VStack(spacing: 14) {
-            Image(systemName: "gauge.open.with.lines.needle.33percent")
-                .font(.system(size: 46, weight: .light))
-                .foregroundStyle(Color.mutedWeak)
-            Text("Ready to record")
-                .font(.system(size: 22, weight: .semibold))
-                .foregroundStyle(Color.textPrimary)
-            Text("Every channel — GPS, motion, and OBD — is captured the moment you start.")
-                .font(.system(size: 13))
-                .foregroundStyle(Color.muted)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 24)
-        }
-        .frame(maxWidth: .infinity)
-    }
-}
-
-/// Shared start/stop control: identical shape and size in both states —
-/// only the fill color and label change. Orange "Start Session" → red-filled
-/// "Stop Recording" (R1.1–R1.3).
-struct SessionButton: View {
+/// Large orange circular Start used on the Sessions idle surface.
+struct SessionStartButton: View {
     @Environment(AppModel.self) private var model
     @AppStorage("useMetricUnits") private var metric = false
-    var isRecording: Bool
-    /// Landscape uses a narrower, intrinsic-width button; portrait/idle fill the row.
-    var compact: Bool = false
-    /// Elapsed recording time, shown on the Stop button (replaces the REC chip).
-    var elapsed: TimeInterval? = nil
-
-    private var label: String {
-        guard isRecording else { return "Start Session" }
-        if let elapsed { return "Stop Recording · \(Self.format(elapsed))" }
-        return "Stop Recording"
-    }
+    var size: CGFloat = 96
 
     var body: some View {
         Button {
-            if isRecording {
-                model.stopRecording()
-            } else {
-                model.startRecording(metricUnits: metric)
-            }
-        } label: {
-            Text(label)
-                .font(.system(size: compact ? 15 : 17, weight: .semibold))
-                .monospacedDigit()
-                .foregroundStyle(isRecording ? Color.recordRed : .white)
-                .frame(maxWidth: compact ? nil : .infinity)
-                .padding(.horizontal, compact ? 26 : 0)
-                .frame(height: compact ? 46 : 56)
-                .background(background)
-                .contentShape(RoundedRectangle(cornerRadius: compact ? 14 : 16))
+            model.startRecording(metricUnits: metric)
+        }         label: {
+            Text("START")
+                .font(.numeral(size * 0.32, weight: .bold))
+                .foregroundStyle(.black)
+                .frame(width: size, height: size)
+                .background(Color.accent, in: Circle())
+                .contentShape(Circle())
         }
         .buttonStyle(PressableButtonStyle())
+        .accessibilityLabel("Start")
     }
+}
 
+/// Circular red Stop used on the expanded dashboard and mini-player.
+struct SessionStopButton: View {
+    @Environment(AppModel.self) private var model
+    var size: CGFloat = 64
+
+    var body: some View {
+        Button {
+            model.stopRecording()
+        } label: {
+            ZStack {
+                Circle()
+                    .fill(Color.recordRed)
+                    .frame(width: size, height: size)
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(.black)
+                    .frame(width: size * 0.28, height: size * 0.28)
+            }
+        }
+        .buttonStyle(PressableButtonStyle())
+        .accessibilityLabel("Stop Recording")
+    }
+}
+
+enum SessionElapsedFormat {
     static func format(_ elapsed: TimeInterval) -> String {
         let total = Int(max(0, elapsed))
         return String(format: "%d:%02d", total / 60, total % 60)
     }
 
-    // Start = solid orange fill, white text.
-    // Stop  = red outline only, no fill, red text — high contrast on black.
-    @ViewBuilder private var background: some View {
-        let shape = RoundedRectangle(cornerRadius: compact ? 14 : 16)
-        if isRecording {
-            shape.stroke(Color.recordRed, lineWidth: 1.5)
-        } else {
-            shape.fill(Color.accent)
-        }
+    /// Banner / wireframe style: always `HH:MM:SS`.
+    static func formatLong(_ elapsed: TimeInterval) -> String {
+        let total = Int(max(0, elapsed))
+        let h = total / 3600
+        let m = (total % 3600) / 60
+        let s = total % 60
+        return String(format: "%02d:%02d:%02d", h, m, s)
     }
 }
 
 // MARK: - Recording dashboard
 
-private struct DashboardView: View {
+struct LiveDashboardView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     @AppStorage("useMetricUnits") private var metric = false
     @AppStorage("shiftEnabled") private var shiftEnabled = false
     @AppStorage("shiftRPM") private var shiftRPM: Double = 5500
 
+    var onCollapse: () -> Void = {}
+
     @State private var peakG: Double = 0
     @State private var trail: [CGPoint] = []
+    @State private var dragOffset: CGFloat = 0
+    @State private var cameraFrontIsPrimary = false
     @AppStorage("dashboardFace") private var face = 0
 
-    private static let faceCount = 7
+    private static let faceCount = 5
 
     private var indicator: ShiftIndicator {
         ShiftIndicator(enabled: shiftEnabled, shiftRPM: shiftRPM)
+    }
+
+    private func recordingHealthBanner(icon: String, text: String, color: Color) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: icon)
+                .foregroundStyle(color)
+            Text(text)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Color.textPrimary)
+                .lineLimit(2)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(Color.cardGray)
     }
 
     private func rpmColor(_ rpm: Double?) -> Color {
@@ -200,28 +156,70 @@ private struct DashboardView: View {
             let elapsed = model.recording.startedAt.map { context.date.timeIntervalSince($0) } ?? 0
 
             let isLandscape = verticalSizeClass == .compact
+            let isCameraFace = face == 4
 
-            VStack(spacing: 0) {
-                TabView(selection: $face) {
-                    ForEach(0..<Self.faceCount, id: \.self) { i in
-                        faceView(i, live: live, landscape: isLandscape)
-                            .tag(i)
+            ZStack {
+                VStack(spacing: 0) {
+                    if !isCameraFace {
+                        collapseChrome
+                        healthBanners
+                    }
+
+                    TabView(selection: $face) {
+                        ForEach(0..<Self.faceCount, id: \.self) { i in
+                            faceView(i, live: live, landscape: isLandscape)
+                                .tag(i)
+                        }
+                    }
+                    .tabViewStyle(.page(indexDisplayMode: .never))
+                    .animation(.easeInOut(duration: 0.2), value: face)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                    if !isCameraFace {
+                        bottomBar(elapsed: elapsed, landscape: isLandscape)
                     }
                 }
-                .tabViewStyle(.page(indexDisplayMode: .never))
-                .animation(.easeInOut(duration: 0.2), value: face)
 
-                bottomBar(elapsed: elapsed, landscape: isLandscape)
-            }
-            .background(Color.black)
-            #if DEBUG
-            .onAppear {
-                if let i = CommandLine.arguments.firstIndex(of: "-dash-face"),
-                   i + 1 < CommandLine.arguments.count, let f = Int(CommandLine.arguments[i + 1]) {
-                    face = f
+                // Camera face: full-bleed preview with chrome + bottom fade overlaid.
+                if isCameraFace {
+                    GeometryReader { geo in
+                        ZStack(alignment: .bottom) {
+                            VStack(spacing: 0) {
+                                collapseChrome
+                                healthBanners
+                                Color.clear
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                    .allowsHitTesting(false)
+                            }
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+
+                            LinearGradient(
+                                colors: [.clear, .black],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                            .frame(height: geo.size.height * 0.5)
+                            .frame(maxWidth: .infinity)
+                            .allowsHitTesting(false)
+
+                            bottomBar(elapsed: elapsed, landscape: isLandscape)
+                        }
+                        .frame(width: geo.size.width, height: geo.size.height)
+                    }
                 }
             }
-            #endif
+            .background(Color.black)
+            .offset(y: max(0, dragOffset))
+            .onAppear {
+                if face < 0 || face >= Self.faceCount { face = 0 }
+                #if DEBUG
+                if let i = CommandLine.arguments.firstIndex(of: "-dash-face"),
+                   i + 1 < CommandLine.arguments.count, let f = Int(CommandLine.arguments[i + 1]),
+                   (0..<Self.faceCount).contains(f) {
+                    face = f
+                }
+                #endif
+            }
             .onChange(of: GSample(lat: live.latG ?? 0, long: live.longG ?? 0)) { _, sample in
                 let combined = (sample.lat * sample.lat + sample.long * sample.long).squareRoot()
                 peakG = max(peakG, combined)
@@ -232,6 +230,54 @@ private struct DashboardView: View {
         .persistentSystemOverlays(.hidden)
     }
 
+    @ViewBuilder
+    private var healthBanners: some View {
+        if model.recording.samplesMayBePaused {
+            recordingHealthBanner(
+                icon: "exclamationmark.triangle.fill",
+                text: "GPS went quiet — unlock to resume capture",
+                color: .yellow)
+        } else if model.camera.uiStatus == .on, face != 4 {
+            recordingHealthBanner(
+                icon: "camera.fill",
+                text: "Keep the screen on while camera is recording",
+                color: .green)
+        } else if model.forceScreenAwakeForSession {
+            recordingHealthBanner(
+                icon: "sun.max.fill",
+                text: "Screen staying awake — allow Always Location to lock safely",
+                color: .accent)
+        }
+    }
+
+    private var collapseChrome: some View {
+        Capsule()
+            .fill(Color.mutedWeak)
+            .frame(width: 36, height: 5)
+            .padding(.top, 10)
+            .padding(.bottom, 6)
+            .frame(maxWidth: .infinity)
+            .contentShape(Rectangle())
+            .onTapGesture(perform: onCollapse)
+            .gesture(collapseDrag)
+            .accessibilityLabel("Collapse dashboard")
+            .accessibilityAddTraits(.isButton)
+    }
+
+    private var collapseDrag: some Gesture {
+        DragGesture(minimumDistance: 24, coordinateSpace: .local)
+            .onChanged { value in
+                if value.translation.height > 0 {
+                    dragOffset = value.translation.height
+                }
+            }
+            .onEnded { value in
+                let shouldCollapse = value.translation.height > 120 || value.predictedEndTranslation.height > 220
+                withAnimation(.easeOut(duration: 0.2)) { dragOffset = 0 }
+                if shouldCollapse { onCollapse() }
+            }
+    }
+
     // MARK: - Faces (swipe left/right)
 
     @ViewBuilder
@@ -240,15 +286,53 @@ private struct DashboardView: View {
         case 1: gforceFace(live: live, landscape: landscape)
         case 2: trackMapFace(live: live, landscape: landscape)
         case 3: lapFace(landscape: landscape)
-        case 4: dragFace(landscape: landscape)
-        case 5: healthFace(now: uptimeNow(), landscape: landscape)
-        case 6: navFace(live: live)
+        case 4: cameraFace(landscape: landscape)
         default:
             if landscape { primaryLandscape(live: live) } else { primaryPortrait(live: live) }
         }
     }
 
-    /// Persistent bottom bar: page dots + the stop control, in every face.
+    /// Full-bleed rear preview with front PiP (top-leading) while camera is ON.
+    /// Tap the PiP to spring-swap which camera is primary.
+    private func cameraFace(landscape: Bool) -> some View {
+        Group {
+            if model.camera.isCapturing, let rear = model.camera.rearPreviewLayer {
+                DualCameraPreviewView(
+                    rearLayer: rear,
+                    frontLayer: model.camera.frontPreviewLayer,
+                    landscape: landscape,
+                    frontIsPrimary: $cameraFrontIsPrimary
+                )
+                .onChange(of: model.camera.usesMultiCam) { _, multi in
+                    if !multi { cameraFrontIsPrimary = false }
+                }
+                .onChange(of: model.camera.isCapturing) { _, capturing in
+                    if !capturing { cameraFrontIsPrimary = false }
+                }
+            } else {
+                VStack(spacing: 12) {
+                    Image(systemName: "camera.fill")
+                        .font(.system(size: 36, weight: .medium))
+                        .foregroundStyle(Color.mutedWeak)
+                    Text(model.camera.uiStatus == .unavailable
+                         ? "Camera unavailable"
+                         : "Turn camera ON to preview")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(Color.textPrimary)
+                    Text("Use the camera control below")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Color.muted)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .onAppear { cameraFrontIsPrimary = false }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.black)
+        .accessibilityLabel("Camera preview")
+    }
+
+    /// Persistent bottom bar: page dots + 3-column chrome (camera | stop | close).
     private func bottomBar(elapsed: TimeInterval, landscape: Bool) -> some View {
         let dots = HStack(spacing: 7) {
             ForEach(0..<Self.faceCount, id: \.self) { i in
@@ -257,20 +341,94 @@ private struct DashboardView: View {
                     .frame(width: 7, height: 7)
             }
         }
+        let stopSize: CGFloat = landscape ? 52 : 64
+        let sideSize: CGFloat = landscape ? 40 : 48
+        let cameraStatus = model.camera.uiStatus
+
+        let cameraButton = Button {
+            model.toggleSessionCamera()
+        } label: {
+            VStack(spacing: 6) {
+                Image(systemName: "camera.fill")
+                    .font(.system(size: landscape ? 15 : 17, weight: .semibold))
+                    .foregroundStyle(cameraStatus == .on ? Color.black
+                                     : cameraStatus == .unavailable ? Color.mutedWeak
+                                     : Color.muted)
+                    .frame(width: sideSize, height: sideSize)
+                    .background {
+                        if cameraStatus == .on {
+                            Circle().fill(Color.white)
+                        } else {
+                            Circle().stroke(
+                                cameraStatus == .unavailable ? Color.mutedWeak.opacity(0.5) : Color.mutedWeak,
+                                lineWidth: 1.5)
+                        }
+                    }
+                Text(cameraStatus == .on ? "ON" : cameraStatus == .off ? "OFF" : "N/A")
+                    .font(.system(size: landscape ? 10 : 11, weight: .semibold))
+                    .foregroundStyle(cameraStatus == .on ? Color.white
+                                     : cameraStatus == .unavailable ? Color.mutedWeak
+                                     : Color.muted)
+            }
+            .frame(maxWidth: .infinity)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Camera \(cameraStatus == .on ? "on" : cameraStatus == .off ? "off" : "unavailable")")
+
+        let closeButton = Button(action: onCollapse) {
+            Image(systemName: "xmark")
+                .font(.system(size: landscape ? 15 : 17, weight: .semibold))
+                .foregroundStyle(Color.muted)
+                .frame(width: sideSize, height: sideSize)
+                .background(Circle().stroke(Color.mutedWeak, lineWidth: 1.5))
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Close dashboard")
+
+        let timer = Text(SessionElapsedFormat.format(elapsed))
+            .font(.numeral(landscape ? 15 : 17, weight: .medium))
+            .monospacedDigit()
+            .foregroundStyle(Color.recordRed)
+
+        let controls = HStack(alignment: .top, spacing: 0) {
+            cameraButton
+                .frame(maxWidth: .infinity, alignment: .center)
+
+            VStack(spacing: 8) {
+                SessionStopButton(size: stopSize)
+                timer
+            }
+            .frame(maxWidth: .infinity)
+
+            closeButton
+                .frame(maxWidth: .infinity)
+                .padding(.top, 0)
+        }
+
         return Group {
             if landscape {
-                HStack(spacing: 16) {
+                VStack(spacing: 0) {
                     dots
-                    Spacer()
-                    SessionButton(isRecording: true, compact: true, elapsed: elapsed)
+                    controls
+                        .padding(.top, 18)
                 }
-                .padding(.horizontal, 24).padding(.vertical, 8)
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 24)
+                .padding(.vertical, 8)
             } else {
-                VStack(spacing: 12) {
+                // Portrait: reserve a fixed chrome strip; dashboard uses the rest.
+                VStack(spacing: 0) {
                     dots
-                    SessionButton(isRecording: true, elapsed: elapsed)
+                    controls
+                        .padding(.top, 18)
+                        .frame(maxWidth: .infinity)
+                    Spacer(minLength: 0)
                 }
-                .padding(.horizontal, 22).padding(.bottom, 16).padding(.top, 6)
+                .frame(height: 158)
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 22)
             }
         }
     }
@@ -575,111 +733,6 @@ private struct DashboardView: View {
         guard let t else { return "—:—" }
         let m = Int(t) / 60, s = t - Double(m * 60)
         return String(format: "%d:%05.2f", m, s)
-    }
-
-    // MARK: Drag face
-
-    private func dragFace(landscape: Bool) -> some View {
-        let r = model.metrics.dragRun, b = model.metrics.dragBest
-        return VStack(alignment: .leading, spacing: landscape ? 10 : 22) {
-            HStack {
-                microLabel("ACCELERATION")
-                Spacer()
-                if r.launching {
-                    Text("● LAUNCH").font(.system(size: 10, weight: .semibold)).kerning(1)
-                        .foregroundStyle(Color.recordRed)
-                }
-            }
-            dragRow("0–60 MPH", r.zeroToSixty, b.zeroToSixty)
-            dragRow("0–100 MPH", r.zeroToHundred, b.zeroToHundred)
-            dragRow("¼ MILE", r.quarterMile, b.quarterMile,
-                    trapKmh: r.quarterMileTrapKmh)
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, landscape ? 24 : 22).padding(.top, landscape ? 10 : 8)
-    }
-
-    private func dragRow(_ label: String, _ value: TimeInterval?, _ best: TimeInterval?,
-                         trapKmh: Double? = nil) -> some View {
-        HStack(alignment: .firstTextBaseline) {
-            VStack(alignment: .leading, spacing: 1) {
-                Text(label).font(.system(size: 11, weight: .semibold)).kerning(1).foregroundStyle(Color.muted)
-                if let best { Text("BEST \(String(format: "%.2f", best))s")
-                    .font(.system(size: 9, weight: .medium)).foregroundStyle(Color.mutedWeak) }
-            }
-            Spacer()
-            if let trapKmh, value != nil {
-                Text("\(Int(UnitsFormatter(metric: metric).speed(fromKmh: trapKmh))) \(UnitsFormatter(metric: metric).speedUnit)")
-                    .font(.system(size: 13, weight: .medium)).foregroundStyle(Color.muted).padding(.trailing, 10)
-            }
-            Text(value.map { String(format: "%.2f", $0) } ?? "—")
-                .font(.numeral(34, weight: .semibold))
-                .foregroundStyle(value == nil ? Color.mutedWeak : Color.textPrimary)
-            + Text(value != nil ? " s" : "").font(.system(size: 15)).foregroundStyle(Color.muted)
-        }
-    }
-
-    // MARK: Vehicle-health face
-
-    private func healthFace(now: TimeInterval, landscape: Bool) -> some View {
-        let snap = model.bus.snapshot()
-        func v(_ ch: ChannelId, _ maxAge: TimeInterval = 8) -> Double? { snap.fresh(ch, now: now, maxAge: maxAge) }
-        let cols = [GridItem(.flexible()), GridItem(.flexible())]
-        return VStack(alignment: .leading, spacing: landscape ? 8 : 16) {
-            microLabel("VEHICLE HEALTH")
-            LazyVGrid(columns: cols, alignment: .leading, spacing: landscape ? 10 : 18) {
-                healthStat("COOLANT", v(.obd(.coolantTemp)), "°C", warn: v(.obd(.coolantTemp)).map { $0 > 110 } ?? false)
-                healthStat("OIL", v(.obd(.oilTemp)), "°C", warn: v(.obd(.oilTemp)).map { $0 > 125 } ?? false)
-                healthStat("INTAKE AIR", v(.obd(.intakeAirTemp)), "°C")
-                healthStat("FUEL", v(.obd(.fuelLevel)), "%", warn: v(.obd(.fuelLevel)).map { $0 < 12 } ?? false)
-                healthStat("BATTERY", v(.obd(.controlModuleVoltage)).map { $0 / 1000 }, "V")
-                healthStat("ENGINE LOAD", v(.obd(.engineLoad)), "%")
-            }
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, landscape ? 24 : 22).padding(.top, landscape ? 10 : 8)
-    }
-
-    private func healthStat(_ label: String, _ value: Double?, _ unit: String, warn: Bool = false) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(alignment: .firstTextBaseline, spacing: 4) {
-                Text(value.map { String(Int($0.rounded())) } ?? "—")
-                    .font(.numeral(38, weight: .semibold))
-                    .foregroundStyle(value == nil ? Color.mutedWeak : (warn ? Color.recordRed : Color.textPrimary))
-                Text(unit).font(.system(size: 14)).foregroundStyle(Color.muted)
-            }
-            Text(label).font(.system(size: 10, weight: .semibold)).kerning(1).foregroundStyle(Color.muted)
-        }
-    }
-
-    // MARK: 3D nav face
-
-    @ViewBuilder
-    private func navFace(live: Live) -> some View {
-        if let track = model.metrics.track {
-            let car = live.gpsLat.flatMap { lat in
-                live.gpsLon.map { CLLocationCoordinate2D(latitude: lat, longitude: $0) }
-            }
-            ZStack(alignment: .top) {
-                TrackNavCanvas(nav: TrackNav.points(for: track), car: car, heading: live.heading ?? 0)
-                HStack(alignment: .firstTextBaseline) {
-                    microLabel(track.name.uppercased())
-                    Spacer()
-                    Text(live.speedDisplay.map { String(Int($0)) } ?? "—")
-                        .font(.numeral(30, weight: .semibold)).foregroundStyle(Color.textPrimary)
-                    + Text(" \(UnitsFormatter(metric: metric).speedUnit)")
-                        .font(.system(size: 13)).foregroundStyle(Color.muted)
-                }
-                .padding(.horizontal, 20).padding(.top, 8)
-            }
-        } else {
-            VStack(spacing: 10) {
-                Image(systemName: "view.3d").font(.system(size: 40)).foregroundStyle(Color.mutedWeak)
-                Text("No track matched").font(.headline).foregroundStyle(Color.muted)
-                Text("3D nav appears on known tracks.").font(.caption).foregroundStyle(Color.mutedWeak)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
     }
 
     // MARK: Pieces

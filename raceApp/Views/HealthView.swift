@@ -33,15 +33,13 @@ struct HealthView: View {
                 .padding(22)
             }
             .background(Color.bgScreen)
+            .navigationBarTitleDisplayMode(.inline)
         }
     }
 
     private var header: some View {
         HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("Health")
-                    .font(.system(size: 34, weight: .bold))
-                    .foregroundStyle(Color.textPrimary)
                 Text(carSubtitle)
                     .font(.system(size: 15))
                     .foregroundStyle(Color.muted)

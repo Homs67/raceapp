@@ -17,64 +17,196 @@ struct SessionsView: View {
     @Environment(AppModel.self) private var model
     @AppStorage("useMetricUnits") private var metric = false
     @State private var sessions: [SessionManifest] = []
-    @State private var pendingDelete: SessionManifest?
     @State private var path: [UUID] = []
     @State private var didAutoOpen = false
+    @State private var isSelecting = false
+    @State private var selectedIds: Set<UUID> = []
+
+    private var showMiniPlayer: Bool {
+        model.recording.isRecording && !model.dashboardExpanded
+    }
+
+    private var obdConnected: Bool {
+        model.connection.adapterLinkUp
+    }
 
     var body: some View {
-        NavigationStack(path: $path) {
-            Group {
-                if sessions.isEmpty {
-                    ContentUnavailableView(
-                        "No Sessions",
-                        systemImage: "flag.checkered",
-                        description: Text("Press Start on the Record tab — every session lands here.")
-                    )
-                } else {
-                    List {
-                        ForEach(sessions) { session in
-                            NavigationLink(value: session.id) {
-                                SessionRow(session: session, metric: metric)
-                            }
-                            .listRowBackground(Color.cardBg)
-                            .swipeActions {
-                                Button("Delete", role: .destructive) {
-                                    pendingDelete = session
+        VStack(spacing: 0) {
+            if path.isEmpty {
+                OBDConnectionStatusBar(connected: obdConnected) {
+                    model.showSettings = true
+                }
+            }
+
+            NavigationStack(path: $path) {
+                Group {
+                    if sessions.isEmpty && !model.recording.isRecording {
+                        VStack(alignment: .leading, spacing: 0) {
+                            sessionsHeader
+                            Spacer(minLength: 0)
+                            ContentUnavailableView(
+                                "No Sessions",
+                                systemImage: "flag.checkered",
+                                description: Text("Press Start below — every session lands here.")
+                            )
+                            Spacer(minLength: 0)
+                        }
+                    } else {
+                        List {
+                            sessionsHeader
+                                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 0, trailing: 16))
+                                .listRowSeparator(.hidden)
+                                .listRowBackground(Color.clear)
+
+                            ForEach(sessionSections) { section in
+                                // Title as a normal row so it scrolls away (List section headers pin).
+                                Text(section.title)
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundStyle(Color.muted)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 2, trailing: 16))
+                                    .listRowSeparator(.hidden)
+                                    .listRowBackground(Color.clear)
+
+                                ForEach(section.sessions) { session in
+                                    sessionRow(for: session)
+                                        // 16 outer margin + 16 inner padding inside the card.
+                                        .listRowInsets(EdgeInsets(top: 5, leading: 32, bottom: 5, trailing: 32))
+                                        .listRowSeparator(.hidden)
+                                        .listRowBackground(
+                                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                                .fill(Color.cardBg)
+                                                // Plain List ignores horizontal insets for backgrounds —
+                                                // pad the card itself so it doesn't go edge-to-edge.
+                                                .padding(.horizontal, 16)
+                                                .padding(.vertical, 5)
+                                        )
+                                }
+                                .onDelete { offsets in
+                                    guard !isSelecting else { return }
+                                    deleteSessions(at: offsets, in: section)
                                 }
                             }
                         }
+                        .listStyle(.plain)
+                        .scrollContentBackground(.hidden)
+                        .contentMargins(.horizontal, 0, for: .scrollContent)
                     }
-                    .scrollContentBackground(.hidden)
                 }
-            }
-            .background(Color.bgScreen)
-            .navigationTitle("Sessions")
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Text(storageText)
-                        .font(.system(size: 11))
-                        .foregroundStyle(Color.muted)
-                }
-            }
-            .navigationDestination(for: UUID.self) { id in
-                SessionDetailView(sessionId: id)
-            }
-            .confirmationDialog(
-                "Delete this session? The recorded data can't be recovered.",
-                isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }),
-                titleVisibility: .visible
-            ) {
-                Button("Delete Session", role: .destructive) {
-                    if let session = pendingDelete {
-                        try? model.store.delete(session.id)
-                        model.recording.sessionUpdated()
+                .background(Color.bgScreen)
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        if !sessions.isEmpty {
+                            Button {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    isSelecting.toggle()
+                                    if !isSelecting { selectedIds.removeAll() }
+                                }
+                            } label: {
+                                Image(systemName: isSelecting ? "checkmark.circle.fill" : "checkmark.circle")
+                            }
+                            .accessibilityLabel(isSelecting ? "Done selecting" : "Select sessions")
+                        }
                     }
-                    pendingDelete = nil
+                    ToolbarItemGroup(placement: .topBarTrailing) {
+                        if isSelecting {
+                            Button(role: .destructive) {
+                                deleteSelectedSessions()
+                            } label: {
+                                Image(systemName: "trash")
+                            }
+                            .disabled(selectedIds.isEmpty)
+                            .accessibilityLabel("Delete selected")
+                        } else {
+                            Button {
+                                model.showDebug = true
+                            } label: {
+                                Image(systemName: "ladybug")
+                            }
+                            .accessibilityLabel("Debug")
+
+                            Button {
+                                model.showSettings = true
+                            } label: {
+                                Image(systemName: "gearshape")
+                            }
+                            .accessibilityLabel("Settings")
+                        }
+                    }
                 }
+                .navigationDestination(for: UUID.self) { id in
+                    SessionDetailView(sessionId: id)
+                }
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    if showMiniPlayer {
+                        RecordingMiniPlayer(
+                            onExpand: { model.dashboardExpanded = true },
+                            metric: metric
+                        )
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                    } else if !model.recording.isRecording && !isSelecting {
+                        idleBottomChrome
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
+                }
+                .animation(.easeInOut(duration: 0.22), value: showMiniPlayer)
+                .animation(.easeInOut(duration: 0.22), value: model.recording.isRecording)
+                .animation(.easeInOut(duration: 0.2), value: isSelecting)
             }
         }
         .onAppear(perform: reload)
         .onChange(of: model.recording.sessionsVersion) { reload() }
+    }
+
+    private var selectedTitle: String {
+        selectedIds.isEmpty ? "Select" : "\(selectedIds.count) Selected"
+    }
+
+    private var sessionsHeader: some View {
+        ScreenPageTitle(title: isSelecting ? selectedTitle : "Sessions")
+    }
+
+    @ViewBuilder
+    private func sessionRow(for session: SessionManifest) -> some View {
+        if isSelecting {
+            Button {
+                toggleSelection(session.id)
+            } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: selectedIds.contains(session.id)
+                          ? "checkmark.circle.fill" : "circle")
+                        .font(.system(size: 22))
+                        .foregroundStyle(selectedIds.contains(session.id) ? Color.accent : Color.muted)
+                    SessionRow(session: session, metric: metric)
+                }
+            }
+            .buttonStyle(.plain)
+        } else {
+            NavigationLink(value: session.id) {
+                SessionRow(session: session, metric: metric)
+            }
+        }
+    }
+
+    private func toggleSelection(_ id: UUID) {
+        if selectedIds.contains(id) {
+            selectedIds.remove(id)
+        } else {
+            selectedIds.insert(id)
+        }
+    }
+
+    private var idleBottomChrome: some View {
+        SessionStartButton()
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+            .padding(.bottom, 12)
+    }
+
+    private var sessionSections: [SessionDateSection] {
+        SessionDateSection.group(sessions)
     }
 
     private func reload() {
@@ -85,8 +217,228 @@ struct SessionsView: View {
         }
     }
 
-    private var storageText: String {
-        ByteCountFormatter.string(fromByteCount: model.store.totalStorageBytes(), countStyle: .file)
+    private func deleteSessions(at offsets: IndexSet, in section: SessionDateSection) {
+        delete(sessions: offsets.map { section.sessions[$0] })
+    }
+
+    private func deleteSelectedSessions() {
+        let toDelete = sessions.filter { selectedIds.contains($0.id) }
+        delete(sessions: toDelete)
+        selectedIds.removeAll()
+        isSelecting = false
+    }
+
+    private func delete(sessions toDelete: [SessionManifest]) {
+        let ids = Set(toDelete.map(\.id))
+        sessions.removeAll { ids.contains($0.id) }
+        for session in toDelete {
+            try? model.store.delete(session.id)
+            path.removeAll { $0 == session.id }
+        }
+        model.recording.sessionUpdated()
+    }
+}
+
+/// Exclusive date buckets for the Sessions list. Empty buckets are omitted.
+private struct SessionDateSection: Identifiable {
+    let id: String
+    let title: String
+    let sessions: [SessionManifest]
+
+    static func group(_ sessions: [SessionManifest], now: Date = Date(),
+                      calendar: Calendar = .current) -> [SessionDateSection] {
+        let startOfToday = calendar.startOfDay(for: now)
+        let startOfYesterday = calendar.date(byAdding: .day, value: -1, to: startOfToday) ?? startOfToday
+        let startOfLast7 = calendar.date(byAdding: .day, value: -7, to: startOfToday) ?? startOfToday
+        let startOfLast30 = calendar.date(byAdding: .day, value: -30, to: startOfToday) ?? startOfToday
+
+        var today: [SessionManifest] = []
+        var yesterday: [SessionManifest] = []
+        var last7: [SessionManifest] = []
+        var last30: [SessionManifest] = []
+        var byMonth: [Date: [SessionManifest]] = [:] // keyed by month start
+
+        for session in sessions {
+            let day = calendar.startOfDay(for: session.startedAtUTC)
+            if day == startOfToday {
+                today.append(session)
+            } else if day == startOfYesterday {
+                yesterday.append(session)
+            } else if day >= startOfLast7 {
+                last7.append(session)
+            } else if day >= startOfLast30 {
+                last30.append(session)
+            } else {
+                let comps = calendar.dateComponents([.year, .month], from: day)
+                let monthStart = calendar.date(from: comps) ?? day
+                byMonth[monthStart, default: []].append(session)
+            }
+        }
+
+        var sections: [SessionDateSection] = []
+        if !today.isEmpty {
+            sections.append(.init(id: "today", title: "Today", sessions: today))
+        }
+        if !yesterday.isEmpty {
+            sections.append(.init(id: "yesterday", title: "Yesterday", sessions: yesterday))
+        }
+        if !last7.isEmpty {
+            sections.append(.init(id: "last7", title: "Last 7 days", sessions: last7))
+        }
+        if !last30.isEmpty {
+            sections.append(.init(id: "last30", title: "Last month", sessions: last30))
+        }
+
+        let monthFormatter = DateFormatter()
+        monthFormatter.calendar = calendar
+        let currentYear = calendar.component(.year, from: now)
+
+        for monthStart in byMonth.keys.sorted(by: >) {
+            let year = calendar.component(.year, from: monthStart)
+            monthFormatter.dateFormat = year == currentYear ? "MMMM" : "MMMM yyyy"
+            let title = monthFormatter.string(from: monthStart)
+            let items = byMonth[monthStart] ?? []
+            guard !items.isEmpty else { continue }
+            sections.append(.init(id: "month-\(monthStart.timeIntervalSince1970)",
+                                  title: title,
+                                  sessions: items))
+        }
+        return sections
+    }
+}
+
+// MARK: - OBD status (under status bar)
+
+private struct OBDConnectionStatusBar: View {
+    var connected: Bool
+    var onTapDisconnected: () -> Void
+
+    private let connectedGreen = Color(hex: 0x30D158)
+
+    var body: some View {
+        Button {
+            if !connected { onTapDisconnected() }
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: connected ? "wifi" : "wifi.slash")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(connected ? connectedGreen : Color.black.opacity(0.75))
+                Text(connected ? "OBD II connected" : "OBD II is not connected")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(connected ? Color.white.opacity(0.85) : Color.black.opacity(0.85))
+                if !connected {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Color.black.opacity(0.55))
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 12)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(connected)
+        .accessibilityLabel(connected ? "OBD II connected" : "OBD II is not connected")
+        .background(barColor.ignoresSafeArea(edges: .top))
+    }
+
+    private var barColor: Color {
+        connected ? .black : .accent
+    }
+}
+
+// MARK: - Recording mini-player
+
+private struct RecordingMiniPlayer: View {
+    @Environment(AppModel.self) private var model
+    var onExpand: () -> Void
+    var metric: Bool
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 0.25)) { context in
+            let elapsed = model.recording.startedAt.map { context.date.timeIntervalSince($0) } ?? 0
+
+            VStack(spacing: 0) {
+                Button(action: onExpand) {
+                    Image(systemName: "chevron.compact.up")
+                        .font(.system(size: 22, weight: .semibold))
+                        .foregroundStyle(Color.mutedWeak)
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 6)
+                        .padding(.bottom, 4)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Expand dashboard")
+
+                HStack(alignment: .center, spacing: 16) {
+                    Button(action: onExpand) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(title)
+                                .font(.system(size: 17, weight: .semibold))
+                                .foregroundStyle(Color.textPrimary)
+                                .lineLimit(1)
+                            Text(distanceText)
+                                .font(.system(size: 13))
+                                .foregroundStyle(Color.muted)
+                                .lineLimit(1)
+                            Text(SessionElapsedFormat.formatLong(elapsed))
+                                .font(.numeral(20, weight: .semibold))
+                                .monospacedDigit()
+                                .foregroundStyle(Color.recordRed)
+                                .padding(.top, 4)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHidden(true)
+
+                    SessionStopButton(size: 56)
+                }
+                .padding(.horizontal, 18)
+                .padding(.bottom, 14)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background { recordingBannerBackground }
+            .overlay(
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .stroke(Color.white.opacity(0.12), lineWidth: 1)
+            )
+            .padding(.horizontal, 16)
+            .padding(.top, 6)
+            .padding(.bottom, 4)
+        }
+    }
+
+    private var recordingBannerBackground: some View {
+        let shape = RoundedRectangle(cornerRadius: 22, style: .continuous)
+        return ZStack {
+            if #available(iOS 26.0, *) {
+                shape.fill(.clear)
+                    .glassEffect(.regular, in: shape)
+            } else {
+                shape.fill(.ultraThinMaterial)
+            }
+            // Keep the banner predominantly dark (at least 50% black).
+            shape.fill(Color.black.opacity(0.55))
+        }
+    }
+
+    private var activeRecording: SessionManifest? {
+        model.store.list().first { $0.status == .recording }
+    }
+
+    private var title: String {
+        model.recording.liveLocationName
+            ?? activeRecording?.locationName
+            ?? "Locating…"
+    }
+
+    private var distanceText: String {
+        let units = UnitsFormatter(metric: metric)
+        let distance = units.distance(fromMeters: model.recording.liveDistanceMeters)
+        return String(format: "%.1f %@", distance, units.distanceUnit.lowercased())
     }
 }
 
@@ -122,7 +474,7 @@ private struct SessionRow: View {
                     .foregroundStyle(Color.muted)
             }
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, 16)
     }
 
     private var durationText: String {
@@ -295,17 +647,22 @@ struct SessionDetailView: View {
     private func videoRow(_ asset: VideoAsset, manifest: SessionManifest) -> some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
-                Text(asset.fileName.split(separator: "-").dropFirst().joined(separator: "-"))
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(Color.mutedStrong)
-                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    Text(videoRoleLabel(asset.role))
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(Color.accent)
+                    Text(asset.fileName)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(Color.mutedStrong)
+                        .lineLimit(1)
+                }
                 // Diagnosis line: the clock we read from the file (or the lack of one)
                 if asset.hasEmbeddedDate == false {
                     Text("no clock in file — placed at session start, use Sync")
                         .font(.system(size: 9))
                         .foregroundStyle(Color.recordRed)
                 } else {
-                    Text("camera clock: \(asset.wallClockStart.formatted(date: .omitted, time: .standard))")
+                    Text("phone clock: \(asset.wallClockStart.formatted(date: .omitted, time: .standard))")
                         .font(.system(size: 9))
                         .foregroundStyle(Color.muted)
                 }
@@ -326,9 +683,18 @@ struct SessionDetailView: View {
         }
     }
 
+    private func videoRoleLabel(_ role: VideoAsset.Role) -> String {
+        switch role {
+        case .rear: return "Rear"
+        case .front: return "Front"
+        case .imported: return "Import"
+        }
+    }
+
     private func coverageText(_ videos: [VideoAsset], manifest: SessionManifest) -> String {
         let duration = manifest.highlights?.durationSeconds ?? 0
-        let segments = VideoTimeline.segments(assets: videos, sessionStartUTC: manifest.startedAtUTC,
+        let primary = VideoTimeline.primaryPlaybackAssets(videos)
+        let segments = VideoTimeline.segments(assets: primary, sessionStartUTC: manifest.startedAtUTC,
                                               sessionDuration: duration,
                                               syncOffset: manifest.videoSyncOffset ?? 0)
         let coverage = VideoTimeline.coverage(segments: segments, sessionDuration: duration)
@@ -590,7 +956,7 @@ struct SessionDetailView: View {
                 manifest: manifest, sessionDirectory: directory, to: output)
             await MainActor.run {
                 exporting = false
-                if let files { exportUrls = [files.csv, files.json] }
+                if let files { exportUrls = [files.csv, files.json, files.raw] }
             }
         }
     }

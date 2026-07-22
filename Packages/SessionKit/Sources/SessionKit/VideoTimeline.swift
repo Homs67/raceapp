@@ -1,9 +1,15 @@
 import Foundation
 
-/// One imported video clip, stored in the session's `videos/` directory.
-/// `wallClockStart` comes from the file's creation metadata (or a fallback);
+/// One video clip, stored in the session's `videos/` directory.
+/// `wallClockStart` comes from phone capture time, file metadata, or a fallback;
 /// the session-wide `videoSyncOffset` corrects camera-clock drift for all clips.
 public struct VideoAsset: Codable, Equatable, Sendable, Identifiable {
+    public enum Role: String, Codable, Sendable {
+        case rear
+        case front
+        case imported
+    }
+
     public var id: UUID
     public var fileName: String
     public var wallClockStart: Date
@@ -12,16 +18,30 @@ public struct VideoAsset: Codable, Equatable, Sendable, Identifiable {
     /// Whether `wallClockStart` came from the file's own metadata (false =
     /// fallback placement; the clip needs manual sync).
     public var hasEmbeddedDate: Bool?
+    /// Capture source. Defaults to `imported` for older manifests.
+    public var role: Role
 
     public init(id: UUID = UUID(), fileName: String, wallClockStart: Date,
                 duration: TimeInterval, fileSizeBytes: Int64? = nil,
-                hasEmbeddedDate: Bool? = nil) {
+                hasEmbeddedDate: Bool? = nil, role: Role = .imported) {
         self.id = id
         self.fileName = fileName
         self.wallClockStart = wallClockStart
         self.duration = duration
         self.fileSizeBytes = fileSizeBytes
         self.hasEmbeddedDate = hasEmbeddedDate
+        self.role = role
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        fileName = try c.decode(String.self, forKey: .fileName)
+        wallClockStart = try c.decode(Date.self, forKey: .wallClockStart)
+        duration = try c.decode(TimeInterval.self, forKey: .duration)
+        fileSizeBytes = try c.decodeIfPresent(Int64.self, forKey: .fileSizeBytes)
+        hasEmbeddedDate = try c.decodeIfPresent(Bool.self, forKey: .hasEmbeddedDate)
+        role = try c.decodeIfPresent(Role.self, forKey: .role) ?? .imported
     }
 }
 
@@ -97,6 +117,20 @@ public enum VideoTimeline {
         return nil
     }
 
+    /// Assets used for the primary review composition: prefer rear (+ imported),
+    /// exclude concurrent front when a rear clip exists.
+    public static func primaryPlaybackAssets(_ assets: [VideoAsset]) -> [VideoAsset] {
+        if assets.contains(where: { $0.role == .rear }) {
+            return assets.filter { $0.role != .front }
+        }
+        return assets
+    }
+
+    /// Front-camera clips for PiP overlay during dual review.
+    public static func frontPlaybackAssets(_ assets: [VideoAsset]) -> [VideoAsset] {
+        assets.filter { $0.role == .front }
+    }
+
     /// Compute the ordered, non-overlapping segments that cover the session.
     /// Clips fully outside the session window contribute nothing; partially
     /// overlapping clips are cropped; overlapping clips are trimmed so the
@@ -147,6 +181,57 @@ public enum VideoTimeline {
         guard sessionDuration > 0 else { return 0 }
         let covered = segments.reduce(0) { $0 + $1.duration }
         return min(1, covered / sessionDuration)
+    }
+
+    // MARK: - Compact (footage-only) timeline
+
+    /// A cropped segment placed on the *compacted* playback timeline, where
+    /// footage plays back-to-back and uncovered session stretches are skipped.
+    public struct CompactSegment: Equatable, Sendable {
+        public let segment: VideoSegment
+        /// Seconds into the compacted playback timeline where this slice starts.
+        public let compStart: TimeInterval
+        public var compEnd: TimeInterval { compStart + segment.duration }
+    }
+
+    /// Pack cropped segments back-to-back: playback shows only covered data.
+    public static func compact(_ segments: [VideoSegment]) -> [CompactSegment] {
+        var cursor: TimeInterval = 0
+        return segments.map { segment in
+            let compact = CompactSegment(segment: segment, compStart: cursor)
+            cursor += segment.duration
+            return compact
+        }
+    }
+
+    /// Playback (compacted) time → session/data time.
+    public static func sessionTime(atCompositionTime t: TimeInterval,
+                                   in compact: [CompactSegment]) -> TimeInterval {
+        guard let first = compact.first else { return t }
+        if t <= first.compStart { return first.segment.sessionStart }
+        for (index, c) in compact.enumerated() {
+            if t < c.compStart { return c.segment.sessionStart }
+            // Treat adjoining composition ranges as half-open so the exact
+            // boundary jumps across a session gap to the next footage slice.
+            if t < c.compEnd || index == compact.index(before: compact.endIndex) {
+                return min(c.segment.sessionEnd,
+                           c.segment.sessionStart + (t - c.compStart))
+            }
+        }
+        return compact[compact.count - 1].segment.sessionEnd
+    }
+
+    /// Session/data time → playback (compacted) time. Times inside an
+    /// uncovered gap snap forward to the next covered segment.
+    public static func compositionTime(atSessionTime t: TimeInterval,
+                                       in compact: [CompactSegment]) -> TimeInterval {
+        guard let first = compact.first else { return 0 }
+        if t <= first.segment.sessionStart { return 0 }
+        for c in compact {
+            if t < c.segment.sessionStart { return c.compStart }
+            if t <= c.segment.sessionEnd { return c.compStart + (t - c.segment.sessionStart) }
+        }
+        return compact[compact.count - 1].compEnd
     }
 
     /// Uncovered stretches of the session (for "no footage" UI).

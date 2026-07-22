@@ -9,6 +9,7 @@
 
 import Foundation
 import AVFoundation
+import Photos
 import CoreTransferable
 import SessionKit
 
@@ -36,6 +37,37 @@ enum VideoLibrary {
 
     static func url(for asset: VideoAsset, sessionDirectory: URL) -> URL {
         videosDirectory(sessionDirectory: sessionDirectory).appendingPathComponent(asset.fileName)
+    }
+
+    // MARK: - Photos backup
+
+    /// Ask for add-only Photos access (best done when camera is first turned ON).
+    static func requestPhotoLibraryAddAccess() async -> Bool {
+        let current = PHPhotoLibrary.authorizationStatus(for: .addOnly)
+        switch current {
+        case .authorized, .limited:
+            return true
+        case .notDetermined:
+            let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
+            return status == .authorized || status == .limited
+        default:
+            return false
+        }
+    }
+
+    /// Save a session MP4 into Photos as a safety net for re-import.
+    @discardableResult
+    static func saveCopyToPhotoLibrary(_ fileURL: URL) async -> Bool {
+        guard FileManager.default.fileExists(atPath: fileURL.path) else { return false }
+        guard await requestPhotoLibraryAddAccess() else { return false }
+        do {
+            try await PHPhotoLibrary.shared().performChanges {
+                PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: fileURL)
+            }
+            return true
+        } catch {
+            return false
+        }
     }
 
     // MARK: - Import
@@ -79,17 +111,31 @@ enum VideoLibrary {
         assets.reduce(0) { $0 + ($1.fileSizeBytes ?? 0) }
     }
 
-    // MARK: - Composition (the virtual crop)
+    // MARK: - Composition (footage-only compact timeline)
 
-    /// Stitch the cropped segments into one composition whose timeline IS the
-    /// session timeline (0…sessionDuration). Gaps become empty ranges so the
-    /// player clock stays aligned with the data.
-    static func buildComposition(segments: [VideoSegment], sessionDirectory: URL,
-                                 sessionDuration: TimeInterval) async throws -> AVComposition {
+    struct BuiltComposition: Sendable {
+        let composition: AVComposition
+        let videoComposition: AVVideoComposition?
+        /// Pixel size after preferredTransform (what the viewer should show).
+        let displaySize: CGSize
+
+        var isLandscape: Bool { displaySize.width > displaySize.height + 1 }
+        var aspectRatio: CGFloat {
+            guard displaySize.height > 1 else { return 16 / 9 }
+            return displaySize.width / displaySize.height
+        }
+    }
+
+    /// Stitch the cropped segments back-to-back: playback contains ONLY the
+    /// parts of the session that have footage; uncovered data is skipped.
+    /// Applies each clip's preferredTransform so landscape footage stays landscape.
+    static func buildComposition(compact: [VideoTimeline.CompactSegment],
+                                 sessionDirectory: URL) async throws -> BuiltComposition {
         let composition = AVMutableComposition()
         guard let videoTrack = composition.addMutableTrack(
             withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid) else {
-            return composition
+            return BuiltComposition(composition: composition, videoComposition: nil,
+                                    displaySize: CGSize(width: 16, height: 9))
         }
         let audioTrack = composition.addMutableTrack(
             withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid)
@@ -98,37 +144,86 @@ enum VideoLibrary {
             CMTime(seconds: seconds, preferredTimescale: 600)
         }
 
-        var cursor: TimeInterval = 0
-        var transformSet = false
-        for segment in segments {
-            // Explicit empty edit for any gap before this segment
-            if segment.sessionStart - cursor > 0.05 {
-                let gap = CMTimeRange(start: time(cursor), duration: time(segment.sessionStart - cursor))
-                videoTrack.insertEmptyTimeRange(gap)
-                audioTrack?.insertEmptyTimeRange(gap)
-            }
+        var displaySize = CGSize(width: 1920, height: 1080)
+        var didSetDisplaySize = false
+        let layerInstruction = AVMutableVideoCompositionLayerInstruction(assetTrack: videoTrack)
+        var hasVideo = false
+        var maxFrameDuration = CMTime(value: 1, timescale: 30)
+
+        for item in compact {
+            let segment = item.segment
             let fileURL = videosDirectory(sessionDirectory: sessionDirectory)
                 .appendingPathComponent(segment.fileName)
             let source = AVURLAsset(url: fileURL)
             let range = CMTimeRange(start: time(segment.assetStart), duration: time(segment.duration))
+            let at = time(item.compStart)
+
             if let sourceVideo = try await source.loadTracks(withMediaType: .video).first {
-                try videoTrack.insertTimeRange(range, of: sourceVideo, at: time(segment.sessionStart))
-                if !transformSet {
-                    videoTrack.preferredTransform = try await sourceVideo.load(.preferredTransform)
-                    transformSet = true
+                try videoTrack.insertTimeRange(range, of: sourceVideo, at: at)
+                hasVideo = true
+
+                let natural = try await sourceVideo.load(.naturalSize)
+                let transform = try await sourceVideo.load(.preferredTransform)
+                let oriented = CGRect(origin: .zero, size: natural).applying(transform)
+                let size = CGSize(width: abs(oriented.width), height: abs(oriented.height))
+                if !didSetDisplaySize, size.width > 1, size.height > 1 {
+                    displaySize = size
+                    didSetDisplaySize = true
                 }
+                if let minFrame = try? await sourceVideo.load(.minFrameDuration),
+                   minFrame.isValid, minFrame.isNumeric, minFrame.seconds > 0 {
+                    maxFrameDuration = minFrame
+                }
+
+                // preferredTransform puts the clip upright; scale into renderSize if needed.
+                var fitted = transform
+                if didSetDisplaySize, size.width > 1, size.height > 1 {
+                    let scaleX = displaySize.width / size.width
+                    let scaleY = displaySize.height / size.height
+                    let scale = min(scaleX, scaleY)
+                    if abs(scale - 1) > 0.001 {
+                        let dx = (displaySize.width - size.width * scale) / 2
+                        let dy = (displaySize.height - size.height * scale) / 2
+                        fitted = transform
+                            .concatenating(CGAffineTransform(scaleX: scale, y: scale))
+                            .concatenating(CGAffineTransform(translationX: dx, y: dy))
+                    }
+                }
+                layerInstruction.setTransform(fitted, at: at)
             }
             if let sourceAudio = try? await source.loadTracks(withMediaType: .audio).first,
                let audioTrack {
-                try? audioTrack.insertTimeRange(range, of: sourceAudio, at: time(segment.sessionStart))
+                try? audioTrack.insertTimeRange(range, of: sourceAudio, at: at)
             }
-            cursor = max(cursor, segment.sessionEnd)
         }
-        // Extend to the full session so the scrubber maps 1:1 to data time
-        if sessionDuration - cursor > 0.05 {
-            videoTrack.insertEmptyTimeRange(
-                CMTimeRange(start: time(cursor), duration: time(sessionDuration - cursor)))
+
+        let duration = composition.duration
+        guard duration.seconds > 0, hasVideo else {
+            return BuiltComposition(composition: composition, videoComposition: nil,
+                                    displaySize: displaySize)
         }
-        return composition
+
+        let instruction = AVMutableVideoCompositionInstruction()
+        instruction.timeRange = CMTimeRange(start: .zero, duration: duration)
+        instruction.layerInstructions = [layerInstruction]
+
+        let videoComposition = AVMutableVideoComposition()
+        videoComposition.renderSize = displaySize
+        videoComposition.frameDuration = maxFrameDuration
+        videoComposition.instructions = [instruction]
+
+        return BuiltComposition(composition: composition, videoComposition: videoComposition,
+                                displaySize: displaySize)
+    }
+
+    /// Oriented width×height for an on-disk clip (after preferredTransform).
+    static func displaySize(ofFileAt url: URL) async -> CGSize? {
+        let asset = AVURLAsset(url: url)
+        guard let track = try? await asset.loadTracks(withMediaType: .video).first else { return nil }
+        guard let natural = try? await track.load(.naturalSize),
+              let transform = try? await track.load(.preferredTransform) else { return nil }
+        let oriented = natural.applying(transform)
+        let size = CGSize(width: abs(oriented.width), height: abs(oriented.height))
+        return size.width > 1 && size.height > 1 ? size : nil
     }
 }

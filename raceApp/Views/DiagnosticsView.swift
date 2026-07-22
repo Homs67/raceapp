@@ -41,7 +41,7 @@ struct DiagnosticsView: View {
                 .disabled(running || !model.connection.canRunDiagnostics)
 
                 if !model.connection.canRunDiagnostics {
-                    Text("Not connected. Connect the adapter (or start demo) in the Connection tab first.")
+                    Text("Not connected. Connect the adapter in Settings (or enable Demo data in Debug) first.")
                         .font(.system(size: 12))
                         .foregroundStyle(Color.recordRed)
                 }

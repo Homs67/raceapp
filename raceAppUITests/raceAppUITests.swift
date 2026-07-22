@@ -32,6 +32,38 @@ final class raceAppUITests: XCTestCase {
     }
 
     @MainActor
+    func testRecordingSurvivesBackgrounding() throws {
+        addUIInterruptionMonitor(withDescription: "System permissions") { alert in
+            for title in ["Allow While Using App", "Allow", "Continue"] {
+                let button = alert.buttons[title]
+                if button.exists {
+                    button.tap()
+                    return true
+                }
+            }
+            return false
+        }
+
+        let app = XCUIApplication()
+        app.launchArguments = ["-demo", "-record"]
+        app.launch()
+        app.tap() // lets the interruption monitor handle first-run permissions
+
+        let stopButton = app.buttons.matching(
+            NSPredicate(format: "label BEGINSWITH 'Stop Recording'")
+        ).firstMatch
+        XCTAssertTrue(stopButton.waitForExistence(timeout: 10))
+
+        XCUIDevice.shared.press(.home)
+        sleep(10)
+        app.activate()
+
+        XCTAssertTrue(stopButton.waitForExistence(timeout: 5),
+                      "an active recording must survive normal backgrounding")
+        stopButton.tap()
+    }
+
+    @MainActor
     func testLaunchPerformance() throws {
         // This measures how long it takes to launch your application.
         measure(metrics: [XCTApplicationLaunchMetric()]) {

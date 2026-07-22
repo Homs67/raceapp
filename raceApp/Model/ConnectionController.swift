@@ -25,36 +25,63 @@ final class ConnectionController {
     private(set) var state: ObdConnectionState = .idle
     private(set) var discovered: [DiscoveredAdapter] = []
     private(set) var isScanning = false
+    private(set) var scanTimedOut = false
+    private(set) var showAllDevices = false
+    private(set) var bluetoothRadio: BluetoothRadioState = .unknown
     private(set) var carInfo: SessionManifest.CarInfo?
     private(set) var supportedPidCount = 0
     private(set) var milOn: Bool?
     private(set) var dtcCount: Int?
     private(set) var lastError: String?
     private(set) var isDemo = false
+    /// Debug override so Settings can preview every OBD step without hardware.
+    var uiStatusOverride: OBDAdapterUIStatus?
     /// The track the current session is on, when known (demo, or later auto-matched).
     private(set) var activeTrack: Track?
     /// Recorder hook — set by AppModel so link drops mark gaps (R1.8).
     var onObdLinkLost: (@MainActor () -> Void)?
 
     private let bus: TelemetryBus
-    private var bleTransport: CoreBluetoothTransport?
+    /// One CoreBluetooth central for the app lifetime. Creating a new manager
+    /// per scan/connect with the same restore ID was breaking reconnects.
+    private let bleTransport = CoreBluetoothTransport()
     private var session: Elm327Session?
     private var poller: PidPoller?
     private var supportedPids: SupportedPids?
     private var scanTask: Task<Void, Never>?
+    private var scanTimeoutTask: Task<Void, Never>?
     private var connectionTask: Task<Void, Never>?
     private var pollerTask: Task<Void, Never>?
+    private var walkthroughTask: Task<Void, Never>?
     private var demoFeed: DemoTelemetryFeed?
+    private var reconnectingAfterLinkLoss = false
+    /// Prevents repeated auto-select while RSSI updates keep arriving.
+    private var didAutoSelectThisScan = false
 
     init(bus: TelemetryBus) {
         self.bus = bus
+        bleTransport.onRadioStateChange = { [weak self] radio in
+            Task { @MainActor in
+                guard let self else { return }
+                self.bluetoothRadio = radio
+                if radio == .poweredOn {
+                    self.beginAdapterDiscoveryIfNeeded()
+                }
+            }
+        }
+        bluetoothRadio = bleTransport.radioState
     }
 
     // MARK: - Derived UI state
 
     var adapterLinkUp: Bool {
+        if let uiStatusOverride {
+            if case .connected = uiStatusOverride { return true }
+            return false
+        }
         switch state {
-        case .connectingEcu, .waitingForIgnition, .live: return true
+        case .waitingForIgnition, .live: return true
+        case .connectingEcu: return true
         default: return false
         }
     }
@@ -62,6 +89,59 @@ final class ConnectionController {
 
     var storedAdapterName: String? { UserDefaults.standard.string(forKey: Keys.adapterName) }
     var hasStoredAdapter: Bool { UserDefaults.standard.string(forKey: Keys.adapterId) != nil }
+
+    private var storedAdapterId: UUID? {
+        UserDefaults.standard.string(forKey: Keys.adapterId).flatMap(UUID.init(uuidString:))
+    }
+
+    var adapterDisplayName: String {
+        if isDemo { return "Demo adapter" }
+        return storedAdapterName ?? "Adapter"
+    }
+
+    /// Settings card step derived from BLE + connection + scan results.
+    var adapterUIStatus: OBDAdapterUIStatus {
+        if let uiStatusOverride { return uiStatusOverride }
+
+        if isDemo {
+            switch state {
+            case .live:
+                return .connected(adapterDisplayName, waitingForIgnition: false)
+            case .waitingForIgnition:
+                return .connected(adapterDisplayName, waitingForIgnition: true)
+            case .connecting, .discoveringGatt, .initializingElm, .connectingEcu, .reconnecting:
+                return .connecting(adapterDisplayName)
+            default:
+                break
+            }
+        }
+
+        switch bluetoothRadio {
+        case .poweredOff, .unsupported, .unauthorized:
+            return .bluetoothOff
+        case .unknown, .poweredOn:
+            break
+        }
+
+        switch state {
+        case .needsPermission:
+            return .bluetoothOff
+        case .live:
+            return .connected(adapterDisplayName, waitingForIgnition: false)
+        case .waitingForIgnition:
+            return .connected(adapterDisplayName, waitingForIgnition: true)
+        case .connecting, .discoveringGatt, .initializingElm, .connectingEcu:
+            return .connecting(adapterDisplayName)
+        case .reconnecting:
+            return .reconnecting(adapterDisplayName)
+        case .scanning, .idle:
+            if !discovered.isEmpty {
+                return .found(discovered)
+            }
+            if scanTimedOut { return .notFound }
+            return .finding
+        }
+    }
 
     var stateDescription: String {
         switch state {
@@ -72,7 +152,7 @@ final class ConnectionController {
         case .discoveringGatt: return "Connecting…"
         case .initializingElm: return "Talking to adapter…"
         case .connectingEcu: return "Talking to car…"
-        case .waitingForIgnition: return "Waiting for ignition…"
+        case .waitingForIgnition: return "Adapter link OK — waiting for ignition…"
         case .live: return "Live"
         case .reconnecting: return "Reconnecting…"
         }
@@ -80,48 +160,153 @@ final class ConnectionController {
 
     // MARK: - Launch / auto-reconnect (R6.1)
 
+    /// Scan first — never hang on a remembered UUID that isn't advertising.
+    /// Auto-connect only happens once the adapter is actually discovered.
     func onLaunch() {
-        guard let idString = UserDefaults.standard.string(forKey: Keys.adapterId),
-              let id = UUID(uuidString: idString) else { return }
-        connect(to: id)
+        beginAdapterDiscoveryIfNeeded()
+    }
+
+    func onForeground() {
+        beginAdapterDiscoveryIfNeeded()
     }
 
     // MARK: - Scanning
 
+    /// Auto-scan when Bluetooth is ready and we aren't already linked / linking.
+    func beginAdapterDiscoveryIfNeeded() {
+        guard uiStatusOverride == nil else { return }
+        guard !isDemo else { return }
+        switch state {
+        case .connecting, .discoveringGatt, .initializingElm, .connectingEcu,
+             .waitingForIgnition, .live, .reconnecting:
+            return
+        case .scanning:
+            return
+        case .idle, .needsPermission:
+            break
+        }
+        switch bluetoothRadio {
+        case .poweredOff, .unauthorized, .unsupported:
+            return
+        case .unknown, .poweredOn:
+            startScan(showAll: showAllDevices)
+        }
+    }
+
+    /// User-facing retry after a timed-out / empty scan.
+    func retryScan() {
+        startScan(showAll: showAllDevices)
+    }
+
+    /// Cancel an in-flight connect/reconnect without forgetting the saved adapter.
+    func cancelPendingConnection() {
+        connectionTask?.cancel()
+        connectionTask = nil
+        reconnectingAfterLinkLoss = false
+        teardownSession(keepBluetooth: true)
+        state = .idle
+        startScan(showAll: showAllDevices)
+    }
+
     func startScan(showAll: Bool = false) {
         stopScan()
-        teardownConnection()
+        connectionTask?.cancel()
+        connectionTask = nil
+        reconnectingAfterLinkLoss = false
+        teardownSession(keepBluetooth: true)
+        showAllDevices = showAll
         isScanning = true
+        scanTimedOut = false
+        didAutoSelectThisScan = false
         discovered = []
         state = .scanning
-        let transport = CoreBluetoothTransport()
-        bleTransport = transport
+        let transport = bleTransport
+        scanTimeoutTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(12))
+            guard let self, !Task.isCancelled else { return }
+            // Still searching with nothing heard → stop and show not-found + Retry.
+            if self.state == .scanning, self.discovered.isEmpty {
+                self.finishEmptyScan()
+            }
+        }
         scanTask = Task { [weak self] in
             do {
                 let stream = try await transport.scan(
                     nameFilter: showAll ? nil : CoreBluetoothTransport.advertisedName)
                 for await adapter in stream {
                     guard let self else { return }
-                    if let index = self.discovered.firstIndex(where: { $0.id == adapter.id }) {
-                        self.discovered[index] = adapter
-                    } else {
-                        self.discovered.append(adapter)
-                    }
-                    self.discovered.sort { $0.rssi > $1.rssi }
+                    self.handleDiscovery(adapter)
                 }
             } catch BleTransportError.bluetoothUnauthorized {
                 self?.state = .needsPermission
+                self?.bluetoothRadio = .unauthorized
             } catch {
                 self?.lastError = "Bluetooth unavailable"
                 self?.state = .idle
+                if self?.bluetoothRadio == .poweredOn {
+                    self?.bluetoothRadio = .poweredOff
+                }
             }
             self?.isScanning = false
+        }
+    }
+
+    /// End an empty scan so UI can show not-found (keeps `scanTimedOut`).
+    private func finishEmptyScan() {
+        scanTimedOut = true
+        scanTask?.cancel()
+        scanTask = nil
+        scanTimeoutTask?.cancel()
+        scanTimeoutTask = nil
+        bleTransport.stopScan()
+        isScanning = false
+        if state == .scanning { state = .idle }
+    }
+
+    func setShowAllDevices(_ showAll: Bool) {
+        // Always restart so Collapse returns to the filtered OBD scan.
+        startScan(showAll: showAll)
+    }
+
+    private func handleDiscovery(_ adapter: DiscoveredAdapter) {
+        scanTimedOut = false
+        if let index = discovered.firstIndex(where: { $0.id == adapter.id }) {
+            discovered[index] = adapter
+        } else {
+            discovered.append(adapter)
+        }
+        discovered.sort { $0.rssi > $1.rssi }
+
+        // Already connecting / live — ignore further discoveries.
+        switch state {
+        case .connecting, .discoveringGatt, .initializingElm, .connectingEcu,
+             .waitingForIgnition, .live, .reconnecting:
+            return
+        default:
+            break
+        }
+
+        // Last-used adapter → always reconnect immediately.
+        if let stored = storedAdapterId, adapter.id == stored {
+            didAutoSelectThisScan = true
+            select(adapter)
+            return
+        }
+
+        // Filtered OBD scan (VEEPEAK): auto-connect the sole hit so first-time
+        // pairing doesn't depend on a nested List button.
+        if !showAllDevices, !didAutoSelectThisScan, discovered.count == 1 {
+            didAutoSelectThisScan = true
+            select(adapter)
         }
     }
 
     func stopScan() {
         scanTask?.cancel()
         scanTask = nil
+        scanTimeoutTask?.cancel()
+        scanTimeoutTask = nil
+        bleTransport.stopScan()
         isScanning = false
         if state == .scanning { state = .idle }
     }
@@ -134,19 +319,45 @@ final class ConnectionController {
     }
 
     func forget() {
-        teardownConnection()
+        walkthroughTask?.cancel()
+        walkthroughTask = nil
+        uiStatusOverride = nil
+        teardownSession(keepBluetooth: true)
         for key in [Keys.adapterId, Keys.adapterName, Keys.elmProtocol, Keys.carVin] {
             UserDefaults.standard.removeObject(forKey: key)
         }
         carInfo = nil
         isDemo = false
+        discovered = []
+        scanTimedOut = false
         state = .idle
+    }
+
+    // MARK: - Debug UI status preview
+
+    func clearUIStatusOverride() {
+        walkthroughTask?.cancel()
+        walkthroughTask = nil
+        uiStatusOverride = nil
+    }
+
+    /// Walk through every Settings OBD step (~2s each) for UI testing without hardware.
+    func playAdapterStatusWalkthrough() {
+        walkthroughTask?.cancel()
+        walkthroughTask = Task { [weak self] in
+            for step in OBDAdapterUIStatus.previewCatalog {
+                guard let self, !Task.isCancelled else { return }
+                self.uiStatusOverride = step
+                try? await Task.sleep(for: .seconds(2.2))
+            }
+            self?.uiStatusOverride = nil
+        }
     }
 
     // MARK: - Demo mode (R5.4)
 
     func startDemo(track: Track? = nil) {
-        teardownConnection()
+        teardownSession(keepBluetooth: true)
         isDemo = true
         state = .connecting
         // One simulator on a shared clock drives both the phone feed and the OBD
@@ -174,14 +385,20 @@ final class ConnectionController {
     // MARK: - Connect + handshake
 
     private func connect(to id: UUID) {
-        teardownConnection()
+        stopScan()
+        teardownSession(keepBluetooth: true)
         isDemo = false
-        let transport = CoreBluetoothTransport()
-        bleTransport = transport
+        let transport = bleTransport
         transport.onDisconnect = { [weak self] in
             Task { @MainActor in self?.handleLinkLost(adapterId: id) }
         }
+        transport.onRestore = { [weak self] restoredId in
+            Task { @MainActor in
+                self?.handleRestoredPeripheral(restoredId)
+            }
+        }
         state = .connecting
+        reconnectingAfterLinkLoss = false
         connectionTask = Task { [weak self] in
             await self?.connectLoop(transport: transport, id: id, startAttempt: 0)
         }
@@ -281,7 +498,7 @@ final class ConnectionController {
         let vin = try? await session.readVin()
         let elm = (try? await session.execute("ATI"))?.joined(separator: " ")
         let proto = (try? await session.execute("ATDPN"))?.joined()
-        let gatt = isDemo ? nil : bleTransport?.gattTreeDescription
+        let gatt = isDemo ? nil : bleTransport.gattTreeDescription
 
         // Probe every channel directly — the real test of availability, rather
         // than trusting the 0100 bitmap (which some adapters mis-report).
@@ -341,29 +558,50 @@ final class ConnectionController {
 
     private func handleLinkLost(adapterId: UUID) {
         guard !isDemo else { return }
+        // connectLoop already retries mid-connect failures; only unexpected
+        // drops after a live link should spawn a fresh reconnect task.
+        if case .reconnecting = state { return }
+        if reconnectingAfterLinkLoss { return }
         pollerTask?.cancel()
         pollerTask = nil
         bus.clearObdChannels()
         onObdLinkLost?()
         guard state != .idle else { return } // user chose to disconnect
+        reconnectingAfterLinkLoss = true
         state = .reconnecting(attempt: 1)
-        guard let transport = bleTransport else { return }
         connectionTask?.cancel()
         connectionTask = Task { [weak self] in
-            await self?.connectLoop(transport: transport, id: adapterId, startAttempt: 1)
+            guard let self else { return }
+            defer { self.reconnectingAfterLinkLoss = false }
+            await self.connectLoop(transport: self.bleTransport, id: adapterId, startAttempt: 1)
         }
     }
 
-    private func teardownConnection() {
+    private func handleRestoredPeripheral(_ id: UUID) {
+        guard !isDemo,
+              UserDefaults.standard.string(forKey: Keys.adapterId) == id.uuidString,
+              connectionTask == nil else { return }
+        state = .reconnecting(attempt: 0)
+        connectionTask = Task { [weak self] in
+            guard let self else { return }
+            await self.connectLoop(transport: self.bleTransport, id: id, startAttempt: 0)
+        }
+    }
+
+    /// Tear down ELM/polling without destroying the shared CBCentralManager.
+    private func teardownSession(keepBluetooth: Bool) {
         connectionTask?.cancel()
         pollerTask?.cancel()
         connectionTask = nil
         pollerTask = nil
+        reconnectingAfterLinkLoss = false
         demoFeed?.stop()
         demoFeed = nil
-        bleTransport?.onDisconnect = nil
-        bleTransport?.disconnect()
-        bleTransport = nil
+        bleTransport.onDisconnect = nil
+        bleTransport.onRestore = nil
+        if keepBluetooth {
+            bleTransport.disconnect()
+        }
         session = nil
         poller = nil
         supportedPids = nil

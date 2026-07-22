@@ -57,6 +57,22 @@ final class SessionRecorderTests: XCTestCase {
         XCTAssertTrue(manifest.phoneOnly) // R1.4 — valid without OBD
     }
 
+    func testBackgroundCheckpointFlushesWithoutEndingSession() async throws {
+        let id = try await recorder.start(at: 100, flushInterval: 60)
+        await recorder.ingest(channel: .gpsSpeed, value: 12.5, at: 101)
+
+        await recorder.checkpoint()
+
+        let recording = await recorder.isRecording
+        XCTAssertTrue(recording)
+        XCTAssertEqual(try store.manifest(for: id).status, .recording)
+        XCTAssertEqual(
+            ChannelReader.samples(for: .gpsSpeed,
+                                  inSessionDirectory: store.directory(for: id)).count,
+            1)
+        _ = try await recorder.stop(at: 102)
+    }
+
     func testObdGapMarking() async throws {
         _ = try await recorder.start(at: 0)
         await recorder.ingest(channel: ChannelId.obd(.rpm), value: 2000, at: 1)
@@ -64,6 +80,18 @@ final class SessionRecorderTests: XCTestCase {
         await recorder.ingest(channel: ChannelId.obd(.rpm), value: 2100, at: 12.5) // link back
         let manifest = try await recorder.stop(at: 20)
         XCTAssertEqual(manifest.obdGaps, [.init(start: 5, end: 12.5)])
+    }
+
+    func testPhoneSensorSuspensionGapIsRecorded() async throws {
+        _ = try await recorder.start(at: 0)
+        await recorder.ingest(channel: .gpsSpeed, value: 20, at: 1)
+        await recorder.ingest(channel: .gpsSpeed, value: 20, at: 10)
+
+        let manifest = try await recorder.stop(at: 10.1)
+
+        XCTAssertEqual(manifest.sensorGaps, [
+            .init(source: .gps, start: 1, end: 10),
+        ])
     }
 
     func testGapStillOpenAtStopIsClosed() async throws {

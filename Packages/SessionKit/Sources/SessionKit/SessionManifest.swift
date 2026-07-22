@@ -39,12 +39,71 @@ public struct SessionManifest: Codable, Equatable, Sendable, Identifiable {
         public var duration: TimeInterval { end - start }
     }
 
+    /// A suspension-sized interruption in one of the phone sensor sources.
+    public struct SensorGap: Codable, Equatable, Sendable {
+        public enum Source: String, Codable, Sendable {
+            case gps
+            case motion
+            case barometer
+            case deviceHealth
+        }
+
+        public var source: Source
+        public var start: TimeInterval
+        public var end: TimeInterval
+
+        public init(source: Source, start: TimeInterval, end: TimeInterval) {
+            self.source = source
+            self.start = start
+            self.end = end
+        }
+
+        public var duration: TimeInterval { end - start }
+    }
+
     public struct ChannelSummary: Codable, Equatable, Sendable {
         public var id: ChannelId
         public var sampleCount: Int
-        public init(id: ChannelId, sampleCount: Int) {
+        /// (n−1) / span from first→last sample timestamp.
+        public var measuredHz: Double?
+        /// measuredHz / expectedHz when a nominal rate is known (capped at 1).
+        public var dutyCycle: Double?
+        /// Last sample t − first sample t.
+        public var spanSeconds: Double?
+        /// Median Δt between consecutive samples, milliseconds.
+        public var medianIntervalMs: Double?
+
+        public init(id: ChannelId, sampleCount: Int,
+                    measuredHz: Double? = nil, dutyCycle: Double? = nil,
+                    spanSeconds: Double? = nil, medianIntervalMs: Double? = nil) {
             self.id = id
             self.sampleCount = sampleCount
+            self.measuredHz = measuredHz
+            self.dutyCycle = dutyCycle
+            self.spanSeconds = spanSeconds
+            self.medianIntervalMs = medianIntervalMs
+        }
+    }
+
+    /// OBD fast-loop timing derived from recorded `obd.rpm` (or speed) samples.
+    public struct ObdTiming: Codable, Equatable, Sendable {
+        public var referenceChannel: String
+        public var sampleCount: Int
+        public var measuredHz: Double?
+        public var medianIntervalMs: Double?
+        public var spanSeconds: Double?
+        /// Fraction of session duration covered by OBD samples.
+        public var coverage: Double?
+
+        public init(referenceChannel: String, sampleCount: Int,
+                    measuredHz: Double? = nil, medianIntervalMs: Double? = nil,
+                    spanSeconds: Double? = nil, coverage: Double? = nil) {
+            self.referenceChannel = referenceChannel
+            self.sampleCount = sampleCount
+            self.measuredHz = measuredHz
+            self.medianIntervalMs = medianIntervalMs
+            self.spanSeconds = spanSeconds
+            self.coverage = coverage
         }
     }
 
@@ -77,6 +136,8 @@ public struct SessionManifest: Codable, Equatable, Sendable, Identifiable {
     public var note: String?
     public var locationName: String?
     public var obdGaps: [Gap]
+    /// Optional for backward-compatible decoding of manifests from older builds.
+    public var sensorGaps: [SensorGap]?
     public var channels: [ChannelSummary]
     public var highlights: Highlights?
     /// Mode-01 PIDs the ECU reported as supported at connect (capability record).
@@ -85,6 +146,10 @@ public struct SessionManifest: Codable, Equatable, Sendable, Identifiable {
     public var videos: [VideoAsset]?
     /// Camera-clock correction applied to all clips (seconds; user-nudged).
     public var videoSyncOffset: TimeInterval?
+    /// Post-session IMU↔GPS consistency check (also recomputed on export).
+    public var gForceValidation: GForceValidation?
+    /// Effective OBD poll timing from recorded samples.
+    public var obdTiming: ObdTiming?
 
     public init(id: UUID = UUID(), startedAtUTC: Date, startUptime: TimeInterval,
                 status: Status = .recording, appVersion: String? = nil, units: String? = nil,
@@ -98,6 +163,7 @@ public struct SessionManifest: Codable, Equatable, Sendable, Identifiable {
         self.car = car
         self.phoneOnly = phoneOnly
         self.obdGaps = []
+        self.sensorGaps = []
         self.channels = []
         self.supportedPids = supportedPids
     }
