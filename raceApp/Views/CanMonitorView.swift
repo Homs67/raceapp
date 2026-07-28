@@ -1,0 +1,178 @@
+//
+//  CanMonitorView.swift
+//  raceApp
+//
+//  Beta CAN-bus monitor: takes over the adapter on its own connection, puts the
+//  ELM327 into raw monitor mode, and reads broadcast signals OBD-II can't give
+//  (steering, brake, accelerator). Read-only. Currently maps the Mazda MX-5 ND.
+//
+
+import SwiftUI
+import ObdKit
+
+struct CanMonitorView: View {
+    @Environment(AppModel.self) private var model
+
+    @State private var transport: CoreBluetoothTransport?
+    @State private var session: CanMonitorSession?
+    @State private var status = "Not connected"
+    @State private var ready = false
+    @State private var running = false
+    @State private var report: CanMonitorReport?
+
+    var body: some View {
+        List {
+            Section {
+                Text("Connect with the engine running, then read. This uses a separate link, so the app's normal OBD connection is paused while you're here.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Color.muted)
+            }
+            .listRowBackground(Color.clear)
+
+            Section {
+                HStack {
+                    Circle().fill(ready ? Color.accent : Color.mutedWeak).frame(width: 8, height: 8)
+                    Text(status).font(.system(size: 14))
+                    Spacer()
+                    if !ready {
+                        Button("Connect") { Task { await connect() } }
+                            .font(.system(size: 13, weight: .medium))
+                    }
+                }
+            } header: { Text("Adapter") }
+            .listRowBackground(Color.cardBg)
+            .textCase(nil)
+
+            if ready {
+                Section {
+                    actionButton("Read ND signals", system: "gauge.with.dots.needle.bottom.50percent") {
+                        await run { await $0.monitor(signals: CanSignalMap.mazdaND, perID: .seconds(2)) }
+                    }
+                    actionButton("Scan bus — list all IDs", system: "dot.radiowaves.left.and.right") {
+                        await run { await $0.scanBus(duration: .seconds(6)) }
+                    }
+                }
+                .listRowBackground(Color.cardBg)
+            }
+
+            if let report {
+                if !report.signals.isEmpty { signalsSection(report) }
+                framesSection(report)
+                if !report.rawLines.isEmpty { rawSection(report) }
+            }
+        }
+        .scrollContentBackground(.hidden)
+        .background(Color.bgScreen)
+        .navigationTitle("CAN Monitor")
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear { model.connection.beginExternalToolMode() }
+        .onDisappear {
+            transport?.disconnect()
+            model.connection.endExternalToolMode()
+        }
+    }
+
+    // MARK: - Sections
+
+    private func signalsSection(_ report: CanMonitorReport) -> some View {
+        Section {
+            ForEach(report.signals, id: \.key) { s in
+                HStack {
+                    Text(s.name).font(.system(size: 14))
+                    Spacer()
+                    if let v = s.value {
+                        Text(String(format: "%.1f %@", v, s.unit))
+                            .font(.system(size: 15, weight: .semibold)).monospacedDigit()
+                            .foregroundStyle(Color.accent)
+                    } else {
+                        Text(s.samples == 0 ? "no frames" : "no value")
+                            .font(.system(size: 12))
+                            .foregroundStyle(Color.recordRed)
+                    }
+                }
+            }
+        } header: { Text("Decoded ND signals") }
+        .listRowBackground(Color.cardBg)
+        .textCase(nil)
+    }
+
+    private func framesSection(_ report: CanMonitorReport) -> some View {
+        Section {
+            if report.frames.isEmpty {
+                Text("No frames received — the adapter may not pass raw CAN (try OBDLink MX+), or the engine is off.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Color.recordRed)
+            }
+            ForEach(report.frames, id: \.id) { f in
+                HStack {
+                    Text(String(format: "0x%03X", f.id))
+                        .font(.system(size: 13, design: .monospaced))
+                    Spacer()
+                    Text("\(f.count) frames · \(String(format: "%.0f", f.hz)) Hz")
+                        .font(.system(size: 12)).monospacedDigit()
+                        .foregroundStyle(Color.mutedStrong)
+                }
+            }
+        } header: { Text("Frames seen") }
+        .listRowBackground(Color.cardBg)
+        .textCase(nil)
+    }
+
+    private func rawSection(_ report: CanMonitorReport) -> some View {
+        Section {
+            Text(report.rawLines.joined(separator: "\n"))
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(Color.mutedStrong)
+                .textSelection(.enabled)
+        } header: { Text("Raw sample") }
+        .listRowBackground(Color.cardBg)
+        .textCase(nil)
+    }
+
+    private func actionButton(_ title: String, system: String, action: @escaping () async -> Void) -> some View {
+        Button {
+            Task { await action() }
+        } label: {
+            HStack {
+                if running { ProgressView().tint(.gray).scaleEffect(0.7) }
+                Label(title, systemImage: system)
+                    .font(.system(size: 14, weight: .medium))
+            }
+        }
+        .disabled(running)
+    }
+
+    // MARK: - Actions
+
+    private func connect() async {
+        status = "Connecting…"
+        let t = CoreBluetoothTransport()
+        transport = t
+        do {
+            if let id = model.connection.currentAdapterId {
+                try await t.connect(to: id)
+            } else {
+                let stream = try await t.scan()
+                var found: UUID?
+                for await adapter in stream { found = adapter.id; break }
+                t.stopScan()
+                guard let found else { status = "No VEEPEAK found"; return }
+                try await t.connect(to: found)
+            }
+            let s = CanMonitorSession(transport: t)
+            await s.configure()
+            session = s
+            status = "Connected — ready"
+            ready = true
+        } catch {
+            status = "Connect failed"
+        }
+    }
+
+    private func run(_ body: @escaping (CanMonitorSession) async -> CanMonitorReport) async {
+        guard let session else { return }
+        running = true
+        report = await body(session)
+        running = false
+    }
+}

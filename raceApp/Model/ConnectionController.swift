@@ -170,10 +170,31 @@ final class ConnectionController {
         beginAdapterDiscoveryIfNeeded()
     }
 
+    // MARK: - External tool hand-off (CAN monitor debug spike)
+
+    /// UUID of the remembered adapter, so a standalone tool can reconnect to it.
+    var currentAdapterId: UUID? { storedAdapterId }
+
+    private var externalToolActive = false
+
+    /// Release the BLE adapter so a standalone tool (e.g. the CAN monitor) can
+    /// take it over — the adapter accepts only one connection at a time.
+    func beginExternalToolMode() {
+        externalToolActive = true
+        teardownSession(keepBluetooth: false)
+        state = .idle
+    }
+
+    func endExternalToolMode() {
+        externalToolActive = false
+        beginAdapterDiscoveryIfNeeded()
+    }
+
     // MARK: - Scanning
 
     /// Auto-scan when Bluetooth is ready and we aren't already linked / linking.
     func beginAdapterDiscoveryIfNeeded() {
+        guard !externalToolActive else { return }
         guard uiStatusOverride == nil else { return }
         guard !isDemo else { return }
         switch state {

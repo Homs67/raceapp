@@ -35,6 +35,7 @@ struct SettingsView: View {
                 adapterSection
                 preferencesSection
                 generalSettingsSection
+                experimentalSection
             }
             .scrollContentBackground(.hidden)
             .background(Color.bgScreen)
@@ -371,6 +372,33 @@ struct SettingsView: View {
                 Text(ByteCountFormatter.string(fromByteCount: model.store.totalStorageBytes(), countStyle: .file))
             }
             .font(.system(size: 13))
+        }
+        .listRowBackground(Color.cardBg)
+        .textCase(nil)
+    }
+
+    private var experimentalSection: some View {
+        Section {
+            NavigationLink {
+                CanMonitorView()
+            } label: {
+                Label {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("CAN Monitor (beta)")
+                            .font(.system(size: 15))
+                        Text("Read advanced signals — steering, brake, pedal")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Color.muted)
+                    }
+                } icon: {
+                    Image(systemName: "waveform.badge.magnifyingglass")
+                        .foregroundStyle(Color.accent)
+                }
+            }
+        } header: {
+            Text("Experimental")
+        } footer: {
+            Text("Listens to the car's CAN bus for data OBD-II can't provide. Currently maps the Mazda MX-5 ND. Read-only.")
         }
         .listRowBackground(Color.cardBg)
         .textCase(nil)
