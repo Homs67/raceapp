@@ -11,7 +11,31 @@ public struct CanFrameStats: Sendable {
 public struct CanMonitorReport: Sendable {
     public var frames: [CanFrameStats]           // per unique ID seen
     public var signals: [(key: String, name: String, unit: String, value: Double?, samples: Int)]
-    public var rawLines: [String]                // sample of raw ELM output for inspection
+    public var rawLines: [String]                // small sample for on-screen display
+    public var rawLog: [String] = []             // full timestamped capture for sharing
+
+    /// Shareable plain-text report: decoded values, per-ID stats, and the full
+    /// timestamped raw frame capture (so scaling can be verified offline).
+    public func textReport(header: String) -> String {
+        var out = ["RACEAPP · CAN MONITOR", header, ""]
+        if !signals.isEmpty {
+            out.append("DECODED SIGNALS")
+            for s in signals {
+                let value = s.value.map { String(format: "%.2f %@", $0, s.unit) } ?? "(no value)"
+                out.append("  \(s.name): \(value)  [\(s.samples) frames]")
+            }
+            out.append("")
+        }
+        out.append("FRAMES SEEN (\(frames.count) IDs)")
+        for f in frames {
+            let bytes = f.lastData.map { String(format: "%02X", $0) }.joined(separator: " ")
+            out.append(String(format: "  0x%03X  ·  %d frames  ·  %.0f Hz  ·  last: %@", f.id, f.count, f.hz, bytes))
+        }
+        out.append("")
+        out.append("RAW CAPTURE (\(rawLog.count) lines)")
+        out.append(contentsOf: rawLog)
+        return out.joined(separator: "\n")
+    }
 }
 
 /// Streams raw broadcast CAN frames from an ELM327 in monitor mode
@@ -24,6 +48,9 @@ public actor CanMonitorSession {
     private var readerTask: Task<Void, Never>?
     private var pending = ""
     private var buffered: [String] = []
+    /// Full timestamped capture for the whole run (for the shareable log).
+    private var capturedLog: [(ms: Int, line: String)] = []
+    private var runStart: TimeInterval = 0
 
     public init(transport: any ObdTransport) {
         self.transport = transport
@@ -50,12 +77,14 @@ public actor CanMonitorSession {
     /// a time = lowest bus load = most reliable on cheap adapters). Decodes the
     /// given signals and returns per-ID stats + a sample of raw lines.
     public func monitor(signals: [CanSignal], perID: Duration = .seconds(2)) async -> CanMonitorReport {
+        beginLog()
         let ids = CanSignalMap.frameIDs(signals)
         var statsByID: [UInt32: CanFrameStats] = [:]
         var rawSample: [String] = []
         let perIDSeconds = perID.seconds
 
         for id in ids {
+            mark(String(format: "# filter 0x%03X", id))
             let (frames, raw) = await captureOneID(id, duration: perID)
             if rawSample.count < 24 { rawSample.append(contentsOf: raw.prefix(24 - rawSample.count)) }
             for frame in frames {
@@ -78,11 +107,12 @@ public actor CanMonitorSession {
             return (signal.key, signal.name, signal.unit, value, stats?.count ?? 0)
         }
         return CanMonitorReport(frames: Array(statsByID.values).sorted { $0.id < $1.id },
-                                signals: signalReadings, rawLines: rawSample)
+                                signals: signalReadings, rawLines: rawSample, rawLog: takeLog())
     }
 
     /// Discovery: monitor ALL frames for `duration`, tally which IDs appear.
     public func scanBus(duration: Duration = .seconds(6)) async -> CanMonitorReport {
+        beginLog()
         clear()
         await send("ATCM 000") // mask 0 → every frame passes
         try? await Task.sleep(for: .milliseconds(180))
@@ -110,7 +140,7 @@ public actor CanMonitorSession {
         }
         await resetFilter()
         return CanMonitorReport(frames: Array(statsByID.values).sorted { $0.count > $1.count },
-                                signals: [], rawLines: Array(lines.prefix(24)))
+                                signals: [], rawLines: Array(lines.prefix(24)), rawLog: takeLog())
     }
 
     // MARK: - Internals
@@ -151,6 +181,21 @@ public actor CanMonitorSession {
         return lines
     }
 
+    private func beginLog() {
+        runStart = monotonicNow()
+        capturedLog.removeAll()
+    }
+    private func mark(_ text: String) {
+        capturedLog.append((ms: Int((monotonicNow() - runStart) * 1000), line: text))
+    }
+    private func takeLog() -> [String] {
+        let log = capturedLog.map { entry in
+            entry.line.hasPrefix("#") ? entry.line : String(format: "%6dms  %@", entry.ms, entry.line)
+        }
+        capturedLog.removeAll()
+        return log
+    }
+
     private func startReader() {
         guard readerTask == nil else { return }
         readerTask = Task { [transport] in
@@ -167,7 +212,10 @@ public actor CanMonitorSession {
         while let idx = pending.firstIndex(where: { $0 == "\r" || $0 == "\n" || $0 == ">" }) {
             let line = String(pending[pending.startIndex..<idx]).trimmingCharacters(in: .whitespaces)
             pending = String(pending[pending.index(after: idx)...])
-            if !line.isEmpty { buffered.append(line) }
+            if !line.isEmpty {
+                buffered.append(line)
+                capturedLog.append((ms: Int((monotonicNow() - runStart) * 1000), line: line))
+            }
         }
     }
 }

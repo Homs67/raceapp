@@ -59,6 +59,7 @@ struct CanMonitorView: View {
                 if !report.signals.isEmpty { signalsSection(report) }
                 framesSection(report)
                 if !report.rawLines.isEmpty { rawSection(report) }
+                if !report.rawLog.isEmpty { shareSection(report) }
             }
         }
         .scrollContentBackground(.hidden)
@@ -127,6 +128,34 @@ struct CanMonitorView: View {
         } header: { Text("Raw sample") }
         .listRowBackground(Color.cardBg)
         .textCase(nil)
+    }
+
+    private func shareSection(_ report: CanMonitorReport) -> some View {
+        Section {
+            if let url = writeReport(report) {
+                ShareLink(item: url) {
+                    Label("Share CAN log", systemImage: "square.and.arrow.up")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(Color.accent)
+                }
+            }
+        } footer: {
+            Text("Full timestamped frame capture — share it for offline analysis or to add support for more signals.")
+        }
+        .listRowBackground(Color.cardBg)
+        .textCase(nil)
+    }
+
+    private func writeReport(_ report: CanMonitorReport) -> URL? {
+        let header = "Mazda MX-5 ND · \(Date().formatted(date: .abbreviated, time: .standard))"
+        let text = report.textReport(header: header)
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("raceapp-can-log.txt")
+        do {
+            try text.data(using: .utf8)?.write(to: url, options: .atomic)
+            return url
+        } catch {
+            return nil
+        }
     }
 
     private func actionButton(_ title: String, system: String, action: @escaping () async -> Void) -> some View {
