@@ -88,9 +88,17 @@ public enum CanSignalMap {
             guard let u = CanBits.u16(data, 0) else { return nil }
             return Double(u) / 4
         },
-        CanSignal(key: "canSpeed", name: "Speed (CAN)", unit: "raw", frameID: 0x202) { data in
-            guard let s = CanBits.s16(data, 2) else { return nil }
-            return Double(s) / 360.0
+        // NOTE: 0x202 bytes 2-3 are NOT vehicle speed — driveway captures show
+        // the word rising with a parked free-rev (≈1.31× rpm, r=0.87) and zero
+        // at idle. Vehicle speed comes from the ABS wheel-speed frame instead.
+        CanSignal(key: "wheelSpeed", name: "Speed (wheels)", unit: "km/h", frameID: 0x4B0) { data in
+            // Classic Mazda encoding: four u16 words FL/FR/RL/RR, (raw−10000)·0.01 km/h.
+            // Standstill must read exactly 0.00 (raw 10000) — the verification signature.
+            guard data.count >= 8 else { return nil }
+            let wheels = stride(from: 0, to: 8, by: 2).compactMap { CanBits.u16(data, $0) }
+            guard wheels.count == 4 else { return nil }
+            let kph = wheels.map { (Double($0) - 10000) * 0.01 }
+            return kph.reduce(0, +) / 4
         },
     ]
 

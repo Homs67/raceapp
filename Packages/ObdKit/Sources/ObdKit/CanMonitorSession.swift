@@ -84,6 +84,7 @@ public actor CanMonitorSession {
     /// a time = lowest bus load = most reliable on cheap adapters). Decodes the
     /// given signals and returns per-ID stats + a sample of raw lines.
     public func monitor(signals: [CanSignal], perID: Duration = .seconds(2)) async -> CanMonitorReport {
+        startReader()
         beginLog()
         let ids = CanSignalMap.frameIDs(signals)
         var statsByID: [UInt32: CanFrameStats] = [:]
@@ -118,18 +119,30 @@ public actor CanMonitorSession {
     }
 
     /// Discovery: monitor ALL frames for `duration`, tally which IDs appear.
+    /// A 500 kbps bus overflows a cheap adapter's buffer in ~300 ms with an
+    /// open filter, so the monitor restarts on every BUFFER FULL and the
+    /// bursts accumulate across the whole window.
     public func scanBus(duration: Duration = .seconds(6)) async -> CanMonitorReport {
+        startReader()
         beginLog()
         clear()
         await send("ATCM 000") // mask 0 → every frame passes
         try? await Task.sleep(for: .milliseconds(180))
         clear()
+        var lines: [String] = []
+        let deadline = monotonicNow() + duration.seconds
         await send("ATMA")
-        try? await Task.sleep(for: duration)
+        while monotonicNow() < deadline {
+            try? await Task.sleep(for: .milliseconds(200))
+            let burst = take()
+            lines.append(contentsOf: burst)
+            if burst.contains(where: { $0.replacingOccurrences(of: " ", with: "").contains("BUFFERFULL") }) {
+                await send("ATMA")
+            }
+        }
         await sendRaw(" ") // any byte stops monitoring
         try? await Task.sleep(for: .milliseconds(250))
-
-        let lines = take()
+        lines.append(contentsOf: take())
         var statsByID: [UInt32: CanFrameStats] = [:]
         for line in lines {
             guard let frame = CanFrameParser.parse(line) else { continue }
