@@ -51,14 +51,45 @@ public final class CoreBluetoothTransport: NSObject, ObdTransport, @unchecked Se
     private static let knownWriteUuids: [CBUUID] = [CBUUID(string: "FFF2"), CBUUID(string: "FFE1")]
     private static let knownNotifyUuids: [CBUUID] = [CBUUID(string: "FFF1"), CBUUID(string: "FFE1")]
 
-    public let incoming: AsyncStream<Data>
-    private let incomingContinuation: AsyncStream<Data>.Continuation
+    /// Broadcast incoming bytes: each access returns a fresh stream, so a new
+    /// session after a teardown still receives data. (A single shared
+    /// AsyncStream dies with its first consumer — that bug made every
+    /// reconnect deaf until app relaunch.)
+    public var incoming: AsyncStream<Data> {
+        AsyncStream { continuation in
+            let id = UUID()
+            lock.lock()
+            incomingSubscribers[id] = continuation
+            lock.unlock()
+            continuation.onTermination = { [weak self] _ in
+                guard let self else { return }
+                self.lock.lock()
+                self.incomingSubscribers[id] = nil
+                self.lock.unlock()
+            }
+        }
+    }
+    private var incomingSubscribers: [UUID: AsyncStream<Data>.Continuation] = [:]
 
     private let queue = DispatchQueue(label: "obdkit.ble")
+    /// Restore identifiers must be unique per app process. Only the FIRST
+    /// transport instance claims it; any accidental extra instance gets a
+    /// plain central instead of corrupting the primary's restoration session.
+    private static let restoreClaimLock = NSLock()
+    private static var restoreClaimed = false
+    private static func claimRestoreIdentifier() -> Bool {
+        restoreClaimLock.lock()
+        defer { restoreClaimLock.unlock() }
+        if restoreClaimed { return false }
+        restoreClaimed = true
+        return true
+    }
     private lazy var central = CBCentralManager(
         delegate: self,
         queue: queue,
-        options: [CBCentralManagerOptionRestoreIdentifierKey: Self.restorationIdentifier]
+        options: Self.claimRestoreIdentifier()
+            ? [CBCentralManagerOptionRestoreIdentifierKey: Self.restorationIdentifier]
+            : [:]
     )
     private let lock = NSLock()
 
@@ -70,8 +101,17 @@ public final class CoreBluetoothTransport: NSObject, ObdTransport, @unchecked Se
     private var poweredOnContinuations: [CheckedContinuation<Void, Error>] = []
     private var scanContinuation: AsyncStream<DiscoveredAdapter>.Continuation?
     private var connectContinuation: CheckedContinuation<Void, Error>?
+    private var connectGeneration = 0
     private var pendingServiceCount = 0
     private var intentionalDisconnect = false
+
+    /// True when the serial pipe is up (peripheral linked + characteristics
+    /// resolved) — i.e. `send` will work without a fresh connect.
+    public var isLinkReady: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return peripheral?.state == .connected && writeCharacteristic != nil && notifyCharacteristic != nil
+    }
 
     /// Full GATT tree of the last connected peripheral, for spike logging.
     public private(set) var gattTreeDescription = ""
@@ -87,9 +127,6 @@ public final class CoreBluetoothTransport: NSObject, ObdTransport, @unchecked Se
     public private(set) var radioState: BluetoothRadioState = .unknown
 
     public override init() {
-        var continuation: AsyncStream<Data>.Continuation!
-        self.incoming = AsyncStream { continuation = $0 }
-        self.incomingContinuation = continuation
         super.init()
         // Creating the manager at launch opts into CoreBluetooth restoration;
         // leaving this lazy until the first user action would miss the callback.
@@ -130,7 +167,9 @@ public final class CoreBluetoothTransport: NSObject, ObdTransport, @unchecked Se
 
     /// Connect to a previously discovered or persisted peripheral, discover its
     /// serial characteristics, and subscribe. Ready to `send` on return.
-    public func connect(to id: UUID) async throws {
+    /// Times out (default 12 s) instead of pending forever — iOS BLE connect
+    /// requests otherwise never fail, which left the retry loop hanging.
+    public func connect(to id: UUID, timeout: TimeInterval = 12) async throws {
         try await waitForPoweredOn()
         guard let target = resolvePeripheral(id: id) else {
             throw BleTransportError.peripheralNotFound
@@ -140,6 +179,8 @@ public final class CoreBluetoothTransport: NSObject, ObdTransport, @unchecked Se
             // A second connect() must not orphan the previous waiter.
             let previous = connectContinuation
             connectContinuation = continuation
+            connectGeneration += 1
+            let generation = connectGeneration
             peripheral = target
             intentionalDisconnect = false
             lock.unlock()
@@ -153,6 +194,21 @@ public final class CoreBluetoothTransport: NSObject, ObdTransport, @unchecked Se
                 } else {
                     central.connect(target, options: nil)
                 }
+            }
+            queue.asyncAfter(deadline: .now() + timeout) { [weak self] in
+                guard let self else { return }
+                self.lock.lock()
+                let stillPending = self.connectContinuation != nil && self.connectGeneration == generation
+                self.lock.unlock()
+                guard stillPending else { return }
+                // Reset the wedged attempt so the next retry starts clean. The
+                // cancel below fires didDisconnectPeripheral — mark it
+                // intentional so it can't spawn a second reconnect loop.
+                self.lock.lock()
+                self.intentionalDisconnect = true
+                self.lock.unlock()
+                self.central.cancelPeripheralConnection(target)
+                self.finishConnect(.failure(BleTransportError.connectionFailed("connect timed out")))
             }
         }
     }
@@ -367,7 +423,10 @@ extension CoreBluetoothTransport: CBPeripheralDelegate {
 
     public func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
         guard let value = characteristic.value, !value.isEmpty else { return }
-        incomingContinuation.yield(value)
+        lock.lock()
+        let subscribers = Array(incomingSubscribers.values)
+        lock.unlock()
+        for subscriber in subscribers { subscriber.yield(value) }
     }
 }
 #endif

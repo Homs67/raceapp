@@ -13,7 +13,11 @@ import ObdKit
 struct CanMonitorView: View {
     @Environment(AppModel.self) private var model
 
+    // Borrowed from ConnectionController — the app's ONE shared transport.
+    // Never construct a CoreBluetoothTransport here: a second central with the
+    // same restore identifier corrupts CoreBluetooth until app relaunch.
     @State private var transport: CoreBluetoothTransport?
+    @State private var adapterId: UUID?
     @State private var session: CanMonitorSession?
     @State private var status = "Not connected"
     @State private var ready = false
@@ -66,9 +70,17 @@ struct CanMonitorView: View {
         .background(Color.bgScreen)
         .navigationTitle("CAN Monitor")
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear { model.connection.beginExternalToolMode() }
+        .onAppear {
+            let borrowed = model.connection.borrowTransportForExternalTool()
+            transport = borrowed.transport
+            adapterId = borrowed.adapterId
+            Task { await connect() } // auto-connect: reuses the live link if there is one
+        }
         .onDisappear {
-            transport?.disconnect()
+            // Keep the BLE link — the controller re-handshakes ELM over it.
+            if let s = session {
+                Task { await s.shutdown() }
+            }
             model.connection.endExternalToolMode()
         }
     }
@@ -174,11 +186,13 @@ struct CanMonitorView: View {
     // MARK: - Actions
 
     private func connect() async {
+        guard let t = transport else { return }
+        guard !ready else { return }
         status = "Connecting…"
-        let t = CoreBluetoothTransport()
-        transport = t
         do {
-            if let id = model.connection.currentAdapterId {
+            if t.isLinkReady {
+                // App was already linked to the adapter — same pipe, no reconnect.
+            } else if let id = adapterId {
                 try await t.connect(to: id)
             } else {
                 let stream = try await t.scan()
@@ -186,6 +200,7 @@ struct CanMonitorView: View {
                 for await adapter in stream { found = adapter.id; break }
                 t.stopScan()
                 guard let found else { status = "No VEEPEAK found"; return }
+                adapterId = found
                 try await t.connect(to: found)
             }
             let s = CanMonitorSession(transport: t)
@@ -194,8 +209,14 @@ struct CanMonitorView: View {
             status = "Connected — ready"
             ready = true
         } catch {
-            status = "Connect failed"
+            status = "Connect failed — \(shortError(error))"
         }
+    }
+
+    private func shortError(_ error: Error) -> String {
+        if case BleTransportError.connectionFailed(let reason) = error { return reason }
+        if case BleTransportError.peripheralNotFound = error { return "adapter not found" }
+        return "Bluetooth unavailable"
     }
 
     private func run(_ body: @escaping (CanMonitorSession) async -> CanMonitorReport) async {

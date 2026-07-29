@@ -67,6 +67,15 @@ public actor Elm327Session {
         readerTask?.cancel()
     }
 
+    /// Stop reading from the transport. Required on teardown: the reader task
+    /// keeps this actor (and its stream subscription) alive, so relying on
+    /// deinit alone leaks a zombie subscriber on the shared transport.
+    public func shutdown() {
+        readerTask?.cancel()
+        readerTask = nil
+        failWaiter(id: nil, error: ElmError.transportClosed)
+    }
+
     // MARK: - Command execution
 
     /// Send one command, await its complete response, return cleaned lines.

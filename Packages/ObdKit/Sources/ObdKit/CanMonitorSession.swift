@@ -58,6 +58,13 @@ public actor CanMonitorSession {
 
     deinit { readerTask?.cancel() }
 
+    /// Stop reading from the transport (see Elm327Session.shutdown —
+    /// the reader task otherwise keeps this actor subscribed forever).
+    public func shutdown() {
+        readerTask?.cancel()
+        readerTask = nil
+    }
+
     // MARK: - Setup
 
     /// ELM init for raw 11-bit CAN monitoring: headers on (to see IDs), spaces

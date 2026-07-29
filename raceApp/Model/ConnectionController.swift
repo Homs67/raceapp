@@ -177,17 +177,28 @@ final class ConnectionController {
 
     private var externalToolActive = false
 
-    /// Release the BLE adapter so a standalone tool (e.g. the CAN monitor) can
-    /// take it over — the adapter accepts only one connection at a time.
-    func beginExternalToolMode() {
+    /// Hand the ONE shared BLE transport to a standalone tool (CAN monitor).
+    /// Tears down the ELM session/poller but keeps the peripheral link, so the
+    /// tool can talk immediately over the same pipe — never a second
+    /// CBCentralManager (duplicate restore identifiers corrupt CoreBluetooth
+    /// state until app relaunch).
+    func borrowTransportForExternalTool() -> (transport: CoreBluetoothTransport, adapterId: UUID?) {
         externalToolActive = true
-        teardownSession(keepBluetooth: false)
+        stopScan()
+        teardownSession(dropLink: false)
         state = .idle
+        return (bleTransport, storedAdapterId)
     }
 
+    /// Tool finished: reclaim the transport. If the link survived, re-handshake
+    /// ELM over it directly (ATZ resets monitor mode); otherwise rescan.
     func endExternalToolMode() {
         externalToolActive = false
-        beginAdapterDiscoveryIfNeeded()
+        if let id = storedAdapterId, bleTransport.isLinkReady {
+            connect(to: id)
+        } else {
+            beginAdapterDiscoveryIfNeeded()
+        }
     }
 
     // MARK: - Scanning
@@ -224,7 +235,7 @@ final class ConnectionController {
         connectionTask?.cancel()
         connectionTask = nil
         reconnectingAfterLinkLoss = false
-        teardownSession(keepBluetooth: true)
+        teardownSession(dropLink: true)
         state = .idle
         startScan(showAll: showAllDevices)
     }
@@ -234,7 +245,8 @@ final class ConnectionController {
         connectionTask?.cancel()
         connectionTask = nil
         reconnectingAfterLinkLoss = false
-        teardownSession(keepBluetooth: true)
+        // Adapters don't advertise while connected — a real scan needs the link dropped.
+        teardownSession(dropLink: true)
         showAllDevices = showAll
         isScanning = true
         scanTimedOut = false
@@ -343,7 +355,7 @@ final class ConnectionController {
         walkthroughTask?.cancel()
         walkthroughTask = nil
         uiStatusOverride = nil
-        teardownSession(keepBluetooth: true)
+        teardownSession(dropLink: true)
         for key in [Keys.adapterId, Keys.adapterName, Keys.elmProtocol, Keys.carVin] {
             UserDefaults.standard.removeObject(forKey: key)
         }
@@ -378,7 +390,7 @@ final class ConnectionController {
     // MARK: - Demo mode (R5.4)
 
     func startDemo(track: Track? = nil) {
-        teardownSession(keepBluetooth: true)
+        teardownSession(dropLink: true)
         isDemo = true
         state = .connecting
         // One simulator on a shared clock drives both the phone feed and the OBD
@@ -407,7 +419,9 @@ final class ConnectionController {
 
     private func connect(to id: UUID) {
         stopScan()
-        teardownSession(keepBluetooth: true)
+        // Keep any existing link: disconnecting here raced the fresh connect
+        // (the queued cancel killed the new attempt → "Connect" kept failing).
+        teardownSession(dropLink: false)
         isDemo = false
         let transport = bleTransport
         transport.onDisconnect = { [weak self] in
@@ -610,7 +624,9 @@ final class ConnectionController {
     }
 
     /// Tear down ELM/polling without destroying the shared CBCentralManager.
-    private func teardownSession(keepBluetooth: Bool) {
+    /// `dropLink: true` also disconnects the peripheral; `false` keeps the BLE
+    /// link alive (for immediate re-handshakes and the CAN-monitor handoff).
+    private func teardownSession(dropLink: Bool) {
         connectionTask?.cancel()
         pollerTask?.cancel()
         connectionTask = nil
@@ -620,8 +636,11 @@ final class ConnectionController {
         demoFeed = nil
         bleTransport.onDisconnect = nil
         bleTransport.onRestore = nil
-        if keepBluetooth {
+        if dropLink {
             bleTransport.disconnect()
+        }
+        if let oldSession = session {
+            Task { await oldSession.shutdown() } // release its stream subscription
         }
         session = nil
         poller = nil
