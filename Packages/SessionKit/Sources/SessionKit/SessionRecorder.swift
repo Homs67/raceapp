@@ -79,7 +79,9 @@ public actor SessionRecorder {
         lastSampleT = max(lastSampleT, t)
         noteSensorContinuity(channel: channel, at: t)
 
-        if channel.rawValue.hasPrefix("obd.") {
+        // can.* counts as adapter-alive too: during CAN streaming no obd.*
+        // arrives, but the link (and ignition) are just as provably up.
+        if channel.rawValue.hasPrefix("obd.") || channel.rawValue.hasPrefix("can.") {
             obdSampleSeen = true
             manifest?.phoneOnly = false
             autoStop.noteObdAlive(at: t)

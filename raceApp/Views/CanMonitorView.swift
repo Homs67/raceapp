@@ -55,12 +55,18 @@ struct CanMonitorView: View {
                     actionButton("Scan bus — list all IDs", system: "dot.radiowaves.left.and.right") {
                         await run { await $0.scanBus(duration: .seconds(6)) }
                     }
+                    actionButton("Discovery capture (~3 min)", system: "sparkle.magnifyingglass") {
+                        await run { await $0.discover() }
+                    }
+                } footer: {
+                    Text("Discovery alternates raw CAN capture with OBD readings, then auto-matches frame bytes to known channels. Best during warmup — start with a cold engine, keep it running, and blip the throttle now and then.")
                 }
                 .listRowBackground(Color.cardBg)
             }
 
             if let report {
                 if !report.signals.isEmpty { signalsSection(report) }
+                if !report.analysis.isEmpty { analysisSection(report) }
                 framesSection(report)
                 if !report.rawLines.isEmpty { rawSection(report) }
                 if !report.rawLog.isEmpty { shareSection(report) }
@@ -105,6 +111,17 @@ struct CanMonitorView: View {
                 }
             }
         } header: { Text("Decoded ND signals") }
+        .listRowBackground(Color.cardBg)
+        .textCase(nil)
+    }
+
+    private func analysisSection(_ report: CanMonitorReport) -> some View {
+        Section {
+            Text(report.analysis.joined(separator: "\n"))
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(Color.mutedStrong)
+                .textSelection(.enabled)
+        } header: { Text("Discovery analysis") }
         .listRowBackground(Color.cardBg)
         .textCase(nil)
     }

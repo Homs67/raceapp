@@ -65,6 +65,10 @@ final class AppModel {
             self?.forceScreenAwakeForSession = false
             self?.dashboardExpanded = false
             self?.applyRecordingIdlePolicy()
+            self?.connection.recordingDidEnd() // CAN stream (if any) → OBD polling
+        }
+        connection.isRecordingActive = { [weak self] in
+            self?.recording.isRecording ?? false
         }
         recording.onEnterBackgroundWhileRecording = { [weak self] in
             self?.sensors.enterBackgroundRecordingMode()
@@ -141,6 +145,7 @@ final class AppModel {
                 sensors.beginRecordingActivity()
                 applyRecordingIdlePolicy()
                 dashboardExpanded = true
+                connection.recordingDidStart() // CAN stream if enabled + mapped
             } else {
                 forceScreenAwakeForSession = false
                 metrics.stop()

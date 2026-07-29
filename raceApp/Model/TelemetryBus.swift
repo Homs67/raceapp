@@ -38,6 +38,19 @@ final class TelemetryBus: @unchecked Sendable {
         currentTap?(channel, value, t)
     }
 
+    /// Update the live snapshot (gauges/shift lights) WITHOUT the recording
+    /// tap — for CAN-sourced mirrors of obd.* whose recorded truth lives in
+    /// can.* channels. Keeps recorded data honest about its source.
+    func publishLive(_ channel: ChannelId, _ value: Double, at t: TimeInterval) {
+        lock.lock()
+        latest[channel] = TelemetryReading(value: value, t: t)
+        if channel == .obd(.rpm) {
+            obdSampleTimes.append(t)
+            if obdSampleTimes.count > 200 { obdSampleTimes.removeFirst(100) }
+        }
+        lock.unlock()
+    }
+
     /// Full-rate recording tap (nil to detach).
     func setRecordingTap(_ newTap: Tap?) {
         lock.lock()
@@ -57,10 +70,10 @@ final class TelemetryBus: @unchecked Sendable {
         return Double(recent.count) / 2
     }
 
-    /// Drop OBD readings so gauges go stale immediately on adapter loss.
+    /// Drop OBD + CAN readings so gauges go stale immediately on adapter loss.
     func clearObdChannels() {
         lock.lock(); defer { lock.unlock() }
-        latest = latest.filter { !$0.key.rawValue.hasPrefix("obd.") }
+        latest = latest.filter { !$0.key.rawValue.hasPrefix("obd.") && !$0.key.rawValue.hasPrefix("can.") }
     }
 }
 

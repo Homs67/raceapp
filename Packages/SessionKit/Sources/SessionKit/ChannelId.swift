@@ -46,6 +46,15 @@ public extension ChannelId {
     static let deviceBattery = ChannelId("device.battery")  // 0…1
     static let deviceThermalState = ChannelId("device.thermal") // 0…3
 
+    // Broadcast CAN signals (per-model map, ND verified 2026-07: steering 0x086,
+    // brake 0x078, pedal+rpm 0x202; wheelSpeed 0x4B0 pending on-car check).
+    // 50–105 Hz vs ~7.5 Hz OBD polling. Adapter-alive like obd.* for gap logic.
+    static let canSteering = ChannelId("can.steering")      // degrees, + = right
+    static let canBrake = ChannelId("can.brake")            // %
+    static let canAccelPedal = ChannelId("can.accelPedal")  // %
+    static let canRpm = ChannelId("can.rpm")
+    static let canWheelSpeed = ChannelId("can.wheelSpeed")  // km/h, 4-wheel avg
+
     /// OBD channels reuse ObdKit's channel names: `obd.rpm`, `obd.speed`, …
     static func obd(_ channel: ObdChannel) -> ChannelId {
         ChannelId("obd." + channel.rawValue)

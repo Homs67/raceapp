@@ -1139,8 +1139,20 @@ struct MetricSeries: Identifiable {
                       transform: { units.speed(fromMps: $0) }) {
             result.append(s)
         }
-        if let s = series("rpm", "RPM", "rpm", .textPrimary, .obd(.rpm)) { result.append(s) }
-        if let s = series("throttle", "Throttle", "%", .accent, .obd(.throttle)) { result.append(s) }
+        // RPM / throttle — prefer the 105 Hz broadcast-CAN channels when the
+        // session recorded them, else the polled OBD channels.
+        if let s = series("rpm", "RPM", "rpm", .textPrimary, .canRpm)
+            ?? series("rpm", "RPM", "rpm", .textPrimary, .obd(.rpm)) {
+            result.append(s)
+        }
+        if let s = series("throttle", "Throttle", "%", .accent, .canAccelPedal)
+            ?? series("throttle", "Throttle", "%", .accent, .obd(.throttle)) {
+            result.append(s)
+        }
+        // Broadcast-CAN driver inputs (OBD-II has no PIDs for these)
+        if let s = series("steering", "Steering Angle", "°", .textPrimary, .canSteering,
+                          symmetricZero: true) { result.append(s) }
+        if let s = series("brake", "Brake", "%", .recordRed, .canBrake) { result.append(s) }
         // Longitudinal g = acceleration (+) and braking (−); our brake proxy (no OBD
         // brake channel). Prefer auto-calibrated car-frame G; fall back to raw axes
         // for sessions recorded before calibration completed.

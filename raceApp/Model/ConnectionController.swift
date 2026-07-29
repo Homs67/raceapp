@@ -20,6 +20,7 @@ final class ConnectionController {
         static let adapterName = "adapter.name"
         static let elmProtocol = "adapter.elmProtocol"
         static let carVin = "car.vin"
+        static let canStream = "canStreamEnabled"
     }
 
     private(set) var state: ObdConnectionState = .idle
@@ -40,6 +41,9 @@ final class ConnectionController {
     private(set) var activeTrack: Track?
     /// Recorder hook — set by AppModel so link drops mark gaps (R1.8).
     var onObdLinkLost: (@MainActor () -> Void)?
+    /// Set by AppModel: is a session being recorded right now? Used to resume
+    /// CAN streaming after a mid-session reconnect.
+    var isRecordingActive: (() -> Bool)?
 
     private let bus: TelemetryBus
     /// One CoreBluetooth central for the app lifetime. Creating a new manager
@@ -54,6 +58,9 @@ final class ConnectionController {
     private var pollerTask: Task<Void, Never>?
     private var walkthroughTask: Task<Void, Never>?
     private var demoFeed: DemoTelemetryFeed?
+    private var canStreamSession: CanMonitorSession?
+    private var canStreamTask: Task<Void, Never>?
+    private(set) var canStreamActive = false
     private var reconnectingAfterLinkLoss = false
     /// Prevents repeated auto-select while RSSI updates keep arriving.
     private var didAutoSelectThisScan = false
@@ -198,6 +205,116 @@ final class ConnectionController {
             connect(to: id)
         } else {
             beginAdapterDiscoveryIfNeeded()
+        }
+    }
+
+    // MARK: - CAN recording stream (beta)
+
+    /// Settings toggle: record broadcast CAN signals instead of PID polling.
+    var canStreamEnabled: Bool {
+        get { UserDefaults.standard.bool(forKey: Keys.canStream) }
+        set { UserDefaults.standard.set(newValue, forKey: Keys.canStream) }
+    }
+
+    /// The car has a broadcast-CAN signal map (currently: Mazda MX-5 ND).
+    var carHasCanMap: Bool {
+        let vin = carInfo?.vin ?? UserDefaults.standard.string(forKey: Keys.carVin)
+        return vin?.hasPrefix("JM1ND") == true
+    }
+
+    /// Recording started — switch the adapter from PID polling to the
+    /// continuous CAN stream (monitor mode owns the pipe exclusively).
+    func recordingDidStart() {
+        startCanStreamIfAppropriate()
+    }
+
+    /// Recording ended — back to normal OBD polling.
+    func recordingDidEnd() {
+        stopCanStream()
+    }
+
+    private func startCanStreamIfAppropriate() {
+        guard canStreamEnabled, !isDemo, !externalToolActive, !canStreamActive,
+              state == .live, carHasCanMap else { return }
+        canStreamActive = true
+        pollerTask?.cancel()
+        pollerTask = nil
+        if let oldPoller = poller { Task { await oldPoller.stop() } }
+        poller = nil
+        if let oldSession = session { Task { await oldSession.shutdown() } }
+        session = nil
+
+        let streamSession = CanMonitorSession(transport: bleTransport)
+        canStreamSession = streamSession
+        canStreamTask = Task { [bus] in
+            for await reading in await streamSession.stream(signals: CanSignalMap.mazdaND) {
+                switch reading {
+                case .can(let key, let value, let t):
+                    if let channel = Self.canChannel(forSignalKey: key) {
+                        bus.publish(channel, value, at: t)
+                    }
+                    // Live-only mirrors keep the dashboard, shift lights, and
+                    // gear estimate fed; recorded truth stays in can.*.
+                    switch key {
+                    case "canRpm":
+                        bus.publishLive(.obd(.rpm), value, at: t)
+                    case "accelPedal":
+                        bus.publishLive(.obd(.acceleratorPedal), value, at: t)
+                        bus.publishLive(.obd(.throttle), value, at: t)
+                    default:
+                        break
+                    }
+                case .obd(let channel, let value, let t):
+                    // Genuinely polled during the slow-PID interlude — recordable.
+                    bus.publish(.obd(channel), value, at: t)
+                }
+            }
+        }
+    }
+
+    private func stopCanStream() {
+        guard canStreamActive else { return }
+        canStreamActive = false
+        canStreamTask?.cancel()
+        canStreamTask = nil
+        let streamSession = canStreamSession
+        canStreamSession = nil
+        let adapterId = storedAdapterId
+        // Stop ATMA cleanly BEFORE the ELM re-handshake so ATZ isn't half-eaten
+        // by monitor mode, then reconnect over the (usually alive) link.
+        Task { [weak self] in
+            await streamSession?.stopAndShutdown()
+            await MainActor.run {
+                guard let self, !self.canStreamActive else { return }
+                if let adapterId, self.bleTransport.isLinkReady {
+                    self.connect(to: adapterId)
+                } else {
+                    self.state = .idle
+                    self.beginAdapterDiscoveryIfNeeded()
+                }
+            }
+        }
+    }
+
+    /// Link died mid-stream: drop stream state without the clean-stop dance —
+    /// the reconnect handshake restarts from ATZ anyway.
+    private func abortCanStreamAfterLinkLoss() {
+        guard canStreamActive else { return }
+        canStreamActive = false
+        canStreamTask?.cancel()
+        canStreamTask = nil
+        if let streamSession = canStreamSession { Task { await streamSession.shutdown() } }
+        canStreamSession = nil
+    }
+
+    private static func canChannel(forSignalKey key: String) -> ChannelId? {
+        switch key {
+        case "steeringAngle": return .canSteering
+        case "brakePos": return .canBrake
+        case "accelPedal": return .canAccelPedal
+        case "canRpm": return .canRpm
+        case "wheelSpeed": return .canWheelSpeed
+        default: return nil
         }
     }
 
@@ -495,6 +612,11 @@ final class ConnectionController {
             beginPolling()
             state = .live
             lastError = nil
+            // Mid-session reconnect (or recording started while connecting):
+            // go straight back to CAN streaming instead of PID polling.
+            if isRecordingActive?() == true {
+                startCanStreamIfAppropriate()
+            }
         } catch {
             lastError = "Adapter didn't respond — unplug it for 10 seconds and plug it back in."
             state = .idle
@@ -597,6 +719,7 @@ final class ConnectionController {
         // drops after a live link should spawn a fresh reconnect task.
         if case .reconnecting = state { return }
         if reconnectingAfterLinkLoss { return }
+        abortCanStreamAfterLinkLoss()
         pollerTask?.cancel()
         pollerTask = nil
         bus.clearObdChannels()
@@ -631,6 +754,7 @@ final class ConnectionController {
         pollerTask?.cancel()
         connectionTask = nil
         pollerTask = nil
+        abortCanStreamAfterLinkLoss()
         reconnectingAfterLinkLoss = false
         demoFeed?.stop()
         demoFeed = nil

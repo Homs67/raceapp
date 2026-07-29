@@ -57,6 +57,21 @@ final class SessionRecorderTests: XCTestCase {
         XCTAssertTrue(manifest.phoneOnly) // R1.4 — valid without OBD
     }
 
+    func testCanStreamSessionCountsAsAdapterAlive() async throws {
+        // During CAN streaming no obd.* arrives — can.* must still mark the
+        // session non-phone-only and feed the highlights RPM peak.
+        _ = try await recorder.start(at: 0)
+        for i in 0..<30 {
+            let t = Double(i) * 0.1
+            await recorder.ingest(channel: .canRpm, value: 4000 + Double(i) * 10, at: t)
+            await recorder.ingest(channel: .canSteering, value: -12, at: t)
+        }
+        let manifest = try await recorder.stop(at: 4)
+        XCTAssertFalse(manifest.phoneOnly)
+        XCTAssertEqual(manifest.highlights?.maxRpm, 4290)
+        XCTAssertTrue(manifest.channels.contains { $0.id == .canSteering })
+    }
+
     func testBackgroundCheckpointFlushesWithoutEndingSession() async throws {
         let id = try await recorder.start(at: 100, flushInterval: 60)
         await recorder.ingest(channel: .gpsSpeed, value: 12.5, at: 101)

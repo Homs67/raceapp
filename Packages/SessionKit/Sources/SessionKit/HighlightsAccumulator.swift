@@ -37,7 +37,7 @@ public struct HighlightsAccumulator: Sendable {
                 distance += (speed + previous.value) / 2 * min(t - previous.t, 5)
             }
             lastSpeedSample = ChannelSample(t: t, value: speed)
-        case ChannelId.obd(.rpm):
+        case ChannelId.obd(.rpm), .canRpm:
             maxRpm = max(maxRpm, value)
         case .carLatG: // auto-calibrated car frame — preferred when present
             hasCalibratedG = true
