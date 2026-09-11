@@ -26,16 +26,32 @@ public struct GForceValidation: Codable, Sendable, Equatable {
     public var latCorrelation: Double?
     public var gpsLagSeconds: Double?   // IMU-vs-GPS timing offset used
     public var pairCount: Int
+    /// How far the calibrated forward axis appears to point off true forward.
+    ///
+    /// A correctly-scaled accelerometer projected onto an axis rotated by θ
+    /// reads cos θ of the real acceleration, so a slope below 1 with good
+    /// correlation is misalignment rather than a sensor fault. Reported so a
+    /// bad calibration is actionable instead of just "off".
+    public var impliedMisalignmentDegrees: Double?
 
     public init(verdict: Verdict, longCorrelation: Double?, longScale: Double?,
-                latCorrelation: Double?, gpsLagSeconds: Double?, pairCount: Int) {
+                latCorrelation: Double?, gpsLagSeconds: Double?, pairCount: Int,
+                impliedMisalignmentDegrees: Double? = nil) {
         self.verdict = verdict
         self.longCorrelation = longCorrelation
         self.longScale = longScale
         self.latCorrelation = latCorrelation
         self.gpsLagSeconds = gpsLagSeconds
         self.pairCount = pairCount
+        self.impliedMisalignmentDegrees = impliedMisalignmentDegrees
     }
+
+    /// Scale band accepted as correct. Legitimate error is small — window
+    /// averaging and the light EMA on car.*G move the slope a few percent, not
+    /// tens of percent. The old 0.5…1.5 band stamped "verified" on a real
+    /// session whose forward axis was ~58° out (slope 0.53), mixing braking
+    /// into cornering; 0.8…1.25 corresponds to roughly ±36° and catches it.
+    static let verifiedScaleRange = 0.8...1.25
 
     public static func validate(sessionDirectory directory: URL) -> GForceValidation {
         let longG = ChannelReader.samples(for: .carLongG, inSessionDirectory: directory)
@@ -91,15 +107,24 @@ public struct GForceValidation: Codable, Sendable, Equatable {
         let latR = lateralCorrelation(latG: latG, speed: speed, course: course, lag: best.lag)
 
         let verdict: Verdict
-        if best.r >= 0.75, (0.5...1.5).contains(best.scale) {
+        if best.r >= 0.75, Self.verifiedScaleRange.contains(best.scale) {
             verdict = .verified
         } else if best.r >= 0.5 {
+            // Correlated but mis-scaled: the axes track the car, they just
+            // aren't pointing where we think. Still usable as a magnitude,
+            // not as separate lateral/longitudinal figures.
             verdict = .marginal
         } else {
             verdict = .failed
         }
+        // Only meaningful when the two actually correlate; a negative slope is
+        // a flipped axis, which `angle` expresses as >90°.
+        let misalignment: Double? = best.r >= 0.5
+            ? acos(max(-1, min(1, best.scale))) * 180 / .pi
+            : nil
         return GForceValidation(verdict: verdict, longCorrelation: best.r, longScale: best.scale,
-                                latCorrelation: latR, gpsLagSeconds: best.lag, pairCount: best.n)
+                                latCorrelation: latR, gpsLagSeconds: best.lag, pairCount: best.n,
+                                impliedMisalignmentDegrees: misalignment)
     }
 
     // MARK: - Lateral: signed centripetal vs GPS course-rate

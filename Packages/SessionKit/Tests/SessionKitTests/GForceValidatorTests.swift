@@ -54,6 +54,40 @@ final class GForceValidatorTests: XCTestCase {
         XCTAssertGreaterThan(result.longCorrelation ?? 0, 0.9)
     }
 
+    /// Regression for a real session (2026-09-11): the forward axis was ~58°
+    /// off, so car.longG read cos 58° ≈ 0.53 of the true acceleration and
+    /// braking bled into cornering. Correlation stayed high (0.80) because the
+    /// axis still tracked the car, and the old 0.5…1.5 scale band stamped it
+    /// "verified" — the quality gate passed data that was quietly wrong.
+    func testMisalignedForwardAxisIsNotVerified() async throws {
+        try await writeSyntheticDrive(gScale: cos(58 * .pi / 180))   // ≈ 0.53
+        let result = GForceValidation.validate(sessionDirectory: directory)
+
+        XCTAssertEqual(result.verdict, .marginal,
+                       "a 58° misalignment must not pass as verified")
+        XCTAssertGreaterThan(result.longCorrelation ?? 0, 0.75,
+                             "it still correlates — which is exactly why scale has to be checked")
+        XCTAssertEqual(result.impliedMisalignmentDegrees ?? 0, 58, accuracy: 6,
+                       "report the angle so the fix is obvious")
+    }
+
+    func testSmallMisalignmentStillVerifies() async throws {
+        // ~15° is within honest sensor/mount tolerance and must not cry wolf.
+        try await writeSyntheticDrive(gScale: cos(15 * .pi / 180))   // ≈ 0.97
+        let result = GForceValidation.validate(sessionDirectory: directory)
+        XCTAssertEqual(result.verdict, .verified)
+    }
+
+    func testFlippedAxisReportsBeyondNinetyDegrees() async throws {
+        // Forward derived from a reverse manoeuvre: correlated, but inverted.
+        try await writeSyntheticDrive(gScale: -1.0)
+        let result = GForceValidation.validate(sessionDirectory: directory)
+        XCTAssertNotEqual(result.verdict, .verified)
+        if let angle = result.impliedMisalignmentDegrees {
+            XCTAssertGreaterThan(angle, 90, "a sign flip is a >90° error, not a scale error")
+        }
+    }
+
     func testMisScaledCalibrationFails() async throws {
         // e.g. wrong axis picked up only a component — G reads 3× too large
         try await writeSyntheticDrive(gScale: 3.0)
