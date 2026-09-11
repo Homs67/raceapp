@@ -20,6 +20,8 @@ final class AppModel {
     let camera = SessionCameraRecorder()
     let gearEstimator = GearEstimator()
     let metrics: SessionMetrics
+    /// RaceBox link — its own BLE central, so it can run alongside the OBD adapter.
+    let raceBox = RaceBoxController()
     private(set) var backgroundLocationStatus: PhoneSensorSuite.BackgroundLocationStatus = .notDetermined
     /// When Always Location is unavailable, keep the screen awake for the
     /// active session so iOS cannot suspend phone-only capture.

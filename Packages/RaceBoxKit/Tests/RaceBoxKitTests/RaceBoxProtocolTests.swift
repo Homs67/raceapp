@@ -308,6 +308,16 @@ final class RaceBoxProtocolTests: XCTestCase {
 
     // MARK: - Device identification
 
+    func testEncoderAssertsHeadingValidOnlyWhenMoving() {
+        // A receiver can't derive a course while stationary, so the simulator
+        // must not claim heading validity at rest.
+        let parked = RaceBoxEncoder.dataMessage(RaceBoxSample(speedMps: 0))
+        XCTAssertEqual(RaceBoxDataMessage(payload: parked.payload)?.headingValid, false)
+
+        let rolling = RaceBoxEncoder.dataMessage(RaceBoxSample(speedMps: 12))
+        XCTAssertEqual(RaceBoxDataMessage(payload: rolling.payload)?.headingValid, true)
+    }
+
     func testModelParsingPrefersMiniSOverMini() {
         XCTAssertEqual(RaceBoxModel.parse("RaceBox Mini S"), .miniS)
         XCTAssertEqual(RaceBoxModel.parse("RaceBox Mini"), .mini)

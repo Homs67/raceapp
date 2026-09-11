@@ -395,6 +395,22 @@ struct SettingsView: View {
                         .foregroundStyle(Color.accent)
                 }
             }
+            NavigationLink {
+                RaceBoxDebugView()
+            } label: {
+                Label {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("RaceBox (beta)")
+                            .font(.system(size: 15))
+                        Text("25 Hz GPS + car-mounted G — verify every signal")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Color.muted)
+                    }
+                } icon: {
+                    Image(systemName: "location.north.line.fill")
+                        .foregroundStyle(Color.accent)
+                }
+            }
             Toggle(isOn: Binding(
                 get: { model.connection.canStreamEnabled },
                 set: { model.connection.canStreamEnabled = $0 }

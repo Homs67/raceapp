@@ -83,7 +83,10 @@ public enum RaceBoxEncoder {
         put(UInt32(25), 12)                     // time accuracy 25 ns
         put(Int32(0), 16)                       // nanoseconds
         payload[20] = sample.hasFix ? 3 : 0     // 3D fix
-        payload[21] = sample.hasFix ? 0x01 : 0  // valid-fix flag
+        // bit 0 valid fix; bit 5 valid heading, which a real receiver only
+        // asserts once there is motion to derive a course from.
+        let headingValid = sample.hasFix && sample.speedMps > 0.5
+        payload[21] = (sample.hasFix ? 0x01 : 0) | (headingValid ? 0x20 : 0)
         payload[22] = sample.hasFix ? 0xEA : 0  // date/time confirmed
         payload[23] = UInt8(min(255, max(0, sample.satellites)))
 
