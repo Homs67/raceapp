@@ -129,10 +129,15 @@ public struct RaceBoxSelfTest: Sendable {
         if let model {
             switch latest.power(for: model) {
             case .inputVoltage(let volts):
+                // The Micro runs on vehicle 12 V in the car and ~5 V on a USB
+                // bench cable. Both are healthy; anything else is a fault.
+                let vehicle = (11.0...15.0).contains(volts)
+                let usb = (4.5...5.5).contains(volts)
                 checks.append(Check(
-                    id: "power", title: "Input voltage 11–15 V",
-                    status: (11...15).contains(volts) ? .pass : .fail,
-                    detail: String(format: "%.1f V", volts)))
+                    id: "power", title: "Input voltage healthy",
+                    status: (vehicle || usb) ? .pass : .fail,
+                    detail: String(format: "%.1f V%@", volts,
+                                   vehicle ? " (vehicle)" : usb ? " (USB bench power)" : " — expected ~12 V in car")))
             case .battery(let percent, let charging):
                 checks.append(Check(
                     id: "power", title: "Battery above 0 %",

@@ -131,6 +131,8 @@ final class Probe: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
                 print("  ✗ checksum mismatch on class \(String(format: "%02X %02X", packet[2], packet[3]))")
                 continue
             }
+            hexHandle?.write((packet.map { String(format: "%02X", $0) }.joined(separator: " ") + "\n").data(using: .utf8)!)
+            try? hexHandle?.synchronize()
             handle(cls: packet[2], id: packet[3], payload: Array(packet[6..<(total - 2)]))
         }
     }
@@ -211,6 +213,10 @@ func print(_ items: Any..., separator: String = " ", terminator: String = "\n") 
     try? logHandle?.synchronize()
     FileHandle.standardOutput.write(line.data(using: .utf8)!)
 }
+
+let hexURL = URL(fileURLWithPath: "/private/tmp/claude-501/-Users-alex-Git-raceApp/d83c892b-938d-485e-a670-acbaa183f89f/scratchpad/probe-raw.hex")
+FileManager.default.createFile(atPath: hexURL.path, contents: nil)
+let hexHandle = try? FileHandle(forWritingTo: hexURL)
 
 let probe = Probe()
 probe.start()

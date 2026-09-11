@@ -73,11 +73,18 @@ public struct RaceBoxDeviceInfo: Equatable, Sendable {
     }
 
     public init(deviceInfo: [DeviceInfoCharacteristic: String]) {
-        self.init(model: RaceBoxModel.parse(deviceInfo[.model]),
-                  serialNumber: deviceInfo[.serialNumber],
-                  firmware: RaceBoxFirmware(deviceInfo[.firmwareRevision]),
-                  hardwareRevision: deviceInfo[.hardwareRevision],
-                  manufacturer: deviceInfo[.manufacturer])
+        // Real devices pad these fixed-width characteristics with trailing
+        // spaces ("RaceBox Micro                 "), so trim here rather than
+        // trusting the caller to have done it.
+        func text(_ key: DeviceInfoCharacteristic) -> String? {
+            let trimmed = deviceInfo[key]?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return (trimmed?.isEmpty ?? true) ? nil : trimmed
+        }
+        self.init(model: RaceBoxModel.parse(text(.model)),
+                  serialNumber: text(.serialNumber),
+                  firmware: RaceBoxFirmware(text(.firmwareRevision)),
+                  hardwareRevision: text(.hardwareRevision),
+                  manufacturer: text(.manufacturer))
     }
 
     /// Features introduced in firmware 3.3.

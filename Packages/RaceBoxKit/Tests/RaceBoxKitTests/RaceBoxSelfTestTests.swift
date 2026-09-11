@@ -108,8 +108,14 @@ final class RaceBoxSelfTestTests: XCTestCase {
                                              stats: healthyStats(), model: .micro)
         XCTAssertEqual(status(micro, "power"), .pass)
 
-        // 0x28 = 4.0 V — engine off, dying battery.
-        let lowVoltage = RaceBoxSelfTest.evaluate(messages: [message(powerByte: 0x28)],
+        // 0x34 = 5.2 V — what a real Micro reports on a USB bench cable.
+        // Healthy, just not in a car; flagging it would cry wolf during testing.
+        let usb = RaceBoxSelfTest.evaluate(messages: [message(powerByte: 0x34)],
+                                           stats: healthyStats(), model: .micro)
+        XCTAssertEqual(status(usb, "power"), .pass)
+
+        // 0x50 = 8.0 V — neither USB nor a healthy vehicle bus.
+        let lowVoltage = RaceBoxSelfTest.evaluate(messages: [message(powerByte: 0x50)],
                                                   stats: healthyStats(), model: .micro)
         XCTAssertEqual(status(lowVoltage, "power"), .fail)
 
