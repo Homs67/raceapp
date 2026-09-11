@@ -289,9 +289,15 @@ public final class CoreBluetoothTransport: NSObject, BleTransport, @unchecked Se
         var result: [DeviceInfoCharacteristic: String] = [:]
         for item in DeviceInfoCharacteristic.allCases {
             guard let data = await readCharacteristic(item.rawValue),
-                  let text = String(data: data, encoding: .utf8)?
-                      .trimmingCharacters(in: .whitespacesAndNewlines),
-                  !text.isEmpty else { continue }
+                  let raw = String(data: data, encoding: .utf8) else { continue }
+            // Devices pad these fixed-width characteristics with NUL bytes,
+            // which `.whitespacesAndNewlines` does NOT strip. Leaving them in
+            // corrupts anything that parses the value (a "3.5\0" firmware
+            // string parses as 3.0 and silently disables 3.3+ features).
+            let text = raw
+                .replacingOccurrences(of: "\0", with: "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty else { continue }
             result[item] = text
         }
         return result

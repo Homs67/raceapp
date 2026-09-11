@@ -318,7 +318,7 @@ struct RaceBoxDebugView: View {
 
     private var shareSection: some View {
         Section {
-            if let url = controller.writeLogFile() {
+            if let url = controller.logFileURL() {
                 ShareLink(item: url) {
                     Label("Share RaceBox log", systemImage: "square.and.arrow.up")
                         .font(.system(size: 14, weight: .medium))

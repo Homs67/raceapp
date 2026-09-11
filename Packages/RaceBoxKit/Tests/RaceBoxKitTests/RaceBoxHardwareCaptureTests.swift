@@ -109,6 +109,42 @@ final class RaceBoxHardwareCaptureTests: XCTestCase {
         XCTAssertEqual(remaining / 60, 131, accuracy: 1)
     }
 
+    /// The Micro NUL-pads its Device Info characteristics — verified by
+    /// hexdumping a log off the phone: the serial arrives as "3242708836"
+    /// followed by ten 0x00 bytes. NUL is not whitespace, so a plain
+    /// `trimmingCharacters(in: .whitespacesAndNewlines)` leaves it in place.
+    ///
+    /// The damage was silent: "3.5\0" split on "." gives "5\0", which parses
+    /// as nil, so the minor version fell back to 0. The app reported firmware
+    /// 3.0 and disabled GNSS config, NMEA and 20 Hz recording on a device that
+    /// supports all three.
+    func testNulPaddedDeviceInfoIsCleaned() {
+        let info = RaceBoxDeviceInfo(deviceInfo: [
+            .model: "RaceBox Micro\0\0\0\0\0\0\0\0\0",
+            .serialNumber: "3242708836\0\0\0\0\0\0\0\0\0\0",
+            .firmwareRevision: "3.5\0",
+            .hardwareRevision: "1.4",
+            .manufacturer: "RaceBox Motorsport LLC\0",
+        ])
+        XCTAssertEqual(info.model, .micro)
+        XCTAssertEqual(info.serialNumber, "3242708836")
+        XCTAssertEqual(info.manufacturer, "RaceBox Motorsport LLC")
+        XCTAssertEqual(info.firmware, RaceBoxFirmware(major: 3, minor: 5),
+                       "NUL padding must not truncate the minor version")
+        XCTAssertTrue(info.supportsGnssConfig, "3.5 is past the 3.3 gate")
+        XCTAssertTrue(info.supports20HzRecording)
+        XCTAssertEqual(info.displayName, "RaceBox Micro 3242708836")
+    }
+
+    func testFirmwareParserIgnoresPaddingAndJunk() {
+        XCTAssertEqual(RaceBoxFirmware("3.5\0"), RaceBoxFirmware(major: 3, minor: 5))
+        XCTAssertEqual(RaceBoxFirmware("3.5 "), RaceBoxFirmware(major: 3, minor: 5))
+        XCTAssertEqual(RaceBoxFirmware(" 10.12\0\0"), RaceBoxFirmware(major: 10, minor: 12))
+        XCTAssertEqual(RaceBoxFirmware("3"), RaceBoxFirmware(major: 3, minor: 0))
+        XCTAssertNil(RaceBoxFirmware("\0"))
+        XCTAssertNil(RaceBoxFirmware("unknown"))
+    }
+
     /// Firmware 3.5 is past every 3.3 capability gate.
     func testCapturedDeviceInfoUnlocksAllFeatures() {
         let info = RaceBoxDeviceInfo(deviceInfo: [

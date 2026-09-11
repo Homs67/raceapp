@@ -266,6 +266,21 @@ final class RaceBoxController {
 
     // MARK: - Shareable log
 
+    private var cachedLogURL: URL?
+    private var cachedLogSignature: String?
+
+    /// URL for the share sheet. The debug view's body re-evaluates on every
+    /// data message — 25 times a second — so this must not rewrite the file
+    /// per frame. Regenerates only when the content actually changed (the
+    /// sample log grows at ~2 Hz), otherwise hands back the cached URL.
+    func logFileURL() -> URL? {
+        let signature = "\(rawLog.count)|\(selfTestChecks.count)|\(selfTestRunAt?.timeIntervalSince1970 ?? 0)|\(recordingStatus?.storedMessages ?? 0)"
+        if signature == cachedLogSignature, let cachedLogURL { return cachedLogURL }
+        cachedLogSignature = signature
+        cachedLogURL = writeLogFile()
+        return cachedLogURL
+    }
+
     func writeLogFile() -> URL? {
         var lines = ["RACEAPP · RACEBOX DEBUG",
                      Date().formatted(date: .abbreviated, time: .standard), ""]

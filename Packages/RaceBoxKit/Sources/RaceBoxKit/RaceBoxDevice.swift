@@ -41,8 +41,13 @@ public struct RaceBoxFirmware: Equatable, Comparable, Sendable, CustomStringConv
     }
 
     public init?(_ text: String?) {
-        guard let text = text?.trimmingCharacters(in: .whitespacesAndNewlines) else { return nil }
-        let parts = text.split(separator: ".")
+        guard let text else { return nil }
+        // Keep only version characters: real devices NUL-pad this field, and
+        // "3.5\0" split on "." yields "5\0", which parses as nil → minor 0.
+        // That silently reported firmware 3.5 as 3.0 and disabled every
+        // 3.3-gated feature on a device that supports them.
+        let cleaned = text.filter { $0.isNumber || $0 == "." }
+        let parts = cleaned.split(separator: ".")
         guard let major = Int(parts.first ?? "") else { return nil }
         self.major = major
         self.minor = parts.count > 1 ? (Int(parts[1]) ?? 0) : 0
@@ -73,12 +78,15 @@ public struct RaceBoxDeviceInfo: Equatable, Sendable {
     }
 
     public init(deviceInfo: [DeviceInfoCharacteristic: String]) {
-        // Real devices pad these fixed-width characteristics with trailing
-        // spaces ("RaceBox Micro                 "), so trim here rather than
-        // trusting the caller to have done it.
+        // Real devices pad these fixed-width characteristics with NUL bytes
+        // (verified on a Micro: the serial arrives as "3242708836" + ten
+        // 0x00). NUL is not whitespace, so it survives a plain trim — strip it
+        // explicitly rather than trusting the caller.
         func text(_ key: DeviceInfoCharacteristic) -> String? {
-            let trimmed = deviceInfo[key]?.trimmingCharacters(in: .whitespacesAndNewlines)
-            return (trimmed?.isEmpty ?? true) ? nil : trimmed
+            let cleaned = deviceInfo[key]?
+                .replacingOccurrences(of: "\0", with: "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return (cleaned?.isEmpty ?? true) ? nil : cleaned
         }
         self.init(model: RaceBoxModel.parse(text(.model)),
                   serialNumber: text(.serialNumber),
