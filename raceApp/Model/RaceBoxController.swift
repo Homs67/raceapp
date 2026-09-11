@@ -180,6 +180,7 @@ final class RaceBoxController {
         session = newSession
         await newSession.start()
         logStart = monotonicSeconds()
+        lastLoggedAt = nil
         rawLog = []
         recentMessages = []
 
@@ -209,9 +210,18 @@ final class RaceBoxController {
     private func appendLog(_ message: RaceBoxDataMessage) {
         // One line per message would flood; log ~2 Hz, which is plenty to see
         // values move while keeping the shared file readable.
-        let elapsed = monotonicSeconds() - logStart
-        if let last = lastLoggedAt, elapsed - last < 0.5 { return }
-        lastLoggedAt = elapsed
+        //
+        // Throttle on the ABSOLUTE clock, not on elapsed-since-connect. Storing
+        // elapsed meant a reconnect reset `logStart` while this kept the old
+        // session's value, so the comparison stayed negative and suppressed
+        // every line until the new session outlived the previous one — a
+        // reconnect after a 150 s session logged nothing for 150 s. Absolute
+        // timestamps only ever move forward, so stale state can at worst emit
+        // one extra line.
+        let now = monotonicSeconds()
+        if let last = lastLoggedAt, now - last < 0.5 { return }
+        lastLoggedAt = now
+        let elapsed = now - logStart
         rawLog.append(String(
             format: "%7.2fs  fix=%d sats=%02d  %.6f,%.6f  %6.2f m/s  hdg %6.2f  G %+.3f/%+.3f/%+.3f  rot %+.2f/%+.2f/%+.2f  pwr 0x%02X",
             elapsed, message.fixStatus.rawValue, message.satellites,
@@ -310,7 +320,11 @@ final class RaceBoxController {
             lines.append("")
         }
         if !selfTestChecks.isEmpty {
-            lines.append("SELF-TEST")
+            // Stamp it: the self-test is a snapshot, so its packet counts
+            // legitimately trail the live LINK figures above and shouldn't
+            // read as a contradiction.
+            let when = selfTestRunAt.map { Self.logTime.string(from: $0) } ?? "—"
+            lines.append("SELF-TEST (run at \(when))")
             for check in selfTestChecks {
                 let mark = switch check.status {
                 case .pass: "PASS"
@@ -368,6 +382,12 @@ final class RaceBoxController {
         }
     }
     #endif
+
+    private static let logTime: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm:ss"
+        return formatter
+    }()
 
     private static func describe(_ error: Error) -> String {
         switch error {
