@@ -3,7 +3,7 @@ import Foundation
 /// Scripted transport: maps commands to canned responses, delivered in small
 /// chunks to exercise the response accumulator exactly like a real BLE link.
 /// Used by unit tests, replayed driveway transcripts, and demo mode.
-public final class ReplayTransport: ObdTransport, @unchecked Sendable {
+public final class ReplayTransport: BleTransport, @unchecked Sendable {
 
     public let incoming: AsyncStream<Data>
     private let continuation: AsyncStream<Data>.Continuation

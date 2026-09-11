@@ -2,23 +2,19 @@
 import PackageDescription
 
 let package = Package(
-    name: "ObdKit",
+    name: "BleKit",
     platforms: [.iOS(.v17), .macOS(.v14)],
     products: [
-        .library(name: "ObdKit", targets: ["ObdKit"]),
-    ],
-    dependencies: [
-        .package(path: "../BleKit"),
+        .library(name: "BleKit", targets: ["BleKit"]),
     ],
     targets: [
         .target(
-            name: "ObdKit",
-            dependencies: ["BleKit"],
+            name: "BleKit",
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .testTarget(
-            name: "ObdKitTests",
-            dependencies: ["ObdKit"],
+            name: "BleKitTests",
+            dependencies: ["BleKit"],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
     ]

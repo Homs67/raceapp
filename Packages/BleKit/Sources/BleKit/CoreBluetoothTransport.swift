@@ -31,25 +31,26 @@ public enum BluetoothRadioState: Equatable, Sendable {
     case poweredOn
 }
 
-/// Real-adapter transport over CoreBluetooth. Veepeak-class adapters expose a
-/// vendor UART service — commonly FFF0 (FFF1 notify / FFF2 write) or FFE0/FFE1.
-/// We try the known candidates first, then fall back to the first
-/// (notify, write) characteristic pair found anywhere in the GATT tree.
-/// The full tree is logged for the driveway spike (03 §6).
+/// Real-hardware transport over CoreBluetooth, driven by a `BleDeviceProfile`
+/// so one implementation serves every BLE serial device we support. Known
+/// service/characteristic candidates are tried first; profiles that allow it
+/// then fall back to the first (notify, write) pair found anywhere in the GATT
+/// tree. The full tree is logged for the driveway spike (03 §6).
 ///
-/// Important: only one instance should own the restore identifier. The app
-/// reuses a single transport for scan + connect so CoreBluetooth state stays
-/// coherent.
-public final class CoreBluetoothTransport: NSObject, ObdTransport, @unchecked Sendable {
+/// One instance per profile — each gets its own `CBCentralManager` and its own
+/// restore identifier, so an OBD adapter and a RaceBox can be connected at the
+/// same time. Reuse the instance for scan + connect so CoreBluetooth state
+/// stays coherent.
+public final class CoreBluetoothTransport: NSObject, BleTransport, @unchecked Sendable {
 
-    public static let advertisedName = "VEEPEAK"
-    public static let restorationIdentifier = "com.raceapp.obd-central"
+    public let profile: BleDeviceProfile
 
-    private static let knownServiceUuids: [CBUUID] = [
-        CBUUID(string: "FFF0"), CBUUID(string: "FFE0"),
-    ]
-    private static let knownWriteUuids: [CBUUID] = [CBUUID(string: "FFF2"), CBUUID(string: "FFE1")]
-    private static let knownNotifyUuids: [CBUUID] = [CBUUID(string: "FFF1"), CBUUID(string: "FFE1")]
+    /// Default filter for `scan(nameFilter:)` — the profile's advertised name.
+    public var advertisedName: String? { profile.advertisedName }
+
+    private let knownServiceUuids: [CBUUID]
+    private let knownWriteUuids: [CBUUID]
+    private let knownNotifyUuids: [CBUUID]
 
     /// Broadcast incoming bytes: each access returns a fresh stream, so a new
     /// session after a teardown still receives data. (A single shared
@@ -71,32 +72,39 @@ public final class CoreBluetoothTransport: NSObject, ObdTransport, @unchecked Se
     }
     private var incomingSubscribers: [UUID: AsyncStream<Data>.Continuation] = [:]
 
-    private let queue = DispatchQueue(label: "obdkit.ble")
-    /// Restore identifiers must be unique per app process. Only the FIRST
-    /// transport instance claims it; any accidental extra instance gets a
-    /// plain central instead of corrupting the primary's restoration session.
+    private let queue: DispatchQueue
+    /// Each restore identifier may be claimed by exactly ONE central per
+    /// process. Different profiles use different identifiers and both restore
+    /// normally; an accidental duplicate gets a plain central instead of
+    /// corrupting the first one's restoration session (that corruption made
+    /// every reconnect fail until app relaunch).
     private static let restoreClaimLock = NSLock()
-    private static var restoreClaimed = false
-    private static func claimRestoreIdentifier() -> Bool {
+    private static var claimedRestoreIdentifiers = Set<String>()
+    private static func claimRestoreIdentifier(_ identifier: String?) -> String? {
+        guard let identifier else { return nil }
         restoreClaimLock.lock()
         defer { restoreClaimLock.unlock() }
-        if restoreClaimed { return false }
-        restoreClaimed = true
-        return true
+        return claimedRestoreIdentifiers.insert(identifier).inserted ? identifier : nil
     }
-    private lazy var central = CBCentralManager(
-        delegate: self,
-        queue: queue,
-        options: Self.claimRestoreIdentifier()
-            ? [CBCentralManagerOptionRestoreIdentifierKey: Self.restorationIdentifier]
-            : [:]
-    )
+    private lazy var central: CBCentralManager = {
+        let claimed = Self.claimRestoreIdentifier(profile.restoreIdentifier)
+        return CBCentralManager(
+            delegate: self,
+            queue: queue,
+            options: claimed.map { [CBCentralManagerOptionRestoreIdentifierKey: $0] } ?? [:]
+        )
+    }()
     private let lock = NSLock()
 
     private var peripheral: CBPeripheral?
     private var knownPeripherals: [UUID: CBPeripheral] = [:]
     private var writeCharacteristic: CBCharacteristic?
     private var notifyCharacteristic: CBCharacteristic?
+
+    /// Every characteristic found on the connected peripheral, for explicit
+    /// reads (Device Info) outside the serial pipe.
+    private var discoveredCharacteristics: [CBUUID: CBCharacteristic] = [:]
+    private var pendingReads: [CBUUID: [CheckedContinuation<Data, Error>]] = [:]
 
     private var poweredOnContinuations: [CheckedContinuation<Void, Error>] = []
     private var scanContinuation: AsyncStream<DiscoveredAdapter>.Continuation?
@@ -126,7 +134,12 @@ public final class CoreBluetoothTransport: NSObject, ObdTransport, @unchecked Se
 
     public private(set) var radioState: BluetoothRadioState = .unknown
 
-    public override init() {
+    public init(profile: BleDeviceProfile = .elm327) {
+        self.profile = profile
+        self.queue = DispatchQueue(label: "blekit.\(profile.restoreIdentifier ?? "central")")
+        self.knownServiceUuids = profile.serviceUUIDs.map { CBUUID(string: $0) }
+        self.knownWriteUuids = profile.writeUUIDs.map { CBUUID(string: $0) }
+        self.knownNotifyUuids = profile.notifyUUIDs.map { CBUUID(string: $0) }
         super.init()
         // Creating the manager at launch opts into CoreBluetooth restoration;
         // leaving this lazy until the first user action would miss the callback.
@@ -135,9 +148,10 @@ public final class CoreBluetoothTransport: NSObject, ObdTransport, @unchecked Se
 
     // MARK: - Scanning
 
-    /// Scan for adapters. `nameFilter: nil` lists everything (the
-    /// "Don't see your adapter?" expander); default filters to VEEPEAK.
-    public func scan(nameFilter: String? = CoreBluetoothTransport.advertisedName) async throws -> AsyncStream<DiscoveredAdapter> {
+    /// Scan for devices. Pass `nameFilter: nil` to list everything (the
+    /// "Don't see your adapter?" expander); omit it to filter by the profile's
+    /// advertised name.
+    public func scan(nameFilter: String?) async throws -> AsyncStream<DiscoveredAdapter> {
         try await waitForPoweredOn()
         return AsyncStream { continuation in
             lock.lock()
@@ -153,6 +167,11 @@ public final class CoreBluetoothTransport: NSObject, ObdTransport, @unchecked Se
         }
     }
     private var scanNameFilter: String?
+
+    /// Scan filtered to this profile's advertised name.
+    public func scan() async throws -> AsyncStream<DiscoveredAdapter> {
+        try await scan(nameFilter: profile.advertisedName)
+    }
 
     public func stopScan() {
         queue.async { [self] in
@@ -227,7 +246,7 @@ public final class CoreBluetoothTransport: NSObject, ObdTransport, @unchecked Se
 
     public func send(_ data: Data) async throws {
         guard let peripheral, let characteristic = writeCharacteristic else {
-            throw ObdTransportError.notConnected
+            throw TransportError.notConnected
         }
         let withoutResponse = characteristic.properties.contains(.writeWithoutResponse)
         let type: CBCharacteristicWriteType = withoutResponse ? .withoutResponse : .withResponse
@@ -238,6 +257,44 @@ public final class CoreBluetoothTransport: NSObject, ObdTransport, @unchecked Se
             peripheral.writeValue(chunk, for: characteristic, type: type)
             offset += maxLength
         }
+    }
+
+    // MARK: - Characteristic reads (Device Information)
+
+    /// Read one characteristic by UUID. Returns nil when the peripheral does
+    /// not expose it. Reads are answered outside the serial `incoming` stream.
+    public func readCharacteristic(_ uuid: String, timeout: TimeInterval = 4) async -> Data? {
+        let key = CBUUID(string: uuid)
+        let resolved = withLock { (discoveredCharacteristics[key], peripheral) }
+        guard let characteristic = resolved.0, let target = resolved.1,
+              target.state == .connected else { return nil }
+
+        return try? await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data, Error>) in
+            withLock { pendingReads[key, default: []].append(continuation) }
+            queue.async { target.readValue(for: characteristic) }
+            queue.asyncAfter(deadline: .now() + timeout) { [weak self] in
+                guard let self else { return }
+                self.lock.lock()
+                let stale = self.pendingReads.removeValue(forKey: key) ?? []
+                self.lock.unlock()
+                for waiter in stale {
+                    waiter.resume(throwing: BleTransportError.connectionFailed("read timed out"))
+                }
+            }
+        }
+    }
+
+    /// Read the standard Device Information service as UTF-8 strings.
+    public func readDeviceInfo() async -> [DeviceInfoCharacteristic: String] {
+        var result: [DeviceInfoCharacteristic: String] = [:]
+        for item in DeviceInfoCharacteristic.allCases {
+            guard let data = await readCharacteristic(item.rawValue),
+                  let text = String(data: data, encoding: .utf8)?
+                      .trimmingCharacters(in: .whitespacesAndNewlines),
+                  !text.isEmpty else { continue }
+            result[item] = text
+        }
+        return result
     }
 
     // MARK: - Power state
@@ -253,7 +310,7 @@ public final class CoreBluetoothTransport: NSObject, ObdTransport, @unchecked Se
             lock.unlock()
             return retrieved
         }
-        let connected = central.retrieveConnectedPeripherals(withServices: Self.knownServiceUuids)
+        let connected = central.retrieveConnectedPeripherals(withServices: knownServiceUuids)
             .first { $0.identifier == id }
         if let connected {
             lock.lock()
@@ -283,6 +340,14 @@ public final class CoreBluetoothTransport: NSObject, ObdTransport, @unchecked Se
         poweredOnContinuations = []
         lock.unlock()
         for waiter in waiters { waiter.resume(with: result) }
+    }
+
+    /// Scoped locking helper — `NSLock.lock()` is unavailable directly from an
+    /// async context (Swift 6 diagnoses the potential suspension while held).
+    private func withLock<T>(_ body: () -> T) -> T {
+        lock.lock()
+        defer { lock.unlock() }
+        return body()
     }
 
     private func finishConnect(_ result: Result<Void, Error>) {
@@ -388,9 +453,12 @@ extension CoreBluetoothTransport: CBPeripheralDelegate {
     }
 
     public func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
+        lock.lock()
         for characteristic in service.characteristics ?? [] {
             gattTreeDescription += "    Characteristic \(characteristic.uuid) props=\(characteristic.properties.rawValue)\n"
+            discoveredCharacteristics[characteristic.uuid] = characteristic
         }
+        lock.unlock()
         pendingServiceCount -= 1
         guard pendingServiceCount <= 0 else { return }
 
@@ -407,10 +475,12 @@ extension CoreBluetoothTransport: CBPeripheralDelegate {
         let writable = all.filter { $0.properties.contains(.write) || $0.properties.contains(.writeWithoutResponse) }
         let notifiable = all.filter { $0.properties.contains(.notify) || $0.properties.contains(.indicate) }
 
-        writeCharacteristic = Self.knownWriteUuids.compactMap { uuid in writable.first { $0.uuid == uuid } }.first
-            ?? writable.first
-        notifyCharacteristic = Self.knownNotifyUuids.compactMap { uuid in notifiable.first { $0.uuid == uuid } }.first
-            ?? notifiable.first
+        let matchedWrite = knownWriteUuids.compactMap { uuid in writable.first { $0.uuid == uuid } }.first
+        let matchedNotify = knownNotifyUuids.compactMap { uuid in notifiable.first { $0.uuid == uuid } }.first
+        // Profiles with a documented, fixed service must match exactly —
+        // adopting a random serial-looking pair would "connect" to anything.
+        writeCharacteristic = matchedWrite ?? (profile.allowsHeuristicFallback ? writable.first : nil)
+        notifyCharacteristic = matchedNotify ?? (profile.allowsHeuristicFallback ? notifiable.first : nil)
     }
 
     public func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?) {
@@ -422,7 +492,20 @@ extension CoreBluetoothTransport: CBPeripheralDelegate {
     }
 
     public func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
-        guard let value = characteristic.value, !value.isEmpty else { return }
+        // Resolve an explicit read (Device Info) — never let its bytes reach
+        // the serial stream, where they would corrupt protocol framing.
+        lock.lock()
+        let waiters = pendingReads.removeValue(forKey: characteristic.uuid) ?? []
+        lock.unlock()
+        if !waiters.isEmpty {
+            let result: Result<Data, Error> = error.map { .failure($0) }
+                ?? .success(characteristic.value ?? Data())
+            for waiter in waiters { waiter.resume(with: result) }
+            return
+        }
+
+        guard characteristic.uuid == notifyCharacteristic?.uuid,
+              let value = characteristic.value, !value.isEmpty else { return }
         lock.lock()
         let subscribers = Array(incomingSubscribers.values)
         lock.unlock()

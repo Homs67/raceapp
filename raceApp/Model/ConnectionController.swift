@@ -382,7 +382,7 @@ final class ConnectionController {
         scanTask = Task { [weak self] in
             do {
                 let stream = try await transport.scan(
-                    nameFilter: showAll ? nil : CoreBluetoothTransport.advertisedName)
+                    nameFilter: showAll ? nil : transport.advertisedName)
                 for await adapter in stream {
                     guard let self else { return }
                     self.handleDiscovery(adapter)

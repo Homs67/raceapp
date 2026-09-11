@@ -2,23 +2,23 @@
 import PackageDescription
 
 let package = Package(
-    name: "ObdKit",
+    name: "RaceBoxKit",
     platforms: [.iOS(.v17), .macOS(.v14)],
     products: [
-        .library(name: "ObdKit", targets: ["ObdKit"]),
+        .library(name: "RaceBoxKit", targets: ["RaceBoxKit"]),
     ],
     dependencies: [
         .package(path: "../BleKit"),
     ],
     targets: [
         .target(
-            name: "ObdKit",
+            name: "RaceBoxKit",
             dependencies: ["BleKit"],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .testTarget(
-            name: "ObdKitTests",
-            dependencies: ["ObdKit"],
+            name: "RaceBoxKitTests",
+            dependencies: ["RaceBoxKit"],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
     ]
