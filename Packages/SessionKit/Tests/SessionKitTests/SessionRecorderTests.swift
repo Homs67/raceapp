@@ -57,6 +57,36 @@ final class SessionRecorderTests: XCTestCase {
         XCTAssertTrue(manifest.phoneOnly) // R1.4 — valid without OBD
     }
 
+    func testMotionSourceHandoverIsRecorded() async throws {
+        // A logger owns gps.* for a while, drops out, and the phone takes over.
+        // The switch changes the sample rate under every consumer, so an export
+        // has to say where each stretch came from.
+        _ = try await recorder.start(at: 0)
+        for i in 0..<40 {
+            let t = Double(i) * 0.04
+            await recorder.ingest(channel: .rbSatellites, value: 12, at: t)
+            await recorder.ingest(channel: .gpsSpeed, value: 20, at: t)
+        }
+        // Logger silent; phone GPS continues well past the 3 s handover window.
+        for i in 0..<10 {
+            await recorder.ingest(channel: .gpsSpeed, value: 18, at: 10 + Double(i))
+        }
+        let manifest = try await recorder.stop(at: 25)
+
+        let segments = try XCTUnwrap(manifest.motionSourceSegments)
+        XCTAssertEqual(segments.map(\.source), [.raceBox, .phone])
+        XCTAssertEqual(segments[0].start, 0, accuracy: 0.001)
+        XCTAssertGreaterThan(segments[1].start, 3, "phone takes over only after the logger goes quiet")
+        XCTAssertFalse(manifest.phoneOnly)
+    }
+
+    func testPhoneOnlySessionHasNoRaceBoxSegment() async throws {
+        _ = try await recorder.start(at: 0)
+        for i in 0..<10 { await recorder.ingest(channel: .gpsSpeed, value: 12, at: Double(i)) }
+        let manifest = try await recorder.stop(at: 11)
+        XCTAssertEqual(manifest.motionSourceSegments?.map(\.source), [.phone])
+    }
+
     func testCanStreamSessionCountsAsAdapterAlive() async throws {
         // During CAN streaming no obd.* arrives — can.* must still mark the
         // session non-phone-only and feed the highlights RPM peak.

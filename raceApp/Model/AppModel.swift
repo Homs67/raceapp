@@ -72,6 +72,10 @@ final class AppModel {
         connection.isRecordingActive = { [weak self] in
             self?.recording.isRecording ?? false
         }
+        // The RaceBox feeds the same bus as the phone and OBD adapter, so its
+        // 25 Hz position lands in gps.* and every existing consumer benefits
+        // without knowing the device exists.
+        raceBox.bus = bus
         recording.onEnterBackgroundWhileRecording = { [weak self] in
             self?.sensors.enterBackgroundRecordingMode()
         }
@@ -101,6 +105,19 @@ final class AppModel {
         if CommandLine.arguments.contains("-shift-demo") {
             UserDefaults.standard.set(true, forKey: "shiftEnabled")
             UserDefaults.standard.set(5500.0, forKey: "shiftRPM") // Street mode
+        }
+        // `-racebox-demo` runs the simulated logger without hardware. Starting
+        // it here rather than only from the debug screen lets the whole
+        // recording path — bus, recorder, manifest source tracking — be
+        // exercised, since CoreBluetooth doesn't exist in the Simulator.
+        if CommandLine.arguments.contains("-racebox-demo") {
+            raceBox.startSimulated()
+            if CommandLine.arguments.contains("-record") {
+                Task {
+                    try? await Task.sleep(for: .seconds(2))
+                    startRecording(metricUnits: false)
+                }
+            }
         }
         if CommandLine.arguments.contains("-demo") {
             // Optional `-demo-track <id>` picks the track; otherwise Laguna Seca.

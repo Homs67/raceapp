@@ -239,7 +239,9 @@ public final class PhoneSensorSuite: NSObject, @unchecked Sendable {
             let gravity = Vector3(motion.gravity.x, motion.gravity.y, motion.gravity.z)
             let accel = Vector3(motion.userAcceleration.x, motion.userAcceleration.y, motion.userAcceleration.z)
             self.calibrationLock.lock()
-            self.calibrator.ingestMotion(gravity: gravity, userAccel: accel)
+            self.calibrator.ingestMotion(
+                gravity: gravity, userAccel: accel,
+                rotationRate: Vector3(motion.rotationRate.x, motion.rotationRate.y, motion.rotationRate.z))
             if let g = self.calibrator.carFrame(userAccel: accel) {
                 // Light EMA (~4 Hz at 100 Hz sampling): keeps the gauge readable
                 // without hiding real transients. Raw imu.* stay unfiltered.

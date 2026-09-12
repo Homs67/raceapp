@@ -11,6 +11,7 @@ import Foundation
 import SwiftUI
 import BleKit
 import RaceBoxKit
+import SessionKit
 
 @MainActor @Observable
 final class RaceBoxController {
@@ -28,6 +29,17 @@ final class RaceBoxController {
     private enum Keys {
         static let deviceId = "racebox.uuid"
         static let deviceName = "racebox.name"
+        static let useForRecording = "racebox.useForRecording"
+    }
+
+    /// Settings toggle: let a connected RaceBox provide session position and
+    /// speed instead of the phone.
+    var useForRecording: Bool {
+        get { UserDefaults.standard.object(forKey: Keys.useForRecording) as? Bool ?? true }
+        set {
+            UserDefaults.standard.set(newValue, forKey: Keys.useForRecording)
+            publishesToBus = newValue && state.isConnected
+        }
     }
 
     private(set) var state: State = .idle
@@ -45,6 +57,12 @@ final class RaceBoxController {
     private static let rawLogLimit = 400
     /// Live messages kept for the self-test window.
     private var recentMessages: [RaceBoxDataMessage] = []
+
+    /// Telemetry bus, set by AppModel. Publishing is gated so the debug screen
+    /// can be used without a RaceBox quietly hijacking a phone-only recording.
+    var bus: TelemetryBus?
+    /// True when this device should feed recordings (Settings toggle + connected).
+    private(set) var publishesToBus = false
 
     private let transport: CoreBluetoothTransport
     private var session: RaceBoxSession?
@@ -138,6 +156,7 @@ final class RaceBoxController {
                 self.deviceInfo = info
                 await self.attach(session: RaceBoxSession(transport: self.transport))
                 self.state = .connected
+                self.publishesToBus = self.useForRecording
                 // Recording status is the first thing worth knowing on a
                 // Mini S / Micro: it may already be logging on its own.
                 if info.supportsStandaloneRecording { await self.refreshRecordingStatus() }
@@ -160,6 +179,7 @@ final class RaceBoxController {
         simulated = nil
         transport.stopScan()
         transport.disconnect()
+        publishesToBus = false
         state = .idle
         latest = nil
         recentMessages = []
@@ -205,6 +225,52 @@ final class RaceBoxController {
         recentMessages.append(message)
         if recentMessages.count > 200 { recentMessages.removeFirst(100) }
         appendLog(message)
+        publish(message)
+    }
+
+    /// Feed the telemetry bus. Position and speed go to the canonical `gps.*`
+    /// channels so every existing consumer — lap timer, drag meter, highlights,
+    /// graphs, video review — gets 25 Hz data with no change; `rb.*` carries
+    /// what only this device provides.
+    private func publish(_ m: RaceBoxDataMessage) {
+        guard publishesToBus, let bus else { return }
+        let t = monotonicSeconds()
+
+        // Always useful, fix or not: these are how you diagnose a bad fix.
+        bus.publish(.rbSatellites, Double(m.satellites), at: t)
+        bus.publish(.rbPdop, m.pdop, at: t)
+        bus.publish(.rbFixStatus, Double(m.fixStatus.rawValue), at: t)
+        bus.publish(.rbGForceX, m.gForce.x, at: t)
+        bus.publish(.rbGForceY, m.gForce.y, at: t)
+        bus.publish(.rbGForceZ, m.gForce.z, at: t)
+        bus.publish(.rbRollRate, m.rotationRate.x, at: t)
+        bus.publish(.rbPitchRate, m.rotationRate.y, at: t)
+        bus.publish(.rbYawRate, m.rotationRate.z, at: t)
+        switch m.power(for: deviceInfo?.model ?? .micro) {
+        case .inputVoltage(let volts): bus.publish(.rbPower, volts, at: t)
+        case .battery(let percent, _): bus.publish(.rbPower, Double(percent), at: t)
+        }
+        if let stamp = m.timestamp {
+            bus.publish(.rbWallTime, stamp.timeIntervalSince1970, at: t)
+        }
+
+        // Position only counts once the receiver actually has a solution. A
+        // cold-start packet carries confident-looking coordinates that are
+        // kilometres wrong, so gate on the flags rather than plausibility.
+        guard m.hasValidFix, m.coordinatesValid else { return }
+        bus.publish(.gpsLatitude, m.latitude, at: t)
+        bus.publish(.gpsLongitude, m.longitude, at: t)
+        bus.publish(.gpsSpeed, m.speedMps, at: t)
+        bus.publish(.gpsAltitude, m.mslAltitude, at: t)
+        bus.publish(.gpsHorizontalAccuracy, m.horizontalAccuracy, at: t)
+        bus.publish(.gpsVerticalAccuracy, m.verticalAccuracy, at: t)
+        bus.publish(.gpsSpeedAccuracy, m.speedAccuracyMps, at: t)
+        // Course over ground is meaningless when stopped — a parked device
+        // swung through 234°, 155°, 316° in the bench log. Only publish it
+        // when the receiver says it has a real heading.
+        if m.headingValid {
+            bus.publish(.gpsCourse, m.headingDegrees, at: t)
+        }
     }
 
     private func appendLog(_ message: RaceBoxDataMessage) {
@@ -378,6 +444,7 @@ final class RaceBoxController {
             await self.attach(session: RaceBoxSession(transport: source))
             source.start()
             self.state = .connected
+            self.publishesToBus = self.useForRecording
             await self.refreshRecordingStatus()
         }
     }

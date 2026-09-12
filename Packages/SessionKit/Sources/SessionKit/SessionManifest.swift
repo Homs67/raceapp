@@ -148,6 +148,31 @@ public struct SessionManifest: Codable, Equatable, Sendable, Identifiable {
     public var videoSyncOffset: TimeInterval?
     /// Post-session IMU↔GPS consistency check (also recomputed on export).
     public var gForceValidation: GForceValidation?
+    /// Which sensor fed the canonical `gps.*` / `car.*` channels, and when.
+    ///
+    /// A logger can drop out mid-session and the phone takes over, which
+    /// changes the sample rate underneath every consumer — lap timing and drag
+    /// runs silently get coarser. Recording the switch keeps an export honest
+    /// about where each stretch of data came from, the way `obdGaps` does for
+    /// the adapter. Absent on phone-only sessions.
+    public var motionSourceSegments: [MotionSourceSegment]?
+
+    public enum MotionSource: String, Codable, Sendable {
+        case phone
+        case raceBox
+    }
+
+    public struct MotionSourceSegment: Codable, Equatable, Sendable {
+        public var source: MotionSource
+        public var start: TimeInterval
+        public var end: TimeInterval?
+
+        public init(source: MotionSource, start: TimeInterval, end: TimeInterval? = nil) {
+            self.source = source
+            self.start = start
+            self.end = end
+        }
+    }
     /// Effective OBD poll timing from recorded samples.
     public var obdTiming: ObdTiming?
 

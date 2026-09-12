@@ -79,6 +79,20 @@ public actor SessionRecorder {
         lastSampleT = max(lastSampleT, t)
         noteSensorContinuity(channel: channel, at: t)
 
+        // A logger sample proves the logger is feeding gps.*; its absence for a
+        // while means the phone has taken over. Tracked from the data itself so
+        // no caller has to remember to report the handover.
+        if channel.rawValue.hasPrefix("rb.") {
+            noteMotionSource(.raceBox, at: t)
+            // External hardware was present, so this isn't a phone-only drive —
+            // but deliberately NOT `autoStop.noteObdAlive`. That rule keys on
+            // the engine being on, and a logger on USB or a permanent 12 V feed
+            // keeps reporting long after the ignition is off.
+            manifest?.phoneOnly = false
+        } else if channel == .gpsSpeed, lastRaceBoxSampleT.map({ t - $0 > 3 }) ?? true {
+            noteMotionSource(.phone, at: t)
+        }
+
         // can.* counts as adapter-alive too: during CAN streaming no obd.*
         // arrives, but the link (and ignition) are just as provably up.
         if channel.rawValue.hasPrefix("obd.") || channel.rawValue.hasPrefix("can.") {
@@ -93,6 +107,22 @@ public actor SessionRecorder {
         if channel == .gpsSpeed {
             autoStop.noteSpeed(value, at: t)
         }
+    }
+
+    private var lastRaceBoxSampleT: TimeInterval?
+
+    /// Append to the motion-source timeline, closing the previous segment.
+    /// Only a genuine change writes a new segment.
+    private func noteMotionSource(_ source: SessionManifest.MotionSource, at t: TimeInterval) {
+        if source == .raceBox { lastRaceBoxSampleT = t }
+        var segments = manifest?.motionSourceSegments ?? []
+        if let last = segments.last, last.source == source {
+            segments[segments.count - 1].end = t     // extend the current stretch
+        } else {
+            if !segments.isEmpty { segments[segments.count - 1].end = t }
+            segments.append(.init(source: source, start: t, end: t))
+        }
+        manifest?.motionSourceSegments = segments
     }
 
     /// OBD link dropped (from the connection controller) — opens a gap record.

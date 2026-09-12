@@ -71,6 +71,24 @@ struct RaceBoxDebugView: View {
                 }
             }
 
+            if controller.state.isConnected {
+                Toggle(isOn: Binding(
+                    get: { controller.useForRecording },
+                    set: { controller.useForRecording = $0 }
+                )) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Use for recording")
+                            .font(.system(size: 14))
+                        Text(controller.publishesToBus
+                             ? "Sessions take position and speed from this device"
+                             : "Sessions use phone GPS")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Color.muted)
+                    }
+                }
+                .tint(Color.accent)
+            }
+
             if let info = controller.deviceInfo, controller.state.isConnected {
                 row("Model", info.model?.rawValue ?? "unknown")
                 row("Serial", info.serialNumber ?? "—")
