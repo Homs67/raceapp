@@ -10,6 +10,26 @@ import Foundation
 public enum SessionExporter {
 
     public static let timelineHz: Double = 10
+    /// Ceiling for the adaptive grid. The phone IMU runs at 100 Hz, but a CSV
+    /// at that rate is unopenable for a long session; 25 Hz matches the fastest
+    /// position source we support and what the RaceBox app itself exports.
+    public static let maxTimelineHz: Double = 25
+
+    /// Row cadence for a session: fast enough not to throw away position data.
+    ///
+    /// A fixed 10 Hz grid silently halved 25 Hz logger data in the file people
+    /// actually open, while the raw dump kept it — so the CSV disagreed with
+    /// the truth beside it. Keyed on the position rate rather than the fastest
+    /// channel overall, because matching the 100 Hz IMU would balloon the file
+    /// for no benefit.
+    public static func timelineHz(for channels: [SessionManifest.ChannelSummary]) -> Double {
+        let positionRate = channels
+            .filter { $0.id == .gpsSpeed || $0.id == .gpsLatitude }
+            .compactMap(\.measuredHz)
+            .max() ?? 0
+        guard positionRate > timelineHz else { return timelineHz }
+        return min(maxTimelineHz, (positionRate / 5).rounded() * 5)
+    }
 
     /// Column order: well-known channels first (GPS, IMU, OBD), then anything else.
     static func orderedChannels(_ channels: [ChannelId]) -> [ChannelId] {
@@ -45,6 +65,11 @@ public enum SessionExporter {
         let channels = orderedChannels(ChannelReader.channels(inSessionDirectory: sessionDirectory))
         let series = channels.map { ChannelReader.samples(for: $0, inSessionDirectory: sessionDirectory) }
         let holdAges = channels.map(maxHoldAge(for:))
+        // Match the grid to the position source so a 25 Hz logger isn't
+        // downsampled on its way into the export.
+        let rowHz = manifest.channels.isEmpty
+            ? timelineHz
+            : timelineHz(for: manifest.channels)
 
         var header = ["time_s", "utc"]
         header += channels.map { $0.rawValue.replacingOccurrences(of: ".", with: "_") }
@@ -57,13 +82,13 @@ public enum SessionExporter {
         utcFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
 
         var cursors = [Int](repeating: 0, count: series.count)
-        let step = 1.0 / timelineHz
+        let step = 1.0 / rowHz
         let epsilon = 1e-6 // sample times vs. grid times never compare exactly
         let rowCount = Int(((lastT - firstT) / step + epsilon).rounded(.down)) + 1
         for rowIndex in 0..<rowCount {
             let t = firstT + Double(rowIndex) * step
             var row = [
-                String(format: "%.1f", t - manifest.startUptime),
+                String(format: rowHz > 10 ? "%.2f" : "%.1f", t - manifest.startUptime),
                 utcFormatter.string(from: manifest.utcDate(forUptime: t)),
             ]
             for (index, samples) in series.enumerated() {
@@ -92,6 +117,7 @@ public enum SessionExporter {
         if id.hasPrefix("baro.") { return 3.0 }
         if id.hasPrefix("device.") { return 8.0 }
         if id.hasPrefix("obd.") { return 1.5 }
+        if id.hasPrefix("rb.") { return 0.2 }   // 25 Hz logger
         return 2.0
     }
 

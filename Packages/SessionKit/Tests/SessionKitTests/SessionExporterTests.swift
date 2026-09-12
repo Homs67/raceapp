@@ -68,6 +68,44 @@ final class SessionExporterTests: XCTestCase {
         XCTAssertEqual(resume, "400.0,2027-01-15T08:06:40.000Z,2")
     }
 
+    func testTimelineFollowsThePositionRate() {
+        func summary(_ id: ChannelId, _ hz: Double) -> SessionManifest.ChannelSummary {
+            var s = SessionManifest.ChannelSummary(id: id, sampleCount: 100)
+            s.measuredHz = hz
+            return s
+        }
+        // Phone GPS at 1 Hz — the 10 Hz grid already over-samples it.
+        XCTAssertEqual(SessionExporter.timelineHz(for: [summary(.gpsSpeed, 0.97)]), 10)
+        // A 25 Hz logger must not be halved on the way into the CSV.
+        XCTAssertEqual(SessionExporter.timelineHz(for: [summary(.gpsSpeed, 23.8)]), 25)
+        // The 100 Hz IMU must not drag the whole file up with it.
+        XCTAssertEqual(SessionExporter.timelineHz(for: [summary(.gpsSpeed, 1),
+                                                        summary(.imuAccelX, 99.6)]), 10)
+        XCTAssertEqual(SessionExporter.timelineHz(for: []), 10)
+    }
+
+    func testCsvKeepsEveryLoggerSample() async throws {
+        var manifest = SessionManifest(
+            startedAtUTC: Date(timeIntervalSince1970: 1_800_000_000), startUptime: 0)
+        try store.create(manifest)
+        let writer = try SessionWriter(sessionDirectory: store.directory(for: manifest.id))
+        // 4 s of 25 Hz position, each sample a distinct value.
+        for i in 0..<100 {
+            await writer.append(.gpsSpeed, value: Double(i), at: Double(i) / 25)
+        }
+        _ = await writer.close()
+        manifest.channels = ChannelStats.enrichAll(
+            inSessionDirectory: store.directory(for: manifest.id))
+
+        let csv = SessionExporter.csv(manifest: manifest,
+                                      sessionDirectory: store.directory(for: manifest.id))
+        let rows = csv.split(separator: "\n").dropFirst()
+        XCTAssertEqual(rows.count, 100, "one row per logger sample, not one per 100 ms")
+        // Distinct speeds survive rather than being decimated.
+        let speeds = Set(rows.compactMap { $0.split(separator: ",", omittingEmptySubsequences: false).last })
+        XCTAssertEqual(speeds.count, 100)
+    }
+
     func testSidecarRoundtrips() async throws {
         let manifest = try await makeSession()
         let data = try SessionExporter.sidecarJson(
