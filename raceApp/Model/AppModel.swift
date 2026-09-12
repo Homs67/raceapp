@@ -91,6 +91,7 @@ final class AppModel {
             bus.publish(channel, value, at: t)
         }
         connection.onLaunch()
+        raceBox.autoConnectIfRemembered()
         #if DEBUG
         // Synthesize dashcam-style test clips for the latest session
         if CommandLine.arguments.contains("-make-test-videos") {
@@ -216,6 +217,7 @@ final class AppModel {
             camera.refreshAuthorizationStatus()
             sensors.enterForegroundRecordingMode()
             connection.onForeground()
+            raceBox.autoConnectIfRemembered()
             recording.applicationDidBecomeActive()
         case .background:
             recording.applicationDidEnterBackground()

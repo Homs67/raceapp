@@ -94,6 +94,19 @@ final class RaceBoxController {
 
     // MARK: - Connect
 
+    /// Reconnect a remembered device at launch and on foreground, the way the
+    /// OBD adapter does.
+    ///
+    /// Without this the logger only ever connected when its debug screen was
+    /// open, so a session recorded without visiting that screen silently fell
+    /// back to phone GPS — which is exactly what happened on the first real
+    /// drive. Deliberately does NOT scan: someone who has never paired a
+    /// RaceBox should pay nothing for the feature existing.
+    func autoConnectIfRemembered() {
+        guard useForRecording, case .idle = state, let id = storedDeviceId else { return }
+        connect(to: id, name: storedDeviceName ?? "RaceBox")
+    }
+
     func start() {
         guard case .idle = state else { return }
         #if DEBUG
