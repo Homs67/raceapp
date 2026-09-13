@@ -3,9 +3,10 @@
 //  raceApp
 //
 //  Single source of truth for a track-following demo drive. Owns one
-//  TrackDriveSimulator on a shared monotonic clock and vends both halves so they
-//  agree: the phone sample (GPS/heading/speed/G) for DemoTelemetryFeed, and an
-//  OBD DemoSample (RPM/speed/throttle) injected into SimulatedAdapterTransport.
+//  PacedLapSchedule (laps at varying pace, so the lap delta has something to
+//  show) on a shared monotonic clock and vends both halves so they agree: the
+//  phone sample (GPS/heading/speed/G) for DemoTelemetryFeed, and an OBD
+//  DemoSample (RPM/speed/throttle) injected into SimulatedAdapterTransport.
 //
 
 import Foundation
@@ -15,13 +16,13 @@ import ObdKit
 final class TrackDemoDrive: @unchecked Sendable {
 
     let track: Track
-    private let sim: TrackDriveSimulator
+    private let sim: PacedLapSchedule
     private let start: TimeInterval
 
     init(track: Track, start: TimeInterval = monotonicNow()) {
         self.track = track
         self.start = start
-        self.sim = TrackDriveSimulator(
+        self.sim = PacedLapSchedule(
             centerline: track.centerline.map { GeoPoint(lat: $0[0], lon: $0[1]) }
         )
     }

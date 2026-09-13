@@ -336,15 +336,22 @@ struct SettingsView: View {
             .padding(.vertical, 4)
             .listRowBackground(Color.cardGray)
 
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Default dashboard")
-                    .font(.system(size: 13))
-                    .foregroundStyle(Color.muted)
-                DefaultDashboardPreview(face: dashboardFace)
-                Button("Change") { showDashboardPicker = true }
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(Color.accentCyan)
-                    .frame(maxWidth: .infinity)
+            NavigationLink {
+                DashboardsSettingsView()
+            } label: {
+                HStack(spacing: 12) {
+                    if let current = model.dashboards.selected {
+                        DashboardThumbnail(dashboard: current)
+                            .frame(width: 72, height: 33)
+                    }
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Dashboards")
+                            .font(.system(size: 15))
+                        Text("\(model.dashboards.dashboards.count) configured · long-press a widget to edit")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Color.muted)
+                    }
+                }
             }
             .padding(.vertical, 4)
             .listRowBackground(Color.cardGray)

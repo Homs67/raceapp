@@ -22,6 +22,8 @@ final class AppModel {
     let metrics: SessionMetrics
     /// RaceBox link — its own BLE central, so it can run alongside the OBD adapter.
     let raceBox = RaceBoxController()
+    /// Widget dashboards shown while recording (Settings → Dashboards).
+    let dashboards = DashboardStore()
     private(set) var backgroundLocationStatus: PhoneSensorSuite.BackgroundLocationStatus = .notDetermined
     /// When Always Location is unavailable, keep the screen awake for the
     /// active session so iOS cannot suspend phone-only capture.
@@ -85,6 +87,7 @@ final class AppModel {
     func onLaunch() {
         guard !launched else { return }
         launched = true
+        SofiaFace.audit()
         recording.recoverAtLaunch()
         sensors.requestPermissions()
         sensors.start { [bus] channel, value, t in

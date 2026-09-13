@@ -11,67 +11,6 @@ import SessionKit
 import ObdKit
 import CoreLocation
 
-/// Large orange circular Start used on the Sessions idle surface.
-struct SessionStartButton: View {
-    @Environment(AppModel.self) private var model
-    @AppStorage("useMetricUnits") private var metric = false
-    var size: CGFloat = 96
-
-    var body: some View {
-        Button {
-            model.startRecording(metricUnits: metric)
-        }         label: {
-            Text("START")
-                .font(.numeral(size * 0.32, weight: .bold))
-                .foregroundStyle(.black)
-                .frame(width: size, height: size)
-                .background(Color.accent, in: Circle())
-                .contentShape(Circle())
-        }
-        .buttonStyle(PressableButtonStyle())
-        .accessibilityLabel("Start")
-    }
-}
-
-/// Circular red Stop used on the expanded dashboard and mini-player.
-struct SessionStopButton: View {
-    @Environment(AppModel.self) private var model
-    var size: CGFloat = 64
-
-    var body: some View {
-        Button {
-            model.stopRecording()
-        } label: {
-            ZStack {
-                Circle()
-                    .fill(Color.recordRed)
-                    .frame(width: size, height: size)
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(.black)
-                    .frame(width: size * 0.28, height: size * 0.28)
-            }
-        }
-        .buttonStyle(PressableButtonStyle())
-        .accessibilityLabel("Stop Recording")
-    }
-}
-
-enum SessionElapsedFormat {
-    static func format(_ elapsed: TimeInterval) -> String {
-        let total = Int(max(0, elapsed))
-        return String(format: "%d:%02d", total / 60, total % 60)
-    }
-
-    /// Banner / wireframe style: always `HH:MM:SS`.
-    static func formatLong(_ elapsed: TimeInterval) -> String {
-        let total = Int(max(0, elapsed))
-        let h = total / 3600
-        let m = (total % 3600) / 60
-        let s = total % 60
-        return String(format: "%02d:%02d:%02d", h, m, s)
-    }
-}
-
 // MARK: - Recording dashboard
 
 struct LiveDashboardView: View {
@@ -696,7 +635,7 @@ struct LiveDashboardView: View {
                 }
             }
             VStack(alignment: .leading, spacing: 0) {
-                bigNumeral(Self.lapString(s.currentLapTime), size: landscape ? 92 : 108)
+                bigNumeral(LapTimeFormat.string(s.currentLapTime), size: landscape ? 92 : 108)
                 microLabel("CURRENT")
             }
             HStack(spacing: 44) {
@@ -709,7 +648,7 @@ struct LiveDashboardView: View {
                         HStack {
                             Text("L\(i + 1)").font(.system(size: 12, weight: .medium)).foregroundStyle(Color.muted)
                             Spacer()
-                            Text(Self.lapString(lap)).font(.numeral(16, weight: .medium))
+                            Text(LapTimeFormat.string(lap)).font(.numeral(16, weight: .medium))
                                 .foregroundStyle(lap == s.bestLapTime ? Color.accent : Color.textPrimary)
                         }
                     }
@@ -723,16 +662,10 @@ struct LiveDashboardView: View {
 
     private func lapStat(_ label: String, _ value: TimeInterval?, highlight: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(Self.lapString(value)).font(.numeral(30, weight: .semibold))
+            Text(LapTimeFormat.string(value)).font(.numeral(30, weight: .semibold))
                 .foregroundStyle(value == nil ? Color.mutedWeak : (highlight ? Color.accent : Color.textPrimary))
             Text(label).font(.system(size: 9, weight: .semibold)).kerning(1).foregroundStyle(Color.muted)
         }
-    }
-
-    static func lapString(_ t: TimeInterval?) -> String {
-        guard let t else { return "—:—" }
-        let m = Int(t) / 60, s = t - Double(m * 60)
-        return String(format: "%d:%05.2f", m, s)
     }
 
     // MARK: Pieces
@@ -776,18 +709,4 @@ struct LiveDashboardView: View {
             .font(.system(size: 11, weight: .semibold)).kerning(1.5)
             .foregroundStyle(Color.muted)
     }
-}
-
-/// Subtle press feedback for the big buttons.
-struct PressableButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .scaleEffect(configuration.isPressed ? 0.96 : 1)
-            .opacity(configuration.isPressed ? 0.9 : 1)
-            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
-    }
-}
-
-func uptimeNow() -> TimeInterval {
-    TimeInterval(DispatchTime.now().uptimeNanoseconds) / 1_000_000_000
 }

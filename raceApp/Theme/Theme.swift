@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import UIKit
 
 extension Color {
     init(hex: UInt32) {
@@ -34,6 +35,12 @@ extension Color {
     static let mutedWeak = Color.white.opacity(0.3)
     static let cardBg = Color(hex: 0x1F1F1F)
     static let cardBorder = Color.white.opacity(0.06)
+
+    // Widget dashboards (Figma KSphRijU74DIZFT5kCgtP1)
+    static let widgetBorder = Color(hex: 0x262626)
+    static let toolbarRed = Color(hex: 0xD93420)     // STOP button, elapsed time, slower delta
+    static let deltaGreen = Color(hex: 0x4D9E63)     // faster-than-best delta
+    static let mapOutline = Color(hex: 0x3A3A3A)     // lap-widget track outline
 }
 
 extension Font {
@@ -46,6 +53,46 @@ extension Font {
     /// 9–11pt uppercase micro-labels.
     static func microLabel(_ size: CGFloat = 10) -> Font {
         .system(size: size, weight: .medium)
+    }
+
+    /// Sofia Sans Condensed (bundled statics), resolved by explicit PostScript
+    /// face. The statics register under *different family names* per weight
+    /// ("Sofia Sans Condensed ExtraBold"), so `Font.custom(family).weight()`
+    /// silently falls back to SF for anything but Regular/Bold.
+    static func sofia(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
+        .custom(SofiaFace.name(for: weight), size: size)
+    }
+
+    /// Sofia with tabular figures — the font's default digits are proportional,
+    /// so every live numeral must go through this or it jitters at 10 Hz.
+    static func sofiaNumeral(_ size: CGFloat, _ weight: Font.Weight = .bold) -> Font {
+        sofia(size, weight).monospacedDigit()
+    }
+}
+
+enum SofiaFace {
+    static let family = "Sofia Sans Condensed"
+
+    static func name(for weight: Font.Weight) -> String {
+        switch weight {
+        case .black: return "SofiaSansCondensed-Black"
+        case .heavy: return "SofiaSansCondensed-ExtraBold"
+        case .bold: return "SofiaSansCondensed-Bold"
+        case .semibold: return "SofiaSansCondensed-SemiBold"
+        case .medium: return "SofiaSansCondensed-Medium"
+        default: return "SofiaSansCondensed-Regular"
+        }
+    }
+
+    /// `Font.custom` falls back to SF silently when a face is missing, so this
+    /// is the only cheap way to catch a plist typo. DEBUG only.
+    static func audit() {
+        #if DEBUG
+        let missing = [Font.Weight.regular, .medium, .semibold, .bold, .heavy, .black]
+            .map(name(for:))
+            .filter { UIFont(name: $0, size: 12) == nil }
+        assert(missing.isEmpty, "Sofia Sans Condensed faces not registered: \(missing) — check UIAppFonts in Config/Info.plist")
+        #endif
     }
 }
 

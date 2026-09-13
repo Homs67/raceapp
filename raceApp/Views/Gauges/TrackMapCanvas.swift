@@ -11,8 +11,23 @@ import SwiftUI
 import CoreLocation
 
 struct TrackMapCanvas: View {
+    /// Visual treatment: the accent look of the old dashboard face, or the
+    /// quiet gray outline + white dot of the widget dashboards (Figma 125:4704).
+    enum Style {
+        case accent
+        case outline
+
+        var line: Color { self == .accent ? Color.accent.opacity(0.9) : Color.mapOutline }
+        var lineWidth: CGFloat { self == .accent ? 3 : 2 }
+        var gate: Color { self == .accent ? .white : Color.mapOutline }
+        var dotStroke: Color? { self == .accent ? Color.accent : nil }
+        var dotRadius: CGFloat { self == .accent ? 7 : 5 }
+    }
+
     let track: Track
     let position: CLLocationCoordinate2D?
+    var style: Style = .accent
+    var padding: CGFloat = 16
 
     var body: some View {
         Canvas { ctx, size in
@@ -29,7 +44,7 @@ struct TrackMapCanvas: View {
             let cosLat = cos(midLat * .pi / 180)
             let spanX = max(1e-6, (maxLon - minLon) * cosLat)
             let spanY = max(1e-6, maxLat - minLat)
-            let pad: CGFloat = 16
+            let pad = padding
             let scale = min((size.width - 2 * pad) / spanX, (size.height - 2 * pad) / spanY)
             let offX = (size.width - CGFloat(spanX) * scale) / 2
             let offY = (size.height - CGFloat(spanY) * scale) / 2
@@ -43,21 +58,22 @@ struct TrackMapCanvas: View {
             var line = Path()
             line.addLines(coords.map(project))
             line.closeSubpath()
-            ctx.stroke(line, with: .color(Color.accent.opacity(0.9)),
-                       style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
+            ctx.stroke(line, with: .color(style.line),
+                       style: StrokeStyle(lineWidth: style.lineWidth, lineCap: .round, lineJoin: .round))
 
             // Start/finish gate
             var gate = Path()
             gate.move(to: project(track.startFinish.pointA))
             gate.addLine(to: project(track.startFinish.pointB))
-            ctx.stroke(gate, with: .color(.white), lineWidth: 2)
+            ctx.stroke(gate, with: .color(style.gate), lineWidth: 2)
 
             // Car position
             if let position {
                 let p = project(position)
-                let dot = Path(ellipseIn: CGRect(x: p.x - 7, y: p.y - 7, width: 14, height: 14))
+                let r = style.dotRadius
+                let dot = Path(ellipseIn: CGRect(x: p.x - r, y: p.y - r, width: 2 * r, height: 2 * r))
                 ctx.fill(dot, with: .color(.white))
-                ctx.stroke(dot, with: .color(Color.accent), lineWidth: 3)
+                if let stroke = style.dotStroke { ctx.stroke(dot, with: .color(stroke), lineWidth: 3) }
             }
         }
     }

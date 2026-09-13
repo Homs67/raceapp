@@ -16,6 +16,8 @@ final class SessionMetrics {
 
     private let bus: TelemetryBus
     private var lap: LapTimer?
+    private var progress: TrackProgress?
+    private var lapDelta: LapDelta?
     private let drag = DragMeter()
     private var task: Task<Void, Never>?
     private var lastGpsT: TimeInterval?
@@ -26,6 +28,11 @@ final class SessionMetrics {
                                                lastLapTime: nil, bestLapTime: nil, lapTimes: [])
     private(set) var dragRun = DragMeter.Run()
     private(set) var dragBest = DragMeter.Run()
+    /// Seconds ahead (−) or behind (+) the session-best lap at the current
+    /// point on the track; nil until a best lap exists.
+    private(set) var delta: TimeInterval?
+    /// Distance along the current lap from the start/finish line, metres.
+    private(set) var lapProgressMeters: Double?
 
     init(bus: TelemetryBus) { self.bus = bus }
 
@@ -37,6 +44,12 @@ final class SessionMetrics {
             let sf = track.startFinish
             lap = LapTimer(gateA: (sf.a[0], sf.a[1]), gateB: (sf.b[0], sf.b[1]),
                            forwardHeading: Self.bearing(a[0], a[1], b[0], b[1]))
+            let line = track.centerline.map { GeoPoint(lat: $0[0], lon: $0[1]) }
+            var tp = TrackProgress(centerline: line,
+                                   gate: (GeoPoint(lat: sf.a[0], lon: sf.a[1]), GeoPoint(lat: sf.b[0], lon: sf.b[1])))
+            tp.reset()
+            progress = tp
+            lapDelta = LapDelta(lapLength: tp.lapLength)
         }
         task = Task { [weak self] in
             while !Task.isCancelled {
@@ -49,6 +62,7 @@ final class SessionMetrics {
     func stop() {
         task?.cancel(); task = nil
         lap = nil; lastGpsT = nil; lastSpeedT = nil
+        progress = nil; lapDelta = nil; delta = nil; lapProgressMeters = nil
         lapState = LapTimer.State(completedLaps: 0, currentLapTime: nil,
                                   lastLapTime: nil, bestLapTime: nil, lapTimes: [])
         dragRun = DragMeter.Run()
@@ -60,7 +74,20 @@ final class SessionMetrics {
 
         if let lap, let latR = snap[.gpsLatitude], let lonR = snap[.gpsLongitude], latR.t != lastGpsT {
             lastGpsT = latR.t
-            lap.add(lat: latR.value, lon: lonR.value, t: latR.t)
+            let completed = lap.add(lat: latR.value, lon: lonR.value, t: latR.t)
+            // `add` re-arms the lap clock on the crossing fix, so this state
+            // already belongs to the new lap.
+            let st = lap.state(now: latR.t)
+            if completed, let last = st.lastLapTime {
+                lapDelta?.lapCompleted(lapTime: last, isNewBest: st.bestLapTime == last)
+            }
+            if let fix = progress?.locate(lat: latR.value, lon: lonR.value) {
+                lapProgressMeters = fix.s
+                if let elapsed = st.currentLapTime {
+                    lapDelta?.add(s: fix.s, elapsed: elapsed)
+                    delta = lapDelta?.delta
+                }
+            }
         }
         if let lap { lapState = lap.state(now: now) }
 

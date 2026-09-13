@@ -16,6 +16,15 @@
 	<string>Microphone audio can be saved with session camera footage.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Session camera clips are also saved to Photos so you can re-import them if needed.</string>
+	<key>UIAppFonts</key>
+	<array>
+		<string>SofiaSansCondensed-Regular.ttf</string>
+		<string>SofiaSansCondensed-Medium.ttf</string>
+		<string>SofiaSansCondensed-SemiBold.ttf</string>
+		<string>SofiaSansCondensed-Bold.ttf</string>
+		<string>SofiaSansCondensed-ExtraBold.ttf</string>
+		<string>SofiaSansCondensed-Black.ttf</string>
+	</array>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>bluetooth-central</string>
