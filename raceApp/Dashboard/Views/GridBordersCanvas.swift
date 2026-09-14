@@ -44,8 +44,22 @@ struct GridBordersCanvas: View {
         .allowsHitTesting(false)
     }
 
+    /// The cell's edges, minus any that lie on the dashboard's outer edge —
+    /// the screen edge is the border there.
     private func cellPath(_ f: CGRect) -> Path {
-        geom.outerCorners(of: f).path(in: snapped(f))
+        let r = snapped(f)
+        let b = geom.bounds
+        let eps: CGFloat = 1.5
+        var path = Path()
+        func edge(_ a: CGPoint, _ c: CGPoint, outer: Bool) {
+            guard !outer else { return }
+            path.move(to: a); path.addLine(to: c)
+        }
+        edge(CGPoint(x: r.minX, y: r.minY), CGPoint(x: r.maxX, y: r.minY), outer: abs(f.minY - b.minY) < eps)
+        edge(CGPoint(x: r.minX, y: r.maxY), CGPoint(x: r.maxX, y: r.maxY), outer: abs(f.maxY - b.maxY) < eps)
+        edge(CGPoint(x: r.minX, y: r.minY), CGPoint(x: r.minX, y: r.maxY), outer: abs(f.minX - b.minX) < eps)
+        edge(CGPoint(x: r.maxX, y: r.minY), CGPoint(x: r.maxX, y: r.maxY), outer: abs(f.maxX - b.maxX) < eps)
+        return path
     }
 
     /// 1 pt lines centred on x.5 cover exactly one pixel row on 2x/3x screens.
