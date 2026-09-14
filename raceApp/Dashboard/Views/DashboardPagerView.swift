@@ -185,9 +185,8 @@ struct DashboardPagerView: View {
     /// much as the bar needs.
     private static func zoom(fullSize: CGSize, barTop: CGFloat, gridSafe: EdgeInsets, landscape: Bool) -> CGFloat {
         let gridTop = GridGeometry(available: fullSize, grid: .base, landscape: landscape, safe: gridSafe).bounds.minY
-        // Same in preview and edit, and enough for edit mode's remove badges
-        // (which hang ~17 pt above the grid) to clear the bar.
-        let gap: CGFloat = 24
+        // Same in preview and edit.
+        let gap: CGFloat = 12
         let z = (fullSize.height - barTop - gap) / max(1, fullSize.height - gridTop)
         return min(1, max(0.5, z))
     }
