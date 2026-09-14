@@ -55,6 +55,38 @@ struct LiveSnapshot: Equatable {
     var coarseTiming: Bool { (gpsAccuracy ?? 0) > 5 }
 }
 
+extension LiveSnapshot {
+    /// Plausible mid-session values for widget previews (library gallery,
+    /// thumbnails). Static — previews never animate.
+    static func demo(track: Track?) -> LiveSnapshot {
+        var s = LiveSnapshot()
+        s.rpm = 6240
+        s.speedDisplay = 84
+        s.speedMps = 37.5
+        s.throttle = 0.72
+        s.gear = 3
+        s.obdHz = 18
+        s.latG = 0.62
+        s.longG = -0.28
+        s.gCalibrated = true
+        s.combinedG = 0.68
+        s.peakG = 1.12
+        s.altitude = 812
+        s.heading = 214
+        s.gpsAccuracy = 3
+        if let pt = track?.centerline.dropFirst(40).first, pt.count == 2 {
+            s.gpsLat = pt[0]; s.gpsLon = pt[1]
+        }
+        s.lap = LapTimer.State(completedLaps: 2, currentLapTime: 141.34, lastLapTime: 134.43,
+                               bestLapTime: 131.34, lapTimes: [136.12, 131.34, 134.43])
+        s.delta = -0.34
+        s.trackId = track?.id
+        s.elapsed = 283
+        s.isRecording = true
+        return s
+    }
+}
+
 extension CLLocationCoordinate2D: @retroactive Equatable {
     public static func == (a: CLLocationCoordinate2D, b: CLLocationCoordinate2D) -> Bool {
         a.latitude == b.latitude && a.longitude == b.longitude

@@ -105,6 +105,10 @@ struct DashboardPagerView: View {
                         .tabViewStyle(.page(indexDisplayMode: .never))
                     }
 
+                    if mode.isRecording, edit == nil {
+                        RecordingIslandDot(safe: safe, size: fullSize, landscape: landscape)
+                    }
+
                     VStack(spacing: 6) {
                         healthPill
                         if let rejection = edit?.lastRejection {
@@ -247,5 +251,36 @@ struct DashboardPagerView: View {
         .background(Color.cardGray, in: Capsule())
         .padding(.top, 6)
         .allowsHitTesting(false)
+    }
+}
+
+/// A red dot beside the trailing end of the Dynamic Island while a session
+/// records — the same idea as the system's camera / mic dots. The island is
+/// a system layer above every app, so nothing we draw inside the pill shows;
+/// the dot sits just past its edge, on our own black. Island phones only
+/// (safe inset ≥ 50 pt).
+private struct RecordingIslandDot: View {
+    let safe: EdgeInsets
+    let size: CGSize
+    let landscape: Bool
+
+    /// Island: ~126 × 37 pt, centred, 11 pt from the sensor edge. The dot
+    /// sits 10 pt past its trailing end.
+    private static let halfLength: CGFloat = 63
+    private static let gap: CGFloat = 10
+
+    var body: some View {
+        if landscape ? safe.leading >= 50 : safe.top >= 50 {
+            let center: CGPoint = landscape
+                ? CGPoint(x: safe.leading / 2, y: size.height / 2 + Self.halfLength + Self.gap)
+                : CGPoint(x: size.width / 2 + Self.halfLength + Self.gap, y: safe.top / 2)
+            ZStack {
+                Circle().fill(Color.toolbarRed.opacity(0.35)).frame(width: 16, height: 16)
+                Circle().fill(Color.toolbarRed).frame(width: 7, height: 7)
+            }
+            .position(center)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+        }
     }
 }

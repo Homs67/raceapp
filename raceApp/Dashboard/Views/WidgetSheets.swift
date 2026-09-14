@@ -89,56 +89,104 @@ struct WidgetLibraryList: View {
     let mode: Mode
     let onDone: () -> Void
 
+    @AppStorage("useMetricUnits") private var metric = false
+
+    /// Preview cells are the real landscape cell size, scaled to the sheet.
+    private static let cell = CGSize(width: 191, height: 177)
+    private static let gap: CGFloat = 8
+    private static let margin: CGFloat = 16
+
     var body: some View {
-        List {
-            ForEach(WidgetCategory.allCases) { category in
-                let kinds = WidgetKind.library.filter { $0.category == category }
-                if !kinds.isEmpty {
-                    Section(category.title) {
-                        ForEach(kinds, id: \.self) { kind in
-                            row(kind)
+        let track = TrackDatabase.track(id: "big-willow") ?? TrackDatabase.all.first
+        let live = LiveSnapshot.demo(track: track)
+        let units = UnitsFormatter(metric: metric)
+        GeometryReader { geo in
+            let width = geo.size.width - 2 * Self.margin
+            ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
+                    ForEach(WidgetSize.allCases) { size in
+                        let kinds = WidgetKind.library.filter { $0.supportedSizes.contains(size) }
+                        if !kinds.isEmpty {
+                            section(size, kinds: kinds, width: width, live: live, units: units, track: track)
                         }
                     }
+                }
+                .padding(Self.margin)
+            }
+        }
+    }
+
+    private func section(_ size: WidgetSize, kinds: [WidgetKind], width: CGFloat,
+                         live: LiveSnapshot, units: UnitsFormatter, track: Track?) -> some View {
+        // Smalls sit two per row; medium and large take the full width.
+        let columns = size == .small ? 2 : 1
+        let cellW = Self.cell.width * CGFloat(size.span.cols)
+        let cellH = Self.cell.height * CGFloat(size.span.rows)
+        let previewW = (width - Self.gap * CGFloat(columns - 1)) / CGFloat(columns)
+        let scale = previewW / cellW
+        return VStack(alignment: .leading, spacing: 10) {
+            Text(size.label.uppercased())
+                .font(.sofia(14, .heavy)).kerning(1.5).foregroundStyle(Color.muted)
+            LazyVGrid(columns: Array(repeating: GridItem(.fixed(previewW), spacing: Self.gap), count: columns),
+                      alignment: .leading, spacing: Self.gap) {
+                ForEach(kinds, id: \.self) { kind in
+                    let fits = fitting(kind).contains(size)
+                    Button {
+                        if pick(kind, size) { onDone() }
+                    } label: {
+                        WidgetPreview(kind: kind, size: size, live: live, units: units, track: track,
+                                      nominal: CGSize(width: cellW, height: cellH), scale: scale)
+                    }
+                    .buttonStyle(PressableButtonStyle())
+                    .disabled(!fits)
+                    .opacity(fits ? 1 : 0.35)
+                    .accessibilityLabel("\(kind.title), \(size.label)\(fits ? "" : ", doesn't fit")")
                 }
             }
         }
     }
 
-    private func row(_ kind: WidgetKind) -> some View {
+    private func fitting(_ kind: WidgetKind) -> [WidgetSize] {
         let replacing: UUID? = { if case .replace(let id) = mode { return id } else { return nil } }()
-        let fitting = edit.fittingSizes(for: kind, replacing: replacing)
-        return VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 12) {
-                Image(systemName: kind.libraryIcon).foregroundStyle(Color.accent).frame(width: 24)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(kind.title).font(.system(size: 15, weight: .semibold))
-                    Text(kind.libraryDescription).font(.system(size: 12)).foregroundStyle(Color.muted)
-                }
-            }
-            HStack(spacing: 8) {
-                ForEach(kind.supportedSizes) { size in
-                    let fits = fitting.contains(size)
-                    Button(size.label) {
-                        let ok: Bool
-                        switch mode {
-                        case .insert(let index): ok = edit.add(kind: kind, size: size, at: index)
-                        case .replace(let id):
-                            ok = edit.replace(id: id, with: kind) && edit.resize(id: id, to: size)
-                        }
-                        if ok { onDone() }
-                    }
-                    .font(.system(size: 12, weight: .semibold))
-                    .padding(.horizontal, 10).padding(.vertical, 5)
-                    .background(fits ? Color.accent.opacity(0.18) : Color.cardGray, in: Capsule())
-                    .foregroundStyle(fits ? Color.accent : Color.mutedWeak)
-                    .disabled(!fits)
-                }
-                if fitting.isEmpty {
-                    Text("No room — remove or shrink a widget").font(.system(size: 11)).foregroundStyle(Color.muted)
-                }
-            }
-            .buttonStyle(.plain)
+        return edit.fittingSizes(for: kind, replacing: replacing)
+    }
+
+    private func pick(_ kind: WidgetKind, _ size: WidgetSize) -> Bool {
+        switch mode {
+        case .insert(let index): return edit.add(kind: kind, size: size, at: index)
+        case .replace(let id): return edit.replace(id: id, with: kind) && edit.resize(id: id, to: size)
         }
-        .padding(.vertical, 4)
+    }
+}
+
+/// One widget rendered exactly as it will appear on the dashboard, with demo
+/// data, scaled to the gallery column.
+private struct WidgetPreview: View {
+    let kind: WidgetKind
+    let size: WidgetSize
+    let live: LiveSnapshot
+    let units: UnitsFormatter
+    let track: Track?
+    let nominal: CGSize
+    let scale: CGFloat
+
+    var body: some View {
+        let placement = WidgetPlacement(kind: kind, size: size)
+        WidgetChrome(context: WidgetContext(
+            placement: placement,
+            contentSize: CGSize(width: nominal.width - 2 * WidgetMetrics.padding,
+                                height: nominal.height - 2 * WidgetMetrics.padding),
+            isLandscape: true, live: live, units: units, isEditing: false, track: track))
+        .frame(width: nominal.width, height: nominal.height)
+        .background(Color.black)
+        .clipShape(RoundedRectangle(cornerRadius: WidgetMetrics.outerCornerRadius / scale))
+        .overlay {
+            RoundedRectangle(cornerRadius: WidgetMetrics.outerCornerRadius / scale)
+                .stroke(Color.widgetBorder, lineWidth: WidgetMetrics.borderWidth / scale)
+        }
+        .scaleEffect(scale, anchor: .topLeading)
+        .frame(width: nominal.width * scale, height: nominal.height * scale, alignment: .topLeading)
+        .allowsHitTesting(false)
+        .contentShape(Rectangle())
     }
 }
