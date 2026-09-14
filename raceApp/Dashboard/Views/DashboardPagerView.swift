@@ -77,6 +77,12 @@ struct DashboardPagerView: View {
             let safe = outer.safeAreaInsets
             let fullSize = CGSize(width: outer.size.width + safe.leading + safe.trailing,
                                   height: outer.size.height + safe.top + safe.bottom)
+            // Under a nav bar (preview / edit) the grid is still laid out for
+            // the bare screen — the device insets, not the bar's — and the
+            // whole thing is zoomed out to clear the bar, like Home Screen
+            // jiggle mode. Nothing reflows; Done zooms it back.
+            let gridSafe = mode.isRecording ? safe : (DeviceSafeArea.insets() ?? safe)
+            let zoom = mode.isRecording ? 1 : max(0.5, (fullSize.height - safe.top) / fullSize.height)
             TimelineView(.periodic(from: .now, by: 0.1)) { context in
                 let track = model.metrics.track ?? previewTrack
                 // Editing or previewing without a session: show plausible
@@ -90,24 +96,34 @@ struct DashboardPagerView: View {
                 ZStack(alignment: .top) {
                     Color.black
 
-                    if let edit {
-                        DashboardGridView(dashboard: edit.working, live: live, track: track, units: units,
-                                          edit: edit, safeArea: safe)
-                    } else {
-                        TabView(selection: pageSelection) {
-                            ForEach(store.dashboards) { dashboard in
-                                DashboardGridView(dashboard: dashboard, live: live, track: track, units: units,
-                                                  onTap: { if mode.isRecording { toolbar.toggle() } },
-                                                  safeArea: safe)
-                                    .tag(Optional(dashboard.id))
-                                    .onLongPressGesture(minimumDuration: 0.5) {
-                                        guard !model.recording.isRecording else { return }
-                                        beginEditing(dashboard)
-                                    }
+                    Group {
+                        if let edit {
+                            // Same page host as the pager (one page, so nothing
+                            // to swipe), so the editor lays out identically.
+                            TabView {
+                                DashboardGridView(dashboard: edit.working, live: live, track: track, units: units,
+                                                  edit: edit, safeArea: gridSafe)
                             }
+                            .tabViewStyle(.page(indexDisplayMode: .never))
+                        } else {
+                            TabView(selection: pageSelection) {
+                                ForEach(store.dashboards) { dashboard in
+                                    DashboardGridView(dashboard: dashboard, live: live, track: track, units: units,
+                                                      onTap: { if mode.isRecording { toolbar.toggle() } },
+                                                      safeArea: gridSafe)
+                                        .tag(Optional(dashboard.id))
+                                        .onLongPressGesture(minimumDuration: 0.5) {
+                                            guard !model.recording.isRecording else { return }
+                                            beginEditing(dashboard)
+                                        }
+                                }
+                            }
+                            .tabViewStyle(.page(indexDisplayMode: .never))
                         }
-                        .tabViewStyle(.page(indexDisplayMode: .never))
                     }
+                    .frame(width: fullSize.width, height: fullSize.height)
+                    .scaleEffect(zoom, anchor: .bottom)
+                    .animation(.snappy(duration: 0.25), value: zoom)
 
                     if mode.isRecording, edit == nil {
                         RecordingIslandDot(safe: safe, size: fullSize, landscape: landscape)
@@ -286,5 +302,18 @@ private struct RecordingIslandDot: View {
             .allowsHitTesting(false)
             .accessibilityHidden(true)
         }
+    }
+}
+
+/// The screen's own safe area (notch, home indicator) regardless of any
+/// navigation bar above the current view.
+enum DeviceSafeArea {
+    @MainActor static func insets() -> EdgeInsets? {
+        let window = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows)
+            .first { $0.isKeyWindow }
+        guard let i = window?.safeAreaInsets else { return nil }
+        return EdgeInsets(top: i.top, leading: i.left, bottom: i.bottom, trailing: i.right)
     }
 }

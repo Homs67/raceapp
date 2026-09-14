@@ -106,6 +106,8 @@ struct DashboardGridView: View {
                 edit.presentLibrary(insertAtUnit: unit, stretched: stretched)
             }
         }
+        // The page host (UIKit) insets its content by the safe area; undo
+        // that so the grid gets the whole page and applies insets by value.
         .ignoresSafeArea()
     }
 
