@@ -26,15 +26,15 @@ enum WidgetCategory: String, CaseIterable, Identifiable {
 
 enum WidgetKind: String, CaseIterable {
     // Lap timing
-    case lapTime, lapDelta, lapMap, lastLap, bestLap, predictedLap, sectorDelta, lapCount, sessionTime
+    case lapTime, lapDelta, lapMap, lastLap, bestLap, sectorDelta, sessionTime
     // Engine / driver inputs
     case rpm, speed, gear, shiftLights, pedals, coolant
     // Dynamics
     case gForce
-    // Track / position
-    case trackMap, altitude, heading
+    // Position
+    case altitude, heading
     // Status
-    case status, raceBox
+    case status
     // Camera
     case camera
     // Placeholder for kinds a newer build wrote that this one doesn't know
@@ -46,10 +46,10 @@ enum WidgetKind: String, CaseIterable {
 
     /// Kinds offered in the library, in gallery order.
     static let library: [WidgetKind] = [
-        .lapTime, .lapDelta, .predictedLap, .sectorDelta, .lapMap, .lastLap, .bestLap, .lapCount, .sessionTime,
+        .lapTime, .lapDelta, .sectorDelta, .lapMap, .lastLap, .bestLap, .sessionTime,
         .rpm, .speed, .gear, .shiftLights, .pedals, .coolant,
-        .gForce, .trackMap, .altitude, .heading,
-        .status, .raceBox, .camera,
+        .gForce, .altitude, .heading,
+        .status, .camera,
     ]
 
     var title: String {
@@ -59,9 +59,7 @@ enum WidgetKind: String, CaseIterable {
         case .lapMap: return "Lap"
         case .lastLap: return "Last lap"
         case .bestLap: return "Best lap"
-        case .predictedLap: return "Predicted"
         case .sectorDelta: return "Sectors"
-        case .lapCount: return "Lap"
         case .sessionTime: return "Session"
         case .rpm: return "RPM"
         case .speed: return "Speed"
@@ -70,11 +68,9 @@ enum WidgetKind: String, CaseIterable {
         case .pedals: return "Pedals"
         case .coolant: return "Coolant"
         case .gForce: return "G-Force"
-        case .trackMap: return "Track"
         case .altitude: return "Altitude"
         case .heading: return "Heading"
         case .status: return "Status"
-        case .raceBox: return "RaceBox"
         case .camera: return "Camera"
         case .unknown: return "Unavailable"
         case .empty: return ""
@@ -83,21 +79,20 @@ enum WidgetKind: String, CaseIterable {
 
     var category: WidgetCategory {
         switch self {
-        case .lapTime, .lapDelta, .lapMap, .lastLap, .bestLap, .predictedLap, .sectorDelta, .lapCount, .sessionTime:
+        case .lapTime, .lapDelta, .lapMap, .lastLap, .bestLap, .sectorDelta, .sessionTime:
             return .lapTiming
         case .rpm, .speed, .gear, .shiftLights, .pedals, .coolant: return .engine
         case .gForce: return .dynamics
-        case .trackMap, .altitude, .heading: return .navigation
-        case .status, .raceBox, .unknown, .empty: return .status
+        case .altitude, .heading: return .navigation
+        case .status, .unknown, .empty: return .status
         case .camera: return .camera
         }
     }
 
     var supportedSizes: [WidgetSize] {
         switch self {
-        case .lapTime, .lapMap, .trackMap: return [.small, .medium, .large]
-        case .lapDelta, .lastLap, .bestLap, .predictedLap, .lapCount, .sessionTime,
-             .rpm, .speed, .pedals, .raceBox: return [.small, .medium]
+        case .lapTime, .lapMap: return [.small, .medium, .large]
+        case .lapDelta, .lastLap, .bestLap, .sessionTime, .rpm, .speed, .pedals: return [.small, .medium]
         case .sectorDelta, .shiftLights: return [.medium]
         case .gForce: return [.medium, .large]
         case .gear, .coolant, .altitude, .heading, .status: return [.small]
@@ -109,7 +104,7 @@ enum WidgetKind: String, CaseIterable {
 
     var defaultSize: WidgetSize {
         switch self {
-        case .lapTime, .lapDelta, .predictedLap, .sectorDelta, .rpm, .speed, .shiftLights, .gForce: return .medium
+        case .lapTime, .lapDelta, .sectorDelta, .rpm, .speed, .shiftLights, .gForce: return .medium
         case .camera: return .large
         default: return .small
         }
@@ -120,7 +115,7 @@ enum WidgetKind: String, CaseIterable {
     /// bigger text).
     var isHero: Bool {
         switch self {
-        case .lapTime, .lapDelta, .predictedLap, .rpm, .speed: return true
+        case .lapTime, .lapDelta, .rpm, .speed: return true
         default: return false
         }
     }
@@ -128,7 +123,7 @@ enum WidgetKind: String, CaseIterable {
     /// Widest string a hero can show, for the fits-at-100-pt check.
     var heroTemplate: String {
         switch self {
-        case .lapTime, .predictedLap: return "0:00.00"
+        case .lapTime: return "0:00.00"
         case .lapDelta: return "+00.00"
         case .rpm: return "0000"
         case .speed: return "000"

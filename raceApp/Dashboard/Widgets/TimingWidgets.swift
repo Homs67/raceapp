@@ -2,21 +2,11 @@
 //  TimingWidgets.swift
 //  raceApp
 //
-//  Predicted lap, sector deltas, lap count and session time.
+//  Sector deltas and session time.
 //
 
 import SwiftUI
 import SessionKit
-
-/// Best lap + live delta. Hero at medium; "—:—" until there is a best lap.
-struct PredictedLapWidget: View {
-    let context: WidgetContext
-
-    var body: some View {
-        // A 100 pt "0:00.00" fills a medium cell; nothing else fits beside it.
-        WidgetValue(text: LapTimeFormat.string(context.live.predictedLap), context: context)
-    }
-}
 
 /// Three equal-distance sectors; completed ones hold their delta, the current
 /// one runs live and is drawn brighter.
@@ -43,28 +33,6 @@ struct SectorDeltaWidget: View {
     private func deltaColor(_ value: TimeInterval?, dimmed: Bool) -> Color {
         guard let value else { return .white.opacity(dimmed ? 0.2 : 0.35) }
         return value <= 0 ? Color.deltaGreen : Color.toolbarRed
-    }
-}
-
-/// Plain lap number — the map lives in `lapMap`.
-struct LapCountWidget: View {
-    let context: WidgetContext
-
-    var body: some View {
-        let lap = context.live.lap
-        switch context.size {
-        case .medium:
-            HStack(alignment: .bottom, spacing: 16) {
-                WidgetValue(text: "\(lap.completedLaps + 1)", context: context)
-                VStack(alignment: .leading, spacing: 2) {
-                    WidgetCaption(text: "completed")
-                    WidgetSecondaryValue(text: "\(lap.completedLaps)", color: .white.opacity(0.5))
-                }
-                Spacer(minLength: 0)
-            }
-        default:
-            WidgetValue(text: "\(lap.completedLaps + 1)", context: context)
-        }
     }
 }
 

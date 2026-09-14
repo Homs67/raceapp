@@ -31,31 +31,3 @@ struct StatusWidget: View {
     }
 }
 
-struct RaceBoxWidget: View {
-    let context: WidgetContext
-
-    var body: some View {
-        let rb = context.live.raceBox
-        switch context.size {
-        case .medium:
-            HStack(alignment: .bottom, spacing: 24) {
-                column("sats", rb.map { "\($0.satellites)" } ?? "—")
-                column("fix", rb.map { $0.has3DFix ? "3D" : "—" } ?? "—")
-                column("power", rb?.powerText ?? "—")
-                Spacer(minLength: 0)
-            }
-        default:
-            HStack(alignment: .lastTextBaseline, spacing: 8) {
-                WidgetSecondaryValue(text: rb.map { "\($0.satellites)" } ?? "—")
-                WidgetCaption(text: rb == nil ? "not linked" : (rb!.has3DFix ? "sats · 3D" : "sats · no fix"))
-            }
-        }
-    }
-
-    private func column(_ name: String, _ value: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            WidgetCaption(text: name)
-            WidgetSecondaryValue(text: value)
-        }
-    }
-}

@@ -56,11 +56,6 @@ struct LiveSnapshot: Equatable {
     var sectorDeltas: [TimeInterval?] = [nil, nil, nil]
     var currentSector = 0
     var currentSectorDelta: TimeInterval?
-    /// Best lap + live delta: where this lap lands if the rest matches the best.
-    var predictedLap: TimeInterval? {
-        guard let best = lap.bestLapTime, let delta else { return nil }
-        return best + delta
-    }
 
     // RaceBox link
     var raceBox: RaceBoxLink?

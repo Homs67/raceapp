@@ -2,23 +2,10 @@
 //  TrackWidgets.swift
 //  raceApp
 //
-//  Map-only track view, altitude, heading.
+//  Altitude and heading.
 //
 
 import SwiftUI
-
-struct TrackMapWidget: View {
-    let context: WidgetContext
-
-    var body: some View {
-        if let track = context.track {
-            TrackMapCanvas(track: track, position: context.live.position, style: .outline, padding: 4)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else {
-            WidgetCaption(text: "no track")
-        }
-    }
-}
 
 struct AltitudeWidget: View {
     let context: WidgetContext
