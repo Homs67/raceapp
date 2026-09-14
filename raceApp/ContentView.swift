@@ -44,12 +44,15 @@ struct ContentView: View {
     var body: some View {
         SessionsView()
             .tint(Color.accent)
+            // The live dashboard is up for exactly as long as a session records;
+            // the only way out is STOP.
             .fullScreenCover(isPresented: Binding(
-                get: { model.dashboardExpanded && model.recording.isRecording },
-                set: { if !$0 { model.dashboardExpanded = false } }
+                get: { model.recording.isRecording },
+                set: { _ in }
             )) {
-                DashboardPagerView(mode: .recording(onCollapse: { model.dashboardExpanded = false }))
+                DashboardPagerView(mode: .recording)
                     .environment(model)
+                    .interactiveDismissDisabled()
             }
             .sheet(isPresented: Binding(
                 get: { model.showSettings },

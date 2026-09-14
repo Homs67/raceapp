@@ -25,10 +25,13 @@ final class DashboardEditController {
     enum Sheet: Identifiable, Equatable {
         case options(UUID)
         case library(insertAt: Int)
+        /// Fill a hole: the library replaces the placeholder in place.
+        case fill(UUID)
         var id: String {
             switch self {
             case .options(let id): return "options-\(id)"
             case .library(let i): return "library-\(i)"
+            case .fill(let id): return "fill-\(id)"
             }
         }
     }
@@ -51,10 +54,20 @@ final class DashboardEditController {
 
     // MARK: - Mutations
 
+    /// Removing leaves a hole the same size, so nothing else moves. Holes
+    /// at the end of the list are dropped when editing finishes.
     func remove(id: UUID) {
+        guard let i = working.placements.firstIndex(where: { $0.id == id }) else { return }
         withAnimation(.snappy(duration: 0.25)) {
-            working.placements.removeAll { $0.id == id }
+            working.placements[i] = WidgetPlacement(kind: .empty, size: working.placements[i].size)
         }
+    }
+
+    /// Working copy without trailing holes — what gets saved.
+    var trimmed: Dashboard {
+        var d = working
+        while d.placements.last?.kind == .empty { d.placements.removeLast() }
+        return d
     }
 
     @discardableResult
@@ -193,7 +206,11 @@ final class DashboardEditController {
 
     func presentOptions(for id: UUID) {
         guard dragging == nil else { return }
-        sheet = .options(id)
+        if working.placements.first(where: { $0.id == id })?.kind == .empty {
+            sheet = .fill(id)
+        } else {
+            sheet = .options(id)
+        }
     }
 
     func presentLibrary(insertAtUnit unit: (x: Double, y: Double), stretched: [UUID: UnitRect]) {

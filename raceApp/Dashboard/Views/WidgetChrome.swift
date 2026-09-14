@@ -15,6 +15,14 @@ struct WidgetChrome: View {
     var title: String?
 
     var body: some View {
+        if context.kind == .empty {
+            Color.clear
+        } else {
+            chrome
+        }
+    }
+
+    private var chrome: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(title ?? context.kind.title)
                 .font(WidgetMetrics.titleFont)
@@ -64,6 +72,7 @@ struct WidgetView: View {
         case .raceBox: RaceBoxWidget(context: context)
         case .camera: CameraWidget(context: context)
         case .unknown: WidgetValue(text: "—", context: context)
+        case .empty: Color.clear
         }
     }
 }

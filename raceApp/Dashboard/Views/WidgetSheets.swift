@@ -67,12 +67,12 @@ struct WidgetOptionsSheet: View {
 
 struct WidgetLibrarySheet: View {
     let edit: DashboardEditController
-    let insertAt: Int
+    let mode: WidgetLibraryList.Mode
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
-            WidgetLibraryList(edit: edit, mode: .insert(insertAt)) { dismiss() }
+            WidgetLibraryList(edit: edit, mode: mode) { dismiss() }
                 .navigationTitle("Add widget")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }

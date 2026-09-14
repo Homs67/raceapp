@@ -28,8 +28,6 @@ final class AppModel {
     /// When Always Location is unavailable, keep the screen awake for the
     /// active session so iOS cannot suspend phone-only capture.
     private(set) var forceScreenAwakeForSession = false
-    /// Full-screen live dashboard is expanded over Sessions (wireframe).
-    var dashboardExpanded = false
     /// Settings / Debug sheets presented from Sessions toolbar.
     var showSettings = false
     var showDebug = false
@@ -67,7 +65,6 @@ final class AppModel {
             self?.metrics.stop()
             self?.sensors.endRecordingActivity()
             self?.forceScreenAwakeForSession = false
-            self?.dashboardExpanded = false
             self?.applyRecordingIdlePolicy()
             self?.connection.recordingDidEnd() // CAN stream (if any) → OBD polling
         }
@@ -167,7 +164,6 @@ final class AppModel {
             if started {
                 sensors.beginRecordingActivity()
                 applyRecordingIdlePolicy()
-                dashboardExpanded = true
                 connection.recordingDidStart() // CAN stream if enabled + mapped
             } else {
                 forceScreenAwakeForSession = false

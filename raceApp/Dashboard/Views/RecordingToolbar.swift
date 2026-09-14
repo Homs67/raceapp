@@ -3,9 +3,8 @@
 //  raceApp
 //
 //  Figma 125:4672 — top-edge toolbar revealed by tapping the dashboard while
-//  recording: red dot + HH:MM:SS, page pills, STOP. Nothing else lives here;
-//  the camera and collapse controls moved to the camera widget and to a
-//  swipe-down on this bar respectively.
+//  recording: red dot + HH:MM:SS, page pills, STOP. Nothing else lives here —
+//  there is no way to leave the live dashboard except stopping the session.
 //
 
 import SwiftUI
@@ -53,13 +52,10 @@ struct RecordingToolbar: View {
     let pageCount: Int
     let onStop: () -> Void
     let onInteract: () -> Void
-    let onCollapse: () -> Void
     /// Landscape: one row along the top edge (Figma). Portrait: rises from
     /// the bottom, pills centred under the timer / STOP row.
     var edge: Edge = .top
     var safeBottom: CGFloat = 0
-
-    @State private var dragOffset: CGFloat = 0
 
     var body: some View {
         ZStack(alignment: edge == .top ? .top : .bottom) {
@@ -98,20 +94,6 @@ struct RecordingToolbar: View {
         }
         .frame(maxWidth: .infinity, alignment: edge == .top ? .top : .bottom)
         .contentShape(Rectangle())
-        .offset(y: max(0, dragOffset))
-        .gesture(
-            DragGesture(minimumDistance: 24)
-                .onChanged { value in
-                    onInteract()
-                    if value.translation.height > 0 { dragOffset = value.translation.height }
-                }
-                .onEnded { value in
-                    withAnimation(.easeOut(duration: 0.2)) { dragOffset = 0 }
-                    if value.translation.height > 120 || value.predictedEndTranslation.height > 220 {
-                        onCollapse()
-                    }
-                }
-        )
     }
 
     private var timer: some View {

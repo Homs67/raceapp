@@ -22,10 +22,6 @@ struct SessionsView: View {
     @State private var isSelecting = false
     @State private var selectedIds: Set<UUID> = []
 
-    private var showMiniPlayer: Bool {
-        model.recording.isRecording && !model.dashboardExpanded
-    }
-
     private var obdConnected: Bool {
         model.connection.adapterLinkUp
     }
@@ -143,18 +139,11 @@ struct SessionsView: View {
                     SessionDetailView(sessionId: id)
                 }
                 .safeAreaInset(edge: .bottom, spacing: 0) {
-                    if showMiniPlayer {
-                        RecordingMiniPlayer(
-                            onExpand: { model.dashboardExpanded = true },
-                            metric: metric
-                        )
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                    } else if !model.recording.isRecording && !isSelecting {
+                    if !model.recording.isRecording && !isSelecting {
                         idleBottomChrome
                             .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
                 }
-                .animation(.easeInOut(duration: 0.22), value: showMiniPlayer)
                 .animation(.easeInOut(duration: 0.22), value: model.recording.isRecording)
                 .animation(.easeInOut(duration: 0.2), value: isSelecting)
             }
@@ -361,101 +350,6 @@ private struct OBDConnectionStatusBar: View {
 
     private var barColor: Color {
         anyLink ? .black : .accent
-    }
-}
-
-// MARK: - Recording mini-player
-
-private struct RecordingMiniPlayer: View {
-    @Environment(AppModel.self) private var model
-    var onExpand: () -> Void
-    var metric: Bool
-
-    var body: some View {
-        TimelineView(.periodic(from: .now, by: 0.25)) { context in
-            let elapsed = model.recording.startedAt.map { context.date.timeIntervalSince($0) } ?? 0
-
-            VStack(spacing: 0) {
-                Button(action: onExpand) {
-                    Image(systemName: "chevron.compact.up")
-                        .font(.system(size: 22, weight: .semibold))
-                        .foregroundStyle(Color.mutedWeak)
-                        .frame(maxWidth: .infinity)
-                        .padding(.top, 6)
-                        .padding(.bottom, 4)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Expand dashboard")
-
-                HStack(alignment: .center, spacing: 16) {
-                    Button(action: onExpand) {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(title)
-                                .font(.system(size: 17, weight: .semibold))
-                                .foregroundStyle(Color.textPrimary)
-                                .lineLimit(1)
-                            Text(distanceText)
-                                .font(.system(size: 13))
-                                .foregroundStyle(Color.muted)
-                                .lineLimit(1)
-                            Text(SessionElapsedFormat.formatLong(elapsed))
-                                .font(.numeral(20, weight: .semibold))
-                                .monospacedDigit()
-                                .foregroundStyle(Color.recordRed)
-                                .padding(.top, 4)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityHidden(true)
-
-                    SessionStopButton(size: 56)
-                }
-                .padding(.horizontal, 18)
-                .padding(.bottom, 14)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background { recordingBannerBackground }
-            .overlay(
-                RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .stroke(Color.white.opacity(0.12), lineWidth: 1)
-            )
-            .padding(.horizontal, 16)
-            .padding(.top, 6)
-            .padding(.bottom, 4)
-        }
-    }
-
-    private var recordingBannerBackground: some View {
-        let shape = RoundedRectangle(cornerRadius: 22, style: .continuous)
-        return ZStack {
-            if #available(iOS 26.0, *) {
-                shape.fill(.clear)
-                    .glassEffect(.regular, in: shape)
-            } else {
-                shape.fill(.ultraThinMaterial)
-            }
-            // Keep the banner predominantly dark (at least 50% black).
-            shape.fill(Color.black.opacity(0.55))
-        }
-    }
-
-    private var activeRecording: SessionManifest? {
-        model.store.list().first { $0.status == .recording }
-    }
-
-    private var title: String {
-        model.recording.liveLocationName
-            ?? activeRecording?.locationName
-            ?? "Locating…"
-    }
-
-    private var distanceText: String {
-        let units = UnitsFormatter(metric: metric)
-        let distance = units.distance(fromMeters: model.recording.liveDistanceMeters)
-        return String(format: "%.1f %@", distance, units.distanceUnit.lowercased())
     }
 }
 

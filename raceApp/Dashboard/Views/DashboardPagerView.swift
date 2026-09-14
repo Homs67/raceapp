@@ -13,7 +13,7 @@ import SessionKit
 struct DashboardPagerView: View {
 
     enum Mode {
-        case recording(onCollapse: () -> Void)
+        case recording
         case preview(dashboardId: UUID, startEditing: Bool, onClose: () -> Void)
 
         var isRecording: Bool { if case .recording = self { return true } else { return false } }
@@ -57,7 +57,8 @@ struct DashboardPagerView: View {
             if let edit {
                 switch sheet {
                 case .options(let id): WidgetOptionsSheet(edit: edit, placementId: id)
-                case .library(let index): WidgetLibrarySheet(edit: edit, insertAt: index)
+                case .library(let index): WidgetLibrarySheet(edit: edit, mode: .insert(index))
+                case .fill(let id): WidgetLibrarySheet(edit: edit, mode: .replace(id))
                 }
             }
         }
@@ -147,14 +148,13 @@ struct DashboardPagerView: View {
                     }
                     .padding(.top, safe.top)
 
-                    if case .recording(let onCollapse) = mode, edit == nil, toolbar.visible {
+                    if mode.isRecording, edit == nil, toolbar.visible {
                         RecordingToolbar(
                             elapsed: live.elapsed,
                             pageIndex: store.selectedIndex,
                             pageCount: store.dashboards.count,
                             onStop: { model.stopRecording() },
                             onInteract: { toolbar.touch() },
-                            onCollapse: onCollapse,
                             edge: landscape ? .top : .bottom,
                             safeBottom: safe.bottom)
                         .frame(maxHeight: .infinity, alignment: landscape ? .top : .bottom)
@@ -266,7 +266,7 @@ struct DashboardPagerView: View {
 
     private func finishEditing() {
         guard let edit else { return }
-        model.dashboards.update(edit.working)
+        model.dashboards.update(edit.trimmed)
         withAnimation(.snappy(duration: 0.25)) { self.edit = nil }
     }
 

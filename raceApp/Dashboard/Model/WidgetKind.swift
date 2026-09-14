@@ -39,6 +39,10 @@ enum WidgetKind: String, CaseIterable {
     case camera
     // Placeholder for kinds a newer build wrote that this one doesn't know
     case unknown
+    /// A hole left where a widget was removed: keeps every other widget in
+    /// place until the user moves something. Renders as nothing; in edit
+    /// mode it's an add target.
+    case empty
 
     /// Kinds offered in the library, in gallery order.
     static let library: [WidgetKind] = [
@@ -73,6 +77,7 @@ enum WidgetKind: String, CaseIterable {
         case .raceBox: return "RaceBox"
         case .camera: return "Camera"
         case .unknown: return "Unavailable"
+        case .empty: return ""
         }
     }
 
@@ -83,7 +88,7 @@ enum WidgetKind: String, CaseIterable {
         case .rpm, .speed, .gear, .shiftLights, .pedals, .coolant: return .engine
         case .gForce: return .dynamics
         case .trackMap, .altitude, .heading: return .navigation
-        case .status, .raceBox, .unknown: return .status
+        case .status, .raceBox, .unknown, .empty: return .status
         case .camera: return .camera
         }
     }
@@ -98,6 +103,7 @@ enum WidgetKind: String, CaseIterable {
         case .gear, .coolant, .altitude, .heading, .status: return [.small]
         case .camera: return [.large]
         case .unknown: return [.small]
+        case .empty: return WidgetSize.allCases
         }
     }
 
