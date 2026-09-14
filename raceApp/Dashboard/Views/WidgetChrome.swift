@@ -27,7 +27,7 @@ struct WidgetChrome: View {
             WidgetView(context: context)
                 .frame(maxWidth: .infinity, alignment: .bottomLeading)
         }
-        .padding(WidgetMetrics.padding)
+        .padding(context.contentInsets)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .clipped()
         .contentShape(Rectangle())

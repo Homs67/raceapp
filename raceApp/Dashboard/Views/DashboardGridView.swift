@@ -49,10 +49,12 @@ struct DashboardGridView: View {
                             ? edit!.dragging!.origin.offsetBy(dx: edit!.dragging!.translation.width,
                                                               dy: edit!.dragging!.translation.height)
                             : frame
+                        let insets = Self.contentInsets(for: frame, screen: size, safe: safeArea)
                         WidgetChrome(context: WidgetContext(
                             placement: placement,
-                            contentSize: CGSize(width: frame.width - 2 * WidgetMetrics.padding,
-                                                height: frame.height - 2 * WidgetMetrics.padding),
+                            contentSize: CGSize(width: frame.width - insets.leading - insets.trailing,
+                                                height: frame.height - insets.top - insets.bottom),
+                            contentInsets: insets,
                             isLandscape: landscape, live: live, units: units,
                             isEditing: edit != nil, track: track))
                         .frame(width: frame.width, height: frame.height)
@@ -108,6 +110,21 @@ struct DashboardGridView: View {
             }
         }
         .frame(width: size.width, height: size.height)
+    }
+
+    /// 16 pt all round, plus the display-corner allowance on a side where the
+    /// cell meets the glass in a corner — i.e. it touches that side edge with
+    /// no safe inset there, and also the top or bottom edge.
+    static func contentInsets(for frame: CGRect, screen: CGSize, safe: EdgeInsets) -> EdgeInsets {
+        let p = WidgetMetrics.padding
+        let eps: CGFloat = 1.5
+        let touchesTopOrBottom = frame.minY < eps || abs(frame.maxY - screen.height) < eps
+        let leftCorner = frame.minX < eps && safe.leading < eps && touchesTopOrBottom
+        let rightCorner = abs(frame.maxX - screen.width) < eps && safe.trailing < eps && touchesTopOrBottom
+        return EdgeInsets(top: p,
+                          leading: p + (leftCorner ? WidgetMetrics.displayCornerAllowance : 0),
+                          bottom: p,
+                          trailing: p + (rightCorner ? WidgetMetrics.displayCornerAllowance : 0))
     }
 
     private func editGesture(for placement: WidgetPlacement, edit: DashboardEditController,

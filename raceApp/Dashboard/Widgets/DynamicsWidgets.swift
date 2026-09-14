@@ -53,7 +53,7 @@ struct GForceWidget: View {
 
     private func row(_ name: String, _ g: Double?) -> some View {
         HStack(alignment: .lastTextBaseline, spacing: 8) {
-            WidgetCaption(text: name).frame(width: 44, alignment: .leading)
+            WidgetCaption(text: name).frame(width: 66, alignment: .leading)
             WidgetSecondaryValue(text: g.map { String(format: "%.2f", abs($0)) } ?? "—")
         }
     }

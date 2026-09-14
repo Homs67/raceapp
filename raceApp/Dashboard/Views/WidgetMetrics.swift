@@ -12,6 +12,14 @@ import UIKit
 
 enum WidgetMetrics {
     static let padding: CGFloat = 16
+    /// Hard floor for any text inside a widget. Something that needs to be
+    /// quieter gets a lighter weight, never a smaller size.
+    static let minTextSize: CGFloat = 21
+    /// Extra horizontal content inset for cells that sit in a corner of the
+    /// display with nothing between them and the rounded glass. The border
+    /// still starts at the edge; only the content moves in. iPhone corners
+    /// are ~55 pt: at 16 pt from the top the curve intrudes ~16 pt.
+    static let displayCornerAllowance: CGFloat = 24
     static let titleSize: CGFloat = 21
     static let heroValueSize: CGFloat = 100
     static let valueSize: CGFloat = 48
@@ -66,6 +74,10 @@ enum WidgetMetrics {
 struct WidgetContext {
     let placement: WidgetPlacement
     let contentSize: CGSize
+    /// Chrome padding for this cell — 16 pt plus the display-corner allowance
+    /// on sides that meet the glass in a corner.
+    var contentInsets = EdgeInsets(top: WidgetMetrics.padding, leading: WidgetMetrics.padding,
+                                   bottom: WidgetMetrics.padding, trailing: WidgetMetrics.padding)
     let isLandscape: Bool
     let live: LiveSnapshot
     let units: UnitsFormatter
@@ -112,12 +124,12 @@ struct WidgetSecondaryValue: View {
     }
 }
 
-/// Small caption in the title style at a smaller size, for "vs best" etc.
+/// Quiet caption for "vs best" etc.: the minimum size, lighter weight.
 struct WidgetCaption: View {
     let text: String
     var body: some View {
         Text(text)
-            .font(.sofia(14, .heavy))
+            .font(.sofia(WidgetMetrics.minTextSize, .regular))
             .kerning(1.5)
             .textCase(.uppercase)
             .foregroundStyle(.white.opacity(0.45))

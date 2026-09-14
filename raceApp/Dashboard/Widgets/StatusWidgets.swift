@@ -21,7 +21,7 @@ struct StatusWidget: View {
 
     private func line(_ name: String, _ value: String) -> some View {
         HStack(alignment: .lastTextBaseline, spacing: 8) {
-            WidgetCaption(text: name).frame(width: 40, alignment: .leading)
+            WidgetCaption(text: name).frame(width: 56, alignment: .leading)
             Text(value)
                 .font(.sofiaNumeral(24, .bold))
                 .kerning(WidgetMetrics.valueKerning)

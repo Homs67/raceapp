@@ -23,7 +23,7 @@ struct LapTimeWidget: View {
                     ForEach(Array(lap.lapTimes.suffix(3).enumerated().reversed()), id: \.offset) { i, t in
                         HStack(alignment: .lastTextBaseline, spacing: 10) {
                             WidgetCaption(text: "L\(lap.lapTimes.count - (lap.lapTimes.suffix(3).count - 1 - i))")
-                                .frame(width: 32, alignment: .leading)
+                                .frame(width: 44, alignment: .leading)
                             WidgetSecondaryValue(text: LapTimeFormat.string(t),
                                                  color: t == lap.bestLapTime ? Color.deltaGreen : .white.opacity(0.9))
                         }
