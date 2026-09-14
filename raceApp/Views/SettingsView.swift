@@ -9,6 +9,7 @@
 import SwiftUI
 import ObdKit
 import SessionKit
+import RaceBoxKit
 
 struct SettingsView: View {
     @Environment(AppModel.self) private var model
@@ -31,6 +32,7 @@ struct SettingsView: View {
                     .listRowBackground(Color.clear)
 
                 adapterSection
+                raceBoxSection
                 preferencesSection
                 generalSettingsSection
                 experimentalSection
@@ -293,6 +295,97 @@ struct SettingsView: View {
         }
     }
 
+    // MARK: - RaceBox
+
+    private var raceBoxSection: some View {
+        Section {
+            raceBoxStatusCard
+        } header: {
+            HStack {
+                Text("RaceBox")
+                Spacer()
+                NavigationLink {
+                    RaceBoxDebugView()
+                } label: {
+                    Text("Signals")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(Color.accentCyan)
+                }
+            }
+            .textCase(nil)
+        }
+        .listRowBackground(Color.cardBg)
+    }
+
+    @ViewBuilder
+    private var raceBoxStatusCard: some View {
+        let rb = model.raceBox
+        switch rb.state {
+        case .connected:
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    Image(systemName: "location.north.line.fill")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(connectedGreen)
+                    Text("Connected to \(rb.deviceInfo?.displayName ?? rb.storedDeviceName ?? "RaceBox")")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(Color.textPrimary)
+                }
+                if let msg = rb.latest {
+                    Text(msg.hasValidFix ? "\(msg.satellites) satellites · 3D fix" : "\(msg.satellites) satellites · waiting for fix")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Color.muted)
+                }
+                Button("Disconnect") { rb.forget() }
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(Color.recordRed)
+                    .frame(maxWidth: .infinity)
+                    .buttonStyle(.borderless)
+            }
+            .padding(.vertical, 2)
+        case .scanning:
+            statusRow(icon: nil, text: "Finding a RaceBox…", dimmed: true, progress: true)
+            ForEach(rb.discovered) { device in
+                Button(device.name) { rb.select(device) }
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(Color.accent)
+                    .buttonStyle(.borderless)
+            }
+            Button("Cancel") { rb.disconnect() }
+                .font(.system(size: 13))
+                .foregroundStyle(Color.muted)
+                .buttonStyle(.borderless)
+        case .connecting(let name):
+            statusRow(icon: nil, text: "Connecting to \(name)…", dimmed: true, progress: true)
+        case .failed(let reason):
+            statusRow(icon: "exclamationmark.triangle", text: "Failed — \(reason)", dimmed: true)
+            Button("Retry") { rb.start() }
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(Color.accent)
+                .buttonStyle(.borderless)
+        case .idle:
+            if let name = rb.storedDeviceName {
+                statusRow(icon: "location.slash", text: "Not connected — \(name)", dimmed: true)
+                HStack {
+                    Button("Connect") { rb.start() }
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(Color.accent)
+                    Spacer()
+                    Button("Forget") { rb.forget() }
+                        .font(.system(size: 13))
+                        .foregroundStyle(Color.muted)
+                }
+                .buttonStyle(.borderless)
+            } else {
+                statusRow(icon: "location.slash", text: "No RaceBox paired — optional 25 Hz GPS", dimmed: true)
+                Button("Find RaceBox") { rb.start() }
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(Color.accent)
+                    .buttonStyle(.borderless)
+            }
+        }
+    }
+
     // MARK: - Preferences
 
     private var preferencesSection: some View {
@@ -386,22 +479,6 @@ struct SettingsView: View {
                     }
                 } icon: {
                     Image(systemName: "waveform.badge.magnifyingglass")
-                        .foregroundStyle(Color.accent)
-                }
-            }
-            NavigationLink {
-                RaceBoxDebugView()
-            } label: {
-                Label {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("RaceBox (beta)")
-                            .font(.system(size: 15))
-                        Text("25 Hz GPS + car-mounted G — verify every signal")
-                            .font(.system(size: 11))
-                            .foregroundStyle(Color.muted)
-                    }
-                } icon: {
-                    Image(systemName: "location.north.line.fill")
                         .foregroundStyle(Color.accent)
                 }
             }

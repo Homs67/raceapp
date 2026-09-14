@@ -28,8 +28,13 @@ final class DashboardStore {
     /// Old faces preference — meaningless now; removed on first load.
     private static let legacyFaceKey = "dashboardFace"
 
+    /// Bumped when a new default dashboard should be offered to existing
+    /// installs (appended once, never replacing what the user built).
+    private static let seedVersion = 2
+
     private struct File: Codable {
         var schemaVersion: Int
+        var seedVersion: Int?
         var selectedId: UUID?
         var dashboards: [Dashboard]
     }
@@ -129,6 +134,13 @@ final class DashboardStore {
             }
             selectedId = file.selectedId.flatMap { id in dashboards.contains { $0.id == id } ? id : nil }
                 ?? dashboards.first?.id
+            if (file.seedVersion ?? 1) < Self.seedVersion {
+                // v2 added Driving: give it to installs seeded before it.
+                if !dashboards.contains(where: { $0.name == "Driving" }), dashboards.count < Dashboard.maxCount {
+                    dashboards.append(Dashboard.driving())
+                }
+                save()
+            }
         } else {
             dashboards = Self.seed()
             selectedId = dashboards.first?.id
@@ -140,7 +152,8 @@ final class DashboardStore {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
-        let file = File(schemaVersion: Self.schemaVersion, selectedId: selectedId, dashboards: dashboards)
+        let file = File(schemaVersion: Self.schemaVersion, seedVersion: Self.seedVersion,
+                        selectedId: selectedId, dashboards: dashboards)
         do {
             try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(),
                                                     withIntermediateDirectories: true)

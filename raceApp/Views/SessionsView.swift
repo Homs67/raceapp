@@ -30,10 +30,14 @@ struct SessionsView: View {
         model.connection.adapterLinkUp
     }
 
+    private var raceBoxConnected: Bool {
+        model.raceBox.state == .connected
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             if path.isEmpty {
-                OBDConnectionStatusBar(connected: obdConnected) {
+                OBDConnectionStatusBar(connected: obdConnected, raceBox: raceBoxConnected) {
                     model.showSettings = true
                 }
             }
@@ -311,21 +315,34 @@ private struct SessionDateSection: Identifiable {
 
 private struct OBDConnectionStatusBar: View {
     var connected: Bool
+    var raceBox = false
     var onTapDisconnected: () -> Void
 
     private let connectedGreen = Color(hex: 0x30D158)
+
+    /// Any live link keeps the bar dark; only "nothing connected" goes orange.
+    private var anyLink: Bool { connected || raceBox }
+
+    private var text: String {
+        switch (connected, raceBox) {
+        case (true, true): return "OBD II + RaceBox connected"
+        case (true, false): return "OBD II connected"
+        case (false, true): return "RaceBox connected · no OBD II"
+        case (false, false): return "OBD II is not connected"
+        }
+    }
 
     var body: some View {
         Button {
             if !connected { onTapDisconnected() }
         } label: {
             HStack(spacing: 8) {
-                Image(systemName: connected ? "wifi" : "wifi.slash")
+                Image(systemName: anyLink ? "wifi" : "wifi.slash")
                     .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(connected ? connectedGreen : Color.black.opacity(0.75))
-                Text(connected ? "OBD II connected" : "OBD II is not connected")
+                    .foregroundStyle(anyLink ? connectedGreen : Color.black.opacity(0.75))
+                Text(text)
                     .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(connected ? Color.white.opacity(0.85) : Color.black.opacity(0.85))
+                    .foregroundStyle(anyLink ? Color.white.opacity(0.85) : Color.black.opacity(0.85))
                 if !connected {
                     Image(systemName: "chevron.right")
                         .font(.system(size: 12, weight: .semibold))
@@ -338,12 +355,12 @@ private struct OBDConnectionStatusBar: View {
         }
         .buttonStyle(.plain)
         .disabled(connected)
-        .accessibilityLabel(connected ? "OBD II connected" : "OBD II is not connected")
+        .accessibilityLabel(text)
         .background(barColor.ignoresSafeArea(edges: .top))
     }
 
     private var barColor: Color {
-        connected ? .black : .accent
+        anyLink ? .black : .accent
     }
 }
 
