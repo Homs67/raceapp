@@ -23,6 +23,9 @@ struct DashboardGridView: View {
     /// here is measured — the pager tells the grid exactly how big it is.
     let size: CGSize
     var safeArea: EdgeInsets = EdgeInsets()
+    /// False when zoomed out under a nav bar (preview / edit): cells are
+    /// fully outlined and nothing fades, since no edge meets the glass.
+    var edgeToEdge = true
 
     @Environment(\.verticalSizeClass) private var verticalSizeClass
 
@@ -84,7 +87,7 @@ struct DashboardGridView: View {
                 GridBordersCanvas(geom: geom, frames: Array(frames.values),
                                   emptyCells: packed.emptyCells.map { geom.frame(for: $0) },
                                   draggingFrame: edit?.dragging.flatMap { frames[$0.id] },
-                                  editing: edit != nil)
+                                  editing: edit != nil, edgeToEdge: edgeToEdge)
                     .animation(.snappy(duration: 0.25), value: frames)
 
                 // Badges last, so they sit above the border strokes.

@@ -19,11 +19,21 @@ struct GridBordersCanvas: View {
     /// Packed slot of the widget being dragged — drawn as a target, not solid.
     var draggingFrame: CGRect?
     let editing: Bool
+    /// Live, full-screen dashboard: outer edges are the glass, so they're not
+    /// drawn and lines fade before reaching them. Preview / edit (zoomed
+    /// out) draw every cell fully outlined.
+    var edgeToEdge = true
 
     var body: some View {
         Canvas(rendersAsynchronously: false) { ctx, _ in
-            for f in frames where f != draggingFrame {
-                for seg in cellSegments(f) { strokeFading(seg, in: &ctx) }
+            if edgeToEdge {
+                for f in frames where f != draggingFrame {
+                    for seg in cellSegments(f) { strokeFading(seg, in: &ctx) }
+                }
+            } else {
+                var borders = Path()
+                for f in frames where f != draggingFrame { borders.addRect(snapped(f)) }
+                ctx.stroke(borders, with: .color(Color.widgetBorder), lineWidth: WidgetMetrics.borderWidth)
             }
 
             if editing {
@@ -94,8 +104,9 @@ struct GridBordersCanvas: View {
         }
     }
 
-    /// Dashed targets keep the plain outline.
+    /// Dashed targets: full outline when zoomed out, edge-aware when live.
     private func cellPath(_ f: CGRect) -> Path {
+        guard edgeToEdge else { return Path(snapped(f)) }
         var path = Path()
         for seg in cellSegments(f) { path.move(to: seg.a); path.addLine(to: seg.b) }
         return path

@@ -101,7 +101,7 @@ struct DashboardPagerView: View {
                     Group {
                         if let edit {
                             DashboardGridView(dashboard: edit.working, live: live, track: track, units: units,
-                                              edit: edit, size: fullSize, safeArea: gridSafe)
+                                              edit: edit, size: fullSize, safeArea: gridSafe, edgeToEdge: false)
                         } else {
                             // SwiftUI paging rather than TabView: the UIKit page
                             // host insets and re-centres its pages by the safe
@@ -113,7 +113,8 @@ struct DashboardPagerView: View {
                                     ForEach(store.dashboards) { dashboard in
                                         DashboardGridView(dashboard: dashboard, live: live, track: track, units: units,
                                                           onTap: { if mode.isRecording { toolbar.toggle() } },
-                                                          size: fullSize, safeArea: gridSafe)
+                                                          size: fullSize, safeArea: gridSafe,
+                                                          edgeToEdge: mode.isRecording)
                                             .id(dashboard.id)
                                             .onLongPressGesture(minimumDuration: 0.5) {
                                                 guard !model.recording.isRecording else { return }
