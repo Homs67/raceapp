@@ -22,9 +22,9 @@ struct GridBordersCanvas: View {
 
     var body: some View {
         Canvas(rendersAsynchronously: false) { ctx, _ in
-            var borders = Path()
-            for f in frames where f != draggingFrame { borders.addPath(cellPath(f)) }
-            ctx.stroke(borders, with: .color(Color.widgetBorder), lineWidth: WidgetMetrics.borderWidth)
+            for f in frames where f != draggingFrame {
+                for seg in cellSegments(f) { strokeFading(seg, in: &ctx) }
+            }
 
             if editing {
                 var targets = Path()
@@ -44,21 +44,60 @@ struct GridBordersCanvas: View {
         .allowsHitTesting(false)
     }
 
+    /// Lines fade to black over their last 20 pt before the dashboard's edge.
+    private static let fadeLength: CGFloat = 20
+
+    private struct Segment {
+        var a: CGPoint, b: CGPoint
+        var fadeAtA: Bool, fadeAtB: Bool
+    }
+
     /// The cell's edges, minus any that lie on the dashboard's outer edge —
-    /// the screen edge is the border there.
-    private func cellPath(_ f: CGRect) -> Path {
+    /// the screen edge is the border there. Ends that reach the outer edge
+    /// are flagged so they can fade out.
+    private func cellSegments(_ f: CGRect) -> [Segment] {
         let r = snapped(f)
         let b = geom.bounds
         let eps: CGFloat = 1.5
-        var path = Path()
-        func edge(_ a: CGPoint, _ c: CGPoint, outer: Bool) {
-            guard !outer else { return }
-            path.move(to: a); path.addLine(to: c)
+        let onLeft = abs(f.minX - b.minX) < eps, onRight = abs(f.maxX - b.maxX) < eps
+        let onTop = abs(f.minY - b.minY) < eps, onBottom = abs(f.maxY - b.maxY) < eps
+        var segs: [Segment] = []
+        if !onTop { segs.append(Segment(a: CGPoint(x: r.minX, y: r.minY), b: CGPoint(x: r.maxX, y: r.minY), fadeAtA: onLeft, fadeAtB: onRight)) }
+        if !onBottom { segs.append(Segment(a: CGPoint(x: r.minX, y: r.maxY), b: CGPoint(x: r.maxX, y: r.maxY), fadeAtA: onLeft, fadeAtB: onRight)) }
+        if !onLeft { segs.append(Segment(a: CGPoint(x: r.minX, y: r.minY), b: CGPoint(x: r.minX, y: r.maxY), fadeAtA: onTop, fadeAtB: onBottom)) }
+        if !onRight { segs.append(Segment(a: CGPoint(x: r.maxX, y: r.minY), b: CGPoint(x: r.maxX, y: r.maxY), fadeAtA: onTop, fadeAtB: onBottom)) }
+        return segs
+    }
+
+    /// One stroke; the last `fadeLength` at a flagged end runs border → black.
+    private func strokeFading(_ s: Segment, in ctx: inout GraphicsContext) {
+        let width = WidgetMetrics.borderWidth
+        let length = hypot(s.b.x - s.a.x, s.b.y - s.a.y)
+        guard length > 0 else { return }
+        let dir = CGPoint(x: (s.b.x - s.a.x) / length, y: (s.b.y - s.a.y) / length)
+        let fade = min(Self.fadeLength, length / 2)
+        func at(_ d: CGFloat) -> CGPoint { CGPoint(x: s.a.x + dir.x * d, y: s.a.y + dir.y * d) }
+        let solidStart = s.fadeAtA ? fade : 0
+        let solidEnd = s.fadeAtB ? length - fade : length
+        if solidEnd > solidStart {
+            var p = Path(); p.move(to: at(solidStart)); p.addLine(to: at(solidEnd))
+            ctx.stroke(p, with: .color(Color.widgetBorder), lineWidth: width)
         }
-        edge(CGPoint(x: r.minX, y: r.minY), CGPoint(x: r.maxX, y: r.minY), outer: abs(f.minY - b.minY) < eps)
-        edge(CGPoint(x: r.minX, y: r.maxY), CGPoint(x: r.maxX, y: r.maxY), outer: abs(f.maxY - b.maxY) < eps)
-        edge(CGPoint(x: r.minX, y: r.minY), CGPoint(x: r.minX, y: r.maxY), outer: abs(f.minX - b.minX) < eps)
-        edge(CGPoint(x: r.maxX, y: r.minY), CGPoint(x: r.maxX, y: r.maxY), outer: abs(f.maxX - b.maxX) < eps)
+        let ramp = Gradient(colors: [.black, Color.widgetBorder])
+        if s.fadeAtA {
+            var p = Path(); p.move(to: at(0)); p.addLine(to: at(fade))
+            ctx.stroke(p, with: .linearGradient(ramp, startPoint: at(0), endPoint: at(fade)), lineWidth: width)
+        }
+        if s.fadeAtB {
+            var p = Path(); p.move(to: at(length)); p.addLine(to: at(length - fade))
+            ctx.stroke(p, with: .linearGradient(ramp, startPoint: at(length), endPoint: at(length - fade)), lineWidth: width)
+        }
+    }
+
+    /// Dashed targets keep the plain outline.
+    private func cellPath(_ f: CGRect) -> Path {
+        var path = Path()
+        for seg in cellSegments(f) { path.move(to: seg.a); path.addLine(to: seg.b) }
         return path
     }
 
