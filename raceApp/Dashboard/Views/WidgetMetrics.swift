@@ -15,6 +15,8 @@ enum WidgetMetrics {
     /// Hard floor for any text inside a widget. Something that needs to be
     /// quieter gets a lighter weight, never a smaller size.
     static let minTextSize: CGFloat = 21
+    /// Minimum vertical space between a widget's title and its content.
+    static let titleContentGap: CGFloat = 16
     /// Extra horizontal content inset for cells that sit in a corner of the
     /// display with nothing between them and the rounded glass. The border
     /// still starts at the edge; only the content moves in. iPhone corners

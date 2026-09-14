@@ -23,7 +23,8 @@ struct WidgetChrome: View {
                 .foregroundStyle(.white.opacity(0.6))
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            Spacer(minLength: 0)
+            // Never less than 16 pt between the title and the content.
+            Spacer(minLength: WidgetMetrics.titleContentGap)
             WidgetView(context: context)
                 .frame(maxWidth: .infinity, alignment: .bottomLeading)
         }
