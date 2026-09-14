@@ -82,7 +82,8 @@ struct DashboardPagerView: View {
             // whole thing is zoomed out to clear the bar, like Home Screen
             // jiggle mode. Nothing reflows; Done zooms it back.
             let gridSafe = mode.isRecording ? safe : (DeviceSafeArea.insets() ?? safe)
-            let zoom = mode.isRecording ? 1 : max(0.5, (fullSize.height - safe.top) / fullSize.height)
+            let zoom = mode.isRecording ? 1 : Self.zoom(fullSize: fullSize, barTop: safe.top,
+                                                          gridSafe: gridSafe, landscape: verticalSizeClass == .compact)
             TimelineView(.periodic(from: .now, by: 0.1)) { context in
                 let track = model.metrics.track ?? previewTrack
                 // Editing or previewing without a session: show plausible
@@ -159,6 +160,17 @@ struct DashboardPagerView: View {
                 .position(x: fullSize.width / 2 - safe.leading, y: fullSize.height / 2 - safe.top)
             }
         }
+    }
+
+    /// Scale (anchored at the screen bottom) that brings the grid's top edge —
+    /// not the frame's — to just under the nav bar, so the zoom-out is only as
+    /// much as the bar needs.
+    private static func zoom(fullSize: CGSize, barTop: CGFloat, gridSafe: EdgeInsets, landscape: Bool) -> CGFloat {
+        let gridTop = GridGeometry(available: fullSize, grid: .base, landscape: landscape,
+                                   safeTop: gridSafe.top, safeBottom: gridSafe.bottom).bounds.minY
+        let gap: CGFloat = 12
+        let z = (fullSize.height - barTop - gap) / max(1, fullSize.height - gridTop)
+        return min(1, max(0.5, z))
     }
 
     @ToolbarContentBuilder
