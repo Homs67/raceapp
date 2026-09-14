@@ -84,8 +84,13 @@ struct DashboardPagerView: View {
             // whole thing is zoomed out to clear the bar, like Home Screen
             // jiggle mode. Nothing reflows; Done zooms it back.
             let gridSafe = DeviceSafeArea.gridInsets(fallback: safe)
-            let zoom = mode.isRecording ? 1 : Self.zoom(fullSize: fullSize, barTop: safe.top,
-                                                          gridSafe: gridSafe, landscape: verticalSizeClass == .compact)
+            // The glass nav bar doesn't inset content, so the reader may not
+            // report it; take the larger of what it reports and the bar's
+            // known height below the device inset.
+            let landscapeNow = verticalSizeClass == .compact
+            let barBottom = max(safe.top, (DeviceSafeArea.insets()?.top ?? safe.top) + (landscapeNow ? 32 : 44))
+            let zoom = mode.isRecording ? 1 : Self.zoom(fullSize: fullSize, barTop: barBottom,
+                                                          gridSafe: gridSafe, landscape: landscapeNow)
             TimelineView(.periodic(from: .now, by: 0.1)) { context in
                 let track = model.metrics.track ?? previewTrack
                 // Editing or previewing without a session: show plausible
@@ -103,6 +108,7 @@ struct DashboardPagerView: View {
                         if let edit {
                             DashboardGridView(dashboard: edit.working, live: live, track: track, units: units,
                                               edit: edit, size: fullSize, safeArea: gridSafe, edgeToEdge: false)
+                                .scaleEffect(zoom, anchor: .bottom)
                         } else {
                             // SwiftUI paging rather than TabView: the UIKit page
                             // host insets and re-centres its pages by the safe
@@ -116,6 +122,10 @@ struct DashboardPagerView: View {
                                                           onTap: { if mode.isRecording { toolbar.toggle() } },
                                                           size: fullSize, safeArea: gridSafe,
                                                           edgeToEdge: mode.isRecording)
+                                            // Zoom inside the page: the pager's own
+                                            // safe-area handling would shift a scaled
+                                            // pager, but pages themselves land exactly.
+                                            .scaleEffect(zoom, anchor: .bottom)
                                             .id(dashboard.id)
                                             .onLongPressGesture(minimumDuration: 0.5) {
                                                 guard !model.recording.isRecording else { return }
@@ -133,7 +143,6 @@ struct DashboardPagerView: View {
                         }
                     }
                     .frame(width: fullSize.width, height: fullSize.height)
-                    .scaleEffect(zoom, anchor: .bottom)
                     .animation(.snappy(duration: 0.25), value: zoom)
 
                     if mode.isRecording, edit == nil {
