@@ -151,7 +151,10 @@ struct WidgetLibraryList: View {
         // more column (portrait: two smalls per row).
         let cellW = Self.cell.width * CGFloat(size.span.cols)
         let cellH = Self.cell.height * CGFloat(size.span.rows)
-        let columns = max(1, Int(((width + Self.gap) / (cellW + Self.gap)).rounded()))
+        // A tile may shrink to 85 % to fit one more column; at most four
+        // smalls or two medium/large per row.
+        let cap = size == .small ? 4 : 2
+        let columns = min(cap, max(1, Int((width + Self.gap) / (cellW * 0.85 + Self.gap))))
         let previewW = min(cellW, (width - Self.gap * CGFloat(columns - 1)) / CGFloat(columns))
         let scale = previewW / cellW
         return VStack(alignment: .leading, spacing: 10) {
