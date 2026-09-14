@@ -109,6 +109,7 @@ struct DashboardPagerView: View {
                             DashboardGridView(dashboard: edit.working, live: live, track: track, units: units,
                                               edit: edit, size: fullSize, safeArea: gridSafe, edgeToEdge: false)
                                 .scaleEffect(zoom, anchor: .bottom)
+                                .offset(y: zoom < 1 ? -Self.zoomedBottomGap : 0)
                         } else {
                             // SwiftUI paging rather than TabView: the UIKit page
                             // host insets and re-centres its pages by the safe
@@ -126,6 +127,7 @@ struct DashboardPagerView: View {
                                             // safe-area handling would shift a scaled
                                             // pager, but pages themselves land exactly.
                                             .scaleEffect(zoom, anchor: .bottom)
+                                            .offset(y: zoom < 1 ? -Self.zoomedBottomGap : 0)
                                             .id(dashboard.id)
                                             .onLongPressGesture(minimumDuration: 0.5) {
                                                 guard !model.recording.isRecording else { return }
@@ -183,11 +185,14 @@ struct DashboardPagerView: View {
     /// Scale (anchored at the screen bottom) that brings the grid's top edge —
     /// not the frame's — to just under the nav bar, so the zoom-out is only as
     /// much as the bar needs.
+    /// Preview / edit only: 12 pt under the nav bar, 24 pt above the screen
+    /// bottom. The grid is scaled (anchored at its bottom) to fit between.
+    static let zoomedTopGap: CGFloat = 12
+    static let zoomedBottomGap: CGFloat = 24
+
     private static func zoom(fullSize: CGSize, barTop: CGFloat, gridSafe: EdgeInsets, landscape: Bool) -> CGFloat {
         let gridTop = GridGeometry(available: fullSize, grid: .base, landscape: landscape, safe: gridSafe).bounds.minY
-        // Same in preview and edit.
-        let gap: CGFloat = 12
-        let z = (fullSize.height - barTop - gap) / max(1, fullSize.height - gridTop)
+        let z = (fullSize.height - barTop - zoomedTopGap - zoomedBottomGap) / max(1, fullSize.height - gridTop)
         return min(1, max(0.5, z))
     }
 
