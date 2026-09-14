@@ -18,16 +18,18 @@ struct DashboardGridView: View {
     var edit: DashboardEditController?
     /// Tap on the dashboard outside edit mode (reveals the recording toolbar).
     var onTap: () -> Void = {}
-    /// Safe-area insets of the screen this grid fills. Passed in explicitly
-    /// because a GeometryReader that ignores the safe area reports none.
+    /// The screen this grid fills and its safe-area insets, both by value:
+    /// the page host insets and re-centres whatever it lays out, so nothing
+    /// here is measured — the pager tells the grid exactly how big it is.
+    let size: CGSize
     var safeArea: EdgeInsets = EdgeInsets()
 
     @Environment(\.verticalSizeClass) private var verticalSizeClass
 
     var body: some View {
-        GeometryReader { geo in
-            let landscape = verticalSizeClass == .compact
-            let geom = GridGeometry(available: geo.size, grid: dashboard.grid, landscape: landscape, safe: safeArea)
+        let landscape = verticalSizeClass == .compact
+        let geom = GridGeometry(available: size, grid: dashboard.grid, landscape: landscape, safe: safeArea)
+        Group {
             let placements = edit?.working.placements ?? dashboard.placements
             let packed = GridPacker.pack(placements, grid: geom.grid)
             // View mode stretches partial rows (Figma); the editor shows the
@@ -105,9 +107,7 @@ struct DashboardGridView: View {
                 edit.presentLibrary(insertAtUnit: unit, stretched: stretched)
             }
         }
-        // The page host (UIKit) insets its content by the safe area; undo
-        // that so the grid gets the whole page and applies insets by value.
-        .ignoresSafeArea()
+        .frame(width: size.width, height: size.height)
     }
 
     private func editGesture(for placement: WidgetPlacement, edit: DashboardEditController,

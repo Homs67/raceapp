@@ -75,13 +75,14 @@ struct DashboardPagerView: View {
         @Bindable var store = model.dashboards
         return GeometryReader { outer in
             let safe = outer.safeAreaInsets
-            let fullSize = CGSize(width: outer.size.width + safe.leading + safe.trailing,
-                                  height: outer.size.height + safe.top + safe.bottom)
+            // The screen itself, not the reader plus insets: with the home
+            // indicator hidden the reader can come back short at the bottom.
+            let fullSize = UIScreen.main.bounds.size
             // Under a nav bar (preview / edit) the grid is still laid out for
             // the bare screen — the device insets, not the bar's — and the
             // whole thing is zoomed out to clear the bar, like Home Screen
             // jiggle mode. Nothing reflows; Done zooms it back.
-            let gridSafe = mode.isRecording ? safe : (DeviceSafeArea.insets() ?? safe)
+            let gridSafe = DeviceSafeArea.gridInsets(fallback: safe)
             let zoom = mode.isRecording ? 1 : Self.zoom(fullSize: fullSize, barTop: safe.top,
                                                           gridSafe: gridSafe, landscape: verticalSizeClass == .compact)
             TimelineView(.periodic(from: .now, by: 0.1)) { context in
@@ -99,27 +100,34 @@ struct DashboardPagerView: View {
 
                     Group {
                         if let edit {
-                            // Same page host as the pager (one page, so nothing
-                            // to swipe), so the editor lays out identically.
-                            TabView {
-                                DashboardGridView(dashboard: edit.working, live: live, track: track, units: units,
-                                                  edit: edit, safeArea: gridSafe)
-                            }
-                            .tabViewStyle(.page(indexDisplayMode: .never))
+                            DashboardGridView(dashboard: edit.working, live: live, track: track, units: units,
+                                              edit: edit, size: fullSize, safeArea: gridSafe)
                         } else {
-                            TabView(selection: pageSelection) {
-                                ForEach(store.dashboards) { dashboard in
-                                    DashboardGridView(dashboard: dashboard, live: live, track: track, units: units,
-                                                      onTap: { if mode.isRecording { toolbar.toggle() } },
-                                                      safeArea: gridSafe)
-                                        .tag(Optional(dashboard.id))
-                                        .onLongPressGesture(minimumDuration: 0.5) {
-                                            guard !model.recording.isRecording else { return }
-                                            beginEditing(dashboard)
-                                        }
+                            // SwiftUI paging rather than TabView: the UIKit page
+                            // host insets and re-centres its pages by the safe
+                            // area, which no combination of ignoresSafeArea
+                            // undid. A paging ScrollView lays the pages out
+                            // exactly where they're told.
+                            ScrollView(.horizontal) {
+                                LazyHStack(spacing: 0) {
+                                    ForEach(store.dashboards) { dashboard in
+                                        DashboardGridView(dashboard: dashboard, live: live, track: track, units: units,
+                                                          onTap: { if mode.isRecording { toolbar.toggle() } },
+                                                          size: fullSize, safeArea: gridSafe)
+                                            .id(dashboard.id)
+                                            .onLongPressGesture(minimumDuration: 0.5) {
+                                                guard !model.recording.isRecording else { return }
+                                                beginEditing(dashboard)
+                                            }
+                                    }
                                 }
+                                .scrollTargetLayout()
                             }
-                            .tabViewStyle(.page(indexDisplayMode: .never))
+                            .scrollTargetBehavior(.paging)
+                            .scrollPosition(id: pageSelection)
+                            .scrollIndicators(.hidden)
+                            .contentMargins(0)
+                            .ignoresSafeArea()
                         }
                     }
                     .frame(width: fullSize.width, height: fullSize.height)
@@ -127,7 +135,7 @@ struct DashboardPagerView: View {
                     .animation(.snappy(duration: 0.25), value: zoom)
 
                     if mode.isRecording, edit == nil {
-                        RecordingIslandDot(safe: safe, size: fullSize, landscape: landscape)
+                        RecordingIslandDot(safe: gridSafe, size: fullSize, landscape: landscape)
                     }
 
                     VStack(spacing: 6) {
@@ -301,9 +309,12 @@ private struct RecordingIslandDot: View {
     private static let gap: CGFloat = 10
 
     var body: some View {
-        if landscape ? safe.leading >= 50 : safe.top >= 50 {
+        if landscape ? max(safe.leading, safe.trailing) >= 50 : safe.top >= 50 {
+            // `safe` carries only the island's edge (see gridInsets).
             let center: CGPoint = landscape
-                ? CGPoint(x: safe.leading / 2, y: size.height / 2 + Self.halfLength + Self.gap)
+                ? (safe.leading > 0
+                   ? CGPoint(x: safe.leading / 2, y: size.height / 2 + Self.halfLength + Self.gap)
+                   : CGPoint(x: size.width - safe.trailing / 2, y: size.height / 2 - Self.halfLength - Self.gap))
                 : CGPoint(x: size.width / 2 + Self.halfLength + Self.gap, y: safe.top / 2)
             ZStack {
                 Circle().fill(Color.toolbarRed.opacity(0.35)).frame(width: 16, height: 16)
@@ -319,12 +330,28 @@ private struct RecordingIslandDot: View {
 /// The screen's own safe area (notch, home indicator) regardless of any
 /// navigation bar above the current view.
 enum DeviceSafeArea {
+    @MainActor private static var scene: UIWindowScene? {
+        UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first { $0.activationState == .foregroundActive }
+            ?? UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+    }
+
     @MainActor static func insets() -> EdgeInsets? {
-        let window = UIApplication.shared.connectedScenes
-            .compactMap { $0 as? UIWindowScene }
-            .flatMap(\.windows)
-            .first { $0.isKeyWindow }
-        guard let i = window?.safeAreaInsets else { return nil }
+        guard let i = scene?.windows.first(where: { $0.isKeyWindow })?.safeAreaInsets else { return nil }
         return EdgeInsets(top: i.top, leading: i.left, bottom: i.bottom, trailing: i.right)
+    }
+
+    /// What the dashboard keeps clear: the sensor housing only. Portrait →
+    /// the top. Landscape → iOS reports the same inset on both sides, but
+    /// only one carries the island; the interface orientation says which.
+    @MainActor static func gridInsets(fallback: EdgeInsets) -> EdgeInsets {
+        let i = insets() ?? fallback
+        switch scene?.interfaceOrientation {
+        case .landscapeRight:   // device top edge on the left
+            return EdgeInsets(top: 0, leading: i.leading, bottom: 0, trailing: 0)
+        case .landscapeLeft:    // device top edge on the right
+            return EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: i.trailing)
+        default:
+            return EdgeInsets(top: i.top, leading: 0, bottom: 0, trailing: 0)
+        }
     }
 }
