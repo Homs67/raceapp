@@ -69,23 +69,16 @@ enum WidgetMetrics {
     static func valueColor(hero: Bool) -> Color { hero ? .white : .white.opacity(0.9) }
 }
 
-/// Per-cell display-corner allowance (see DashboardGridView.cornerAllowance).
-struct CornerAllowance: Equatable {
-    var titleLeading: CGFloat = 0
-    var titleTrailing: CGFloat = 0
-    var bodyLeading: CGFloat = 0
-    var bodyTrailing: CGFloat = 0
-}
-
 /// What a widget gets to render with. Passed by value — widgets never reach
 /// for the bus, the model, or the environment for data.
 struct WidgetContext {
     let placement: WidgetPlacement
     let contentSize: CGSize
-    /// Extra horizontal inset, applied only to the part of the cell that sits
-    /// in a display corner: the title for top corners, the bottom content
-    /// for bottom corners. Everything else keeps the common 16 pt.
-    var corner = CornerAllowance()
+    /// Chrome padding for this cell: 16 pt, plus the display-corner allowance
+    /// where the cell meets the glass — applied to title and content alike so
+    /// they share one vertical line.
+    var contentInsets = EdgeInsets(top: WidgetMetrics.padding, leading: WidgetMetrics.padding,
+                                   bottom: WidgetMetrics.padding, trailing: WidgetMetrics.padding)
     let isLandscape: Bool
     let live: LiveSnapshot
     let units: UnitsFormatter

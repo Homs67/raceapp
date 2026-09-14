@@ -49,13 +49,12 @@ struct DashboardGridView: View {
                             ? edit!.dragging!.origin.offsetBy(dx: edit!.dragging!.translation.width,
                                                               dy: edit!.dragging!.translation.height)
                             : frame
-                        let corner = Self.cornerAllowance(for: frame, screen: size, safe: safeArea)
+                        let insets = Self.contentInsets(for: frame, screen: size, safe: safeArea, landscape: landscape)
                         WidgetChrome(context: WidgetContext(
                             placement: placement,
-                            contentSize: CGSize(width: frame.width - 2 * WidgetMetrics.padding
-                                                    - corner.bodyLeading - corner.bodyTrailing,
-                                                height: frame.height - 2 * WidgetMetrics.padding),
-                            corner: corner,
+                            contentSize: CGSize(width: frame.width - insets.leading - insets.trailing,
+                                                height: frame.height - insets.top - insets.bottom),
+                            contentInsets: insets,
                             isLandscape: landscape, live: live, units: units,
                             isEditing: edit != nil, track: track))
                         .frame(width: frame.width, height: frame.height)
@@ -113,21 +112,23 @@ struct DashboardGridView: View {
         .frame(width: size.width, height: size.height)
     }
 
-    /// Which parts of a cell sit in a display corner: a side edge with no
-    /// safe inset, met at the top (the title lives there) or the bottom (the
-    /// value does). Only that part gets the allowance, so titles and values
-    /// in neighbouring cells stay on the same lines.
-    static func cornerAllowance(for frame: CGRect, screen: CGSize, safe: EdgeInsets) -> CornerAllowance {
+    /// 16 pt all round, plus the display-corner allowance where the cell
+    /// meets the glass. Landscape: on a side edge with no safe inset that the
+    /// cell also meets at the top or bottom — the whole cell shifts, so title
+    /// and content stay on one vertical line. Portrait: horizontal padding
+    /// never changes; only the bottom grows for cells on the bottom edge.
+    static func contentInsets(for frame: CGRect, screen: CGSize, safe: EdgeInsets, landscape: Bool) -> EdgeInsets {
+        let p = WidgetMetrics.padding
         let a = WidgetMetrics.displayCornerAllowance
         let eps: CGFloat = 1.5
-        let left = frame.minX < eps && safe.leading < eps
-        let right = abs(frame.maxX - screen.width) < eps && safe.trailing < eps
-        let top = frame.minY < eps && safe.top < eps
         let bottom = abs(frame.maxY - screen.height) < eps
-        return CornerAllowance(titleLeading: left && top ? a : 0,
-                               titleTrailing: right && top ? a : 0,
-                               bodyLeading: left && bottom ? a : 0,
-                               bodyTrailing: right && bottom ? a : 0)
+        guard landscape else {
+            return EdgeInsets(top: p, leading: p, bottom: p + (bottom ? a : 0), trailing: p)
+        }
+        let corner = frame.minY < eps || bottom
+        let left = frame.minX < eps && safe.leading < eps && corner
+        let right = abs(frame.maxX - screen.width) < eps && safe.trailing < eps && corner
+        return EdgeInsets(top: p, leading: p + (left ? a : 0), bottom: p, trailing: p + (right ? a : 0))
     }
 
     private func editGesture(for placement: WidgetPlacement, edit: DashboardEditController,
