@@ -316,9 +316,17 @@ private struct RecordingIslandDot: View {
                    ? CGPoint(x: safe.leading / 2, y: size.height / 2 + Self.halfLength + Self.gap)
                    : CGPoint(x: size.width - safe.trailing / 2, y: size.height / 2 - Self.halfLength - Self.gap))
                 : CGPoint(x: size.width / 2 + Self.halfLength + Self.gap, y: safe.top / 2)
-            ZStack {
-                Circle().fill(Color.toolbarRed.opacity(0.35)).frame(width: 16, height: 16)
-                Circle().fill(Color.toolbarRed).frame(width: 7, height: 7)
+            // Slow "live" pulse: the halo breathes out and fades while the
+            // core dims slightly, on a 1.6 s cycle driven by the clock.
+            TimelineView(.animation(minimumInterval: 1 / 30)) { context in
+                let t = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1.6) / 1.6
+                let ease = 0.5 - 0.5 * cos(t * 2 * .pi)          // 0 → 1 → 0
+                ZStack {
+                    Circle().fill(Color.toolbarRed.opacity(0.4 * (1 - ease)))
+                        .frame(width: 10 + 12 * ease, height: 10 + 12 * ease)
+                    Circle().fill(Color.toolbarRed.opacity(0.7 + 0.3 * (1 - ease)))
+                        .frame(width: 7, height: 7)
+                }
             }
             .position(center)
             .allowsHitTesting(false)
