@@ -49,12 +49,13 @@ struct DashboardGridView: View {
                             ? edit!.dragging!.origin.offsetBy(dx: edit!.dragging!.translation.width,
                                                               dy: edit!.dragging!.translation.height)
                             : frame
-                        let insets = Self.contentInsets(for: frame, screen: size, safe: safeArea)
+                        let corner = Self.cornerAllowance(for: frame, screen: size, safe: safeArea)
                         WidgetChrome(context: WidgetContext(
                             placement: placement,
-                            contentSize: CGSize(width: frame.width - insets.leading - insets.trailing,
-                                                height: frame.height - insets.top - insets.bottom),
-                            contentInsets: insets,
+                            contentSize: CGSize(width: frame.width - 2 * WidgetMetrics.padding
+                                                    - corner.bodyLeading - corner.bodyTrailing,
+                                                height: frame.height - 2 * WidgetMetrics.padding),
+                            corner: corner,
                             isLandscape: landscape, live: live, units: units,
                             isEditing: edit != nil, track: track))
                         .frame(width: frame.width, height: frame.height)
@@ -112,19 +113,21 @@ struct DashboardGridView: View {
         .frame(width: size.width, height: size.height)
     }
 
-    /// 16 pt all round, plus the display-corner allowance on a side where the
-    /// cell meets the glass in a corner — i.e. it touches that side edge with
-    /// no safe inset there, and also the top or bottom edge.
-    static func contentInsets(for frame: CGRect, screen: CGSize, safe: EdgeInsets) -> EdgeInsets {
-        let p = WidgetMetrics.padding
+    /// Which parts of a cell sit in a display corner: a side edge with no
+    /// safe inset, met at the top (the title lives there) or the bottom (the
+    /// value does). Only that part gets the allowance, so titles and values
+    /// in neighbouring cells stay on the same lines.
+    static func cornerAllowance(for frame: CGRect, screen: CGSize, safe: EdgeInsets) -> CornerAllowance {
+        let a = WidgetMetrics.displayCornerAllowance
         let eps: CGFloat = 1.5
-        let touchesTopOrBottom = frame.minY < eps || abs(frame.maxY - screen.height) < eps
-        let leftCorner = frame.minX < eps && safe.leading < eps && touchesTopOrBottom
-        let rightCorner = abs(frame.maxX - screen.width) < eps && safe.trailing < eps && touchesTopOrBottom
-        return EdgeInsets(top: p,
-                          leading: p + (leftCorner ? WidgetMetrics.displayCornerAllowance : 0),
-                          bottom: p,
-                          trailing: p + (rightCorner ? WidgetMetrics.displayCornerAllowance : 0))
+        let left = frame.minX < eps && safe.leading < eps
+        let right = abs(frame.maxX - screen.width) < eps && safe.trailing < eps
+        let top = frame.minY < eps && safe.top < eps
+        let bottom = abs(frame.maxY - screen.height) < eps
+        return CornerAllowance(titleLeading: left && top ? a : 0,
+                               titleTrailing: right && top ? a : 0,
+                               bodyLeading: left && bottom ? a : 0,
+                               bodyTrailing: right && bottom ? a : 0)
     }
 
     private func editGesture(for placement: WidgetPlacement, edit: DashboardEditController,
