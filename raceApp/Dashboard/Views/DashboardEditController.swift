@@ -15,6 +15,9 @@ final class DashboardEditController {
 
     struct Drag: Equatable {
         var id: UUID
+        /// Frame the widget was lifted from; it follows the finger from here
+        /// even while its packed slot reflows underneath.
+        var origin: CGRect
         var translation: CGSize
         var lastIndex: Int?
     }
@@ -115,21 +118,22 @@ final class DashboardEditController {
 
     private struct Press {
         let id: UUID
+        let frame: CGRect
         var moved = false
     }
     private var press: Press?
     private var liftTask: Task<Void, Never>?
 
-    func pressChanged(id: UUID, translation: CGSize, unit: (x: Double, y: Double),
+    func pressChanged(id: UUID, frame: CGRect, translation: CGSize, unit: (x: Double, y: Double),
                       stretched: [UUID: UnitRect]) {
         if press == nil {
-            press = Press(id: id)
+            press = Press(id: id, frame: frame)
             liftTask?.cancel()
             liftTask = Task { [weak self] in
                 try? await Task.sleep(for: Self.liftDelay)
                 guard let self, !Task.isCancelled, let press = self.press,
                       press.id == id, !press.moved else { return }
-                self.dragBegan(id: id)
+                self.dragBegan(id: id, from: press.frame)
             }
         }
         if dragging?.id == id {
@@ -154,15 +158,15 @@ final class DashboardEditController {
 
     // MARK: - Drag to reorder
 
-    func dragBegan(id: UUID) {
+    func dragBegan(id: UUID, from frame: CGRect) {
         guard dragging == nil else { return }
-        dragging = Drag(id: id, translation: .zero, lastIndex: nil)
+        dragging = Drag(id: id, origin: frame, translation: .zero, lastIndex: nil)
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
     }
 
     func dragChanged(id: UUID, translation: CGSize, unit: (x: Double, y: Double),
                      stretched: [UUID: UnitRect]) {
-        if dragging == nil { dragBegan(id: id) }
+        guard dragging?.id == id else { return }
         dragging?.translation = translation
         let target = GridPacker.insertionIndex(forUnitX: unit.x, unitY: unit.y, stretched: stretched,
                                                order: working.placements, dragging: id)

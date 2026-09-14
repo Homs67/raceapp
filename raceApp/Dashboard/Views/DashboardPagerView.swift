@@ -27,65 +27,29 @@ struct DashboardPagerView: View {
     @State private var edit: DashboardEditController?
     @State private var toolbar = ToolbarVisibility()
     @State private var previewSelection: UUID?
+    @State private var renaming = false
+    @State private var draftName = ""
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
 
     var body: some View {
-        @Bindable var store = model.dashboards
-        // The outer reader sees the real safe area; everything below ignores it
-        // and would otherwise report zero insets.
-        GeometryReader { outer in
-        TimelineView(.periodic(from: .now, by: 0.1)) { context in
-            let live = feed.tick(model: model, now: uptimeNow(), date: context.date, metric: metric)
-            let units = UnitsFormatter(metric: metric)
-            let track = model.metrics.track ?? previewTrack
-            let safe = outer.safeAreaInsets
-            // Under a chrome bar the grid starts inside the safe area already.
-            let belowChrome = EdgeInsets(top: 0, leading: safe.leading, bottom: safe.bottom, trailing: safe.trailing)
-
-            ZStack(alignment: .top) {
-                Color.black.ignoresSafeArea()
-
-                if let edit {
-                    VStack(spacing: 0) {
-                        EditChrome(edit: edit, onDone: finishEditing)
-                        DashboardGridView(dashboard: edit.working, live: live, track: track, units: units,
-                                          edit: edit, safeArea: belowChrome)
-                    }
-                } else {
-                    VStack(spacing: 0) {
-                        if case .preview(_, _, let onClose) = mode {
-                            PreviewChrome(onEdit: { if let d = store.selected { beginEditing(d) } }, onClose: onClose)
+        Group {
+            if mode.isRecording {
+                stage
+            } else {
+                // Native bar (glass on iOS 26): Close / Edit while previewing,
+                // name / + Add / Done while editing.
+                NavigationStack {
+                    stage
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar { navigationItems }
+                        .alert("Dashboard name", isPresented: $renaming) {
+                            TextField("Name", text: $draftName)
+                            Button("Save") { edit?.rename(draftName) }
+                            Button("Cancel", role: .cancel) {}
                         }
-                        TabView(selection: pageSelection) {
-                            ForEach(store.dashboards) { dashboard in
-                                DashboardGridView(dashboard: dashboard, live: live, track: track, units: units,
-                                                  onTap: { if mode.isRecording { toolbar.toggle() } },
-                                                  safeArea: mode.isRecording ? safe : belowChrome)
-                                    .tag(Optional(dashboard.id))
-                                    .onLongPressGesture(minimumDuration: 0.5) {
-                                        guard !model.recording.isRecording else { return }
-                                        beginEditing(dashboard)
-                                    }
-                            }
-                        }
-                        .tabViewStyle(.page(indexDisplayMode: .never))
-                        .ignoresSafeArea()
-                    }
                 }
-
-                healthPill
-
-                if case .recording(let onCollapse) = mode, edit == nil, toolbar.visible {
-                    RecordingToolbar(
-                        elapsed: live.elapsed,
-                        pageIndex: store.selectedIndex,
-                        pageCount: store.dashboards.count,
-                        onStop: { model.stopRecording() },
-                        onInteract: { toolbar.touch() },
-                        onCollapse: onCollapse)
-                    .transition(.move(edge: .top).combined(with: .opacity))
-                }
+                .tint(Color.accent)
             }
-        }
         }
         .persistentSystemOverlays(.hidden)
         .statusBarHidden(true)
@@ -104,7 +68,114 @@ struct DashboardPagerView: View {
         }
     }
 
+    /// The dashboard itself. The outer reader sees the real safe area (notch,
+    /// home indicator, nav bar); the stack below ignores it once so every
+    /// page is laid out at the exact screen size and gets the insets by value.
+    private var stage: some View {
+        @Bindable var store = model.dashboards
+        return GeometryReader { outer in
+            let safe = outer.safeAreaInsets
+            let fullSize = CGSize(width: outer.size.width + safe.leading + safe.trailing,
+                                  height: outer.size.height + safe.top + safe.bottom)
+            TimelineView(.periodic(from: .now, by: 0.1)) { context in
+                let live = feed.tick(model: model, now: uptimeNow(), date: context.date, metric: metric)
+                let units = UnitsFormatter(metric: metric)
+                let track = model.metrics.track ?? previewTrack
+                let landscape = verticalSizeClass == .compact
+
+                ZStack(alignment: .top) {
+                    Color.black
+
+                    if let edit {
+                        DashboardGridView(dashboard: edit.working, live: live, track: track, units: units,
+                                          edit: edit, safeArea: safe)
+                    } else {
+                        TabView(selection: pageSelection) {
+                            ForEach(store.dashboards) { dashboard in
+                                DashboardGridView(dashboard: dashboard, live: live, track: track, units: units,
+                                                  onTap: { if mode.isRecording { toolbar.toggle() } },
+                                                  safeArea: safe)
+                                    .tag(Optional(dashboard.id))
+                                    .onLongPressGesture(minimumDuration: 0.5) {
+                                        guard !model.recording.isRecording else { return }
+                                        beginEditing(dashboard)
+                                    }
+                            }
+                        }
+                        .tabViewStyle(.page(indexDisplayMode: .never))
+                    }
+
+                    VStack(spacing: 6) {
+                        healthPill
+                        if let rejection = edit?.lastRejection {
+                            pill(rejection, icon: "xmark.octagon.fill", color: Color.toolbarRed)
+                        }
+                    }
+                    .padding(.top, safe.top)
+
+                    if case .recording(let onCollapse) = mode, edit == nil, toolbar.visible {
+                        RecordingToolbar(
+                            elapsed: live.elapsed,
+                            pageIndex: store.selectedIndex,
+                            pageCount: store.dashboards.count,
+                            onStop: { model.stopRecording() },
+                            onInteract: { toolbar.touch() },
+                            onCollapse: onCollapse,
+                            edge: landscape ? .top : .bottom,
+                            safeBottom: safe.bottom)
+                        .frame(maxHeight: .infinity, alignment: landscape ? .top : .bottom)
+                        .transition(.move(edge: landscape ? .top : .bottom).combined(with: .opacity))
+                    }
+                }
+                // Explicit full-screen frame and position: a child that merely
+                // ignores the safe area gets centred on the reader's inset
+                // frame (≈10 pt too high in landscape), so place it by hand.
+                .ignoresSafeArea()
+                .frame(width: fullSize.width, height: fullSize.height)
+                .position(x: fullSize.width / 2 - safe.leading, y: fullSize.height / 2 - safe.top)
+            }
+        }
+    }
+
+    @ToolbarContentBuilder
+    private var navigationItems: some ToolbarContent {
+        if let edit {
+            ToolbarItem(placement: .principal) {
+                Button {
+                    draftName = edit.working.name
+                    renaming = true
+                } label: {
+                    HStack(spacing: 6) {
+                        Text(edit.working.name).font(.sofia(20, .bold)).foregroundStyle(.white)
+                        Image(systemName: "pencil").font(.system(size: 12, weight: .semibold)).foregroundStyle(Color.mutedStrong)
+                    }
+                }
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button { edit.presentLibraryAppending() } label: { Label("Add", systemImage: "plus") }
+            }
+            ToolbarItem(placement: .confirmationAction) {
+                Button("Done", action: finishEditing).font(.sofia(18, .bold))
+            }
+        } else if case .preview(_, _, let onClose) = mode {
+            ToolbarItem(placement: .principal) {
+                Text(previewDashboard?.name ?? "").font(.sofia(20, .bold)).foregroundStyle(.white)
+            }
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Close", action: onClose)
+            }
+            ToolbarItem(placement: .primaryAction) {
+                Button("Edit") { if let d = previewDashboard { beginEditing(d) } }
+            }
+        }
+    }
+
     // MARK: - Pages
+
+    /// The page currently shown in the Settings preview.
+    private var previewDashboard: Dashboard? {
+        previewSelection.flatMap { model.dashboards.dashboard(id: $0) }
+    }
 
     private var pageSelection: Binding<UUID?> {
         switch mode {
@@ -176,67 +247,5 @@ struct DashboardPagerView: View {
         .background(Color.cardGray, in: Capsule())
         .padding(.top, 6)
         .allowsHitTesting(false)
-    }
-}
-
-/// Top bar while editing: name (tap to rename), + Add, Done.
-private struct EditChrome: View {
-    let edit: DashboardEditController
-    let onDone: () -> Void
-    @State private var renaming = false
-    @State private var draftName = ""
-
-    var body: some View {
-        HStack(spacing: 16) {
-            Button {
-                draftName = edit.working.name
-                renaming = true
-            } label: {
-                HStack(spacing: 6) {
-                    Text(edit.working.name).font(.sofia(20, .bold)).foregroundStyle(.white)
-                    Image(systemName: "pencil").font(.system(size: 12, weight: .semibold)).foregroundStyle(Color.mutedStrong)
-                }
-            }
-            Spacer()
-            if let rejection = edit.lastRejection {
-                Text(rejection).font(.sofia(14, .semibold)).foregroundStyle(Color.toolbarRed).lineLimit(1)
-            }
-            Button {
-                edit.presentLibraryAppending()
-            } label: {
-                Label("Add", systemImage: "plus").font(.sofia(18, .bold))
-            }
-            .foregroundStyle(Color.accent)
-            Button("Done", action: onDone)
-                .font(.sofia(18, .bold))
-                .foregroundStyle(.black)
-                .padding(.horizontal, 16).padding(.vertical, 6)
-                .background(Color.accent, in: Capsule())
-        }
-        .padding(.horizontal, 54).padding(.top, 8)
-        .alert("Dashboard name", isPresented: $renaming) {
-            TextField("Name", text: $draftName)
-            Button("Save") { edit.rename(draftName) }
-            Button("Cancel", role: .cancel) {}
-        }
-    }
-}
-
-/// Chrome for the Settings preview: Edit / Close.
-private struct PreviewChrome: View {
-    let onEdit: () -> Void
-    let onClose: () -> Void
-
-    var body: some View {
-        HStack {
-            Button("Close", action: onClose)
-            Spacer()
-            Text("Long-press a widget to edit").font(.sofia(14, .semibold)).foregroundStyle(Color.muted)
-            Spacer()
-            Button("Edit", action: onEdit)
-        }
-        .font(.sofia(18, .bold))
-        .foregroundStyle(Color.accent)
-        .padding(.horizontal, 54).padding(.top, 8)
     }
 }

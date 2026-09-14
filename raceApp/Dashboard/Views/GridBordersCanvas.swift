@@ -5,26 +5,32 @@
 //  All cell borders in one pass. Widgets have zero spacing, so per-widget
 //  strokes would land side by side and read as 2 pt; stroking each frame here
 //  at the same half-pixel-snapped coordinates makes shared edges one line.
-//  Also dashes empty cells in edit mode so add targets are visible.
+//  Cells on the dashboard's outer corners are rounded there, so the group
+//  reads as one rounded panel without clipping anything (badges hang out).
+//  Empty cells and the slot a lifted widget will drop into are dashed.
 //
 
 import SwiftUI
 
 struct GridBordersCanvas: View {
+    let geom: GridGeometry
     let frames: [CGRect]
     let emptyCells: [CGRect]
+    /// Packed slot of the widget being dragged — drawn as a target, not solid.
+    var draggingFrame: CGRect?
     let editing: Bool
 
     var body: some View {
         Canvas(rendersAsynchronously: false) { ctx, _ in
             var borders = Path()
-            for f in frames { borders.addRect(snapped(f)) }
+            for f in frames where f != draggingFrame { borders.addPath(cellPath(f)) }
             ctx.stroke(borders, with: .color(Color.widgetBorder), lineWidth: WidgetMetrics.borderWidth)
 
             if editing {
-                var empties = Path()
-                for f in emptyCells { empties.addRect(snapped(f).insetBy(dx: 6, dy: 6)) }
-                ctx.stroke(empties, with: .color(Color.mutedWeak),
+                var targets = Path()
+                for f in emptyCells { targets.addPath(cellPath(f)) }
+                if let d = draggingFrame { targets.addPath(cellPath(d)) }
+                ctx.stroke(targets, with: .color(Color.mutedWeak),
                            style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
                 for f in emptyCells {
                     let c = CGPoint(x: f.midX, y: f.midY)
@@ -36,6 +42,10 @@ struct GridBordersCanvas: View {
             }
         }
         .allowsHitTesting(false)
+    }
+
+    private func cellPath(_ f: CGRect) -> Path {
+        geom.outerCorners(of: f).path(in: snapped(f))
     }
 
     /// 1 pt lines centred on x.5 cover exactly one pixel row on 2x/3x screens.

@@ -53,28 +53,51 @@ struct RecordingToolbar: View {
     let onStop: () -> Void
     let onInteract: () -> Void
     let onCollapse: () -> Void
+    /// Landscape: one row along the top edge (Figma). Portrait: rises from
+    /// the bottom, pills centred under the timer / STOP row.
+    var edge: Edge = .top
+    var safeBottom: CGFloat = 0
 
     @State private var dragOffset: CGFloat = 0
 
     var body: some View {
-        ZStack(alignment: .top) {
-            LinearGradient(colors: [.black, .black.opacity(0)], startPoint: .top, endPoint: .bottom)
-                .frame(height: 200)
+        ZStack(alignment: edge == .top ? .top : .bottom) {
+            // Opaque under the controls, then fades — the widget beneath
+            // must not show through the timer.
+            LinearGradient(stops: [.init(color: .black, location: 0),
+                                   .init(color: .black, location: 0.45),
+                                   .init(color: .black.opacity(0), location: 1)],
+                           startPoint: edge == .top ? .top : .bottom,
+                           endPoint: edge == .top ? .bottom : .top)
+                .frame(height: 240)
                 .allowsHitTesting(false)
 
-            HStack(spacing: 0) {
-                timer
-                Spacer(minLength: 16)
-                pager
-                Spacer(minLength: 16)
-                stopButton
+            if edge == .top {
+                HStack(spacing: 0) {
+                    timer
+                    Spacer(minLength: 16)
+                    pager
+                    Spacer(minLength: 16)
+                    stopButton
+                }
+                .padding(.horizontal, 32)
+                .padding(.top, 22)
+            } else {
+                VStack(spacing: 20) {
+                    HStack(spacing: 0) {
+                        timer
+                        Spacer(minLength: 16)
+                        stopButton
+                    }
+                    pager
+                }
+                .padding(.horizontal, 32)
+                .padding(.bottom, max(safeBottom, 16) + 4)
             }
-            .padding(.horizontal, 32)
-            .padding(.top, 22)
         }
-        .frame(maxWidth: .infinity, alignment: .top)
+        .frame(maxWidth: .infinity, alignment: edge == .top ? .top : .bottom)
         .contentShape(Rectangle())
-        .offset(y: min(0, dragOffset) * 0 + max(0, dragOffset))
+        .offset(y: max(0, dragOffset))
         .gesture(
             DragGesture(minimumDistance: 24)
                 .onChanged { value in

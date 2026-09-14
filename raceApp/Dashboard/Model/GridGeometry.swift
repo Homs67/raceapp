@@ -6,7 +6,7 @@
 //  landscape), whole-point cell edges so 1 pt borders sit on pixels.
 //
 
-import CoreGraphics
+import SwiftUI
 
 struct GridGeometry: Equatable {
     let grid: GridSpec
@@ -18,7 +18,10 @@ struct GridGeometry: Equatable {
 
     init(available: CGSize, grid: GridSpec, landscape: Bool, safeTop: CGFloat = 0, safeBottom: CGFloat = 0) {
         let insets = landscape ? Self.landscapeInsets : Self.portraitInsets
-        let top = insets.vertical + (landscape ? 0 : safeTop)
+        // Top always clears the safe area (notch, or the nav bar while
+        // editing). The landscape home indicator sits inside the 24 pt inset,
+        // so only portrait reserves the bottom.
+        let top = insets.vertical + safeTop
         let bottom = insets.vertical + (landscape ? 0 : safeBottom)
         let raw = CGRect(x: insets.horizontal, y: top,
                          width: available.width - 2 * insets.horizontal,
@@ -56,6 +59,21 @@ struct GridGeometry: Equatable {
         let x = min(max(p.x, bounds.minX), bounds.maxX - 0.001)
         let y = min(max(p.y, bounds.minY), bounds.maxY - 0.001)
         return (Double((x - bounds.minX) / unitWidth), Double((y - bounds.minY) / unitHeight))
+    }
+
+    /// Corners of a cell that coincide with the dashboard's outer corners get
+    /// the outer radius, so the group reads as one rounded panel.
+    func outerCorners(of frame: CGRect) -> UnevenRoundedRectangle {
+        let r = WidgetMetrics.outerCornerRadius
+        let eps: CGFloat = 1.5
+        func near(_ a: CGFloat, _ b: CGFloat) -> Bool { abs(a - b) < eps }
+        let left = near(frame.minX, bounds.minX), right = near(frame.maxX, bounds.maxX)
+        let top = near(frame.minY, bounds.minY), bottom = near(frame.maxY, bounds.maxY)
+        return UnevenRoundedRectangle(
+            topLeadingRadius: top && left ? r : 0,
+            bottomLeadingRadius: bottom && left ? r : 0,
+            bottomTrailingRadius: bottom && right ? r : 0,
+            topTrailingRadius: top && right ? r : 0)
     }
 
     func cell(at p: CGPoint) -> (row: Int, col: Int)? {

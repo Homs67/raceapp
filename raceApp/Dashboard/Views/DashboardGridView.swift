@@ -43,7 +43,11 @@ struct DashboardGridView: View {
                 ForEach(placements) { placement in
                     if let frame = frames[placement.id] {
                         let lifted = edit?.dragging?.id == placement.id
-                        let drag = lifted ? (edit?.dragging?.translation ?? .zero) : .zero
+                        // Lifted: origin + finger travel; otherwise the packed slot.
+                        let shown = lifted && edit?.dragging != nil
+                            ? edit!.dragging!.origin.offsetBy(dx: edit!.dragging!.translation.width,
+                                                              dy: edit!.dragging!.translation.height)
+                            : frame
                         WidgetChrome(context: WidgetContext(
                             placement: placement,
                             contentSize: CGSize(width: frame.width - 2 * WidgetMetrics.padding,
@@ -61,22 +65,31 @@ struct DashboardGridView: View {
                         .overlay(alignment: .topLeading) {
                             if let edit { RemoveBadge(placement: placement, edit: edit) }
                         }
+                        // A lifted widget takes its panel with it: the canvas
+                        // leaves its slot dashed, so it draws its own bg/border.
+                        .background(lifted ? Color.black : Color.clear,
+                                    in: RoundedRectangle(cornerRadius: WidgetMetrics.outerCornerRadius))
+                        .overlay {
+                            if lifted {
+                                RoundedRectangle(cornerRadius: WidgetMetrics.outerCornerRadius)
+                                    .stroke(Color.widgetBorder, lineWidth: WidgetMetrics.borderWidth)
+                            }
+                        }
                         .scaleEffect(lifted ? 1.04 : (edit != nil ? 0.97 : 1))
                         .shadow(color: .black.opacity(lifted ? 0.6 : 0), radius: 18, y: 8)
-                        .offset(x: frame.minX + drag.width, y: frame.minY + drag.height)
+                        .offset(x: shown.minX, y: shown.minY)
                         .zIndex(lifted ? 1 : 0)
                         .animation(lifted ? nil : .snappy(duration: 0.25), value: frame)
                     }
                 }
 
-                GridBordersCanvas(frames: Array(frames.values),
+                GridBordersCanvas(geom: geom, frames: Array(frames.values),
                                   emptyCells: packed.emptyCells.map { geom.frame(for: $0) },
+                                  draggingFrame: edit?.dragging.flatMap { frames[$0.id] },
                                   editing: edit != nil)
                     .animation(.snappy(duration: 0.25), value: frames)
             }
             .coordinateSpace(name: "dashboardGrid")
-            .clipShape(RoundedRectangle(cornerRadius: WidgetMetrics.outerCornerRadius)
-                .path(in: geom.bounds), style: FillStyle())
             .contentShape(Rectangle())
             .onTapGesture { location in
                 guard let edit else { onTap(); return }
@@ -95,10 +108,10 @@ struct DashboardGridView: View {
         DragGesture(minimumDistance: 0, coordinateSpace: .named("dashboardGrid"))
             .onChanged { drag in
                 guard let rect = stretched[placement.id] else { return }
-                let start = geom.frame(for: rect)
+                let start = edit.dragging?.origin ?? geom.frame(for: rect)
                 let center = CGPoint(x: start.midX + drag.translation.width,
                                      y: start.midY + drag.translation.height)
-                edit.pressChanged(id: placement.id, translation: drag.translation,
+                edit.pressChanged(id: placement.id, frame: geom.frame(for: rect), translation: drag.translation,
                                   unit: geom.clampedUnitPoint(at: center), stretched: stretched)
             }
             .onEnded { _ in edit.pressEnded(id: placement.id) }
