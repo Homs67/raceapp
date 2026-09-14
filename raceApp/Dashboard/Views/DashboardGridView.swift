@@ -60,11 +60,6 @@ struct DashboardGridView: View {
                         // and hold-then-move (reorder); a LongPress→Drag
                         // sequence at high priority swallowed plain taps.
                         .highPriorityGesture(edit.map { editGesture(for: placement, edit: $0, geom: geom, stretched: stretched) })
-                        // Overlaid after the gesture so the badge's button
-                        // isn't underneath it.
-                        .overlay(alignment: .topLeading) {
-                            if let edit { RemoveBadge(placement: placement, edit: edit) }
-                        }
                         // A lifted widget takes its panel with it: the canvas
                         // leaves its slot dashed, so it draws its own bg/border.
                         .background(lifted ? Color.black : Color.clear,
@@ -88,6 +83,17 @@ struct DashboardGridView: View {
                                   draggingFrame: edit?.dragging.flatMap { frames[$0.id] },
                                   editing: edit != nil)
                     .animation(.snappy(duration: 0.25), value: frames)
+
+                // Badges last, so they sit above the border strokes.
+                if let edit {
+                    ForEach(placements) { placement in
+                        if let frame = frames[placement.id], edit.dragging?.id != placement.id {
+                            RemoveBadge(placement: placement, edit: edit)
+                                .offset(x: frame.minX, y: frame.minY)
+                                .animation(.snappy(duration: 0.25), value: frame)
+                        }
+                    }
+                }
             }
             .coordinateSpace(name: "dashboardGrid")
             .contentShape(Rectangle())

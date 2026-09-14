@@ -90,6 +90,19 @@ struct WidgetLibraryList: View {
     let onDone: () -> Void
 
     @AppStorage("useMetricUnits") private var metric = false
+    @State private var noRoom: NoRoom?
+
+    private struct NoRoom: Identifiable {
+        let kind: WidgetKind
+        let size: WidgetSize
+        var id: String { "\(kind.rawValue)-\(size.rawValue)" }
+        var cells: Int { size.cellCount }
+        var message: String {
+            let need = cells == 1 ? "1 free cell" : "\(cells) free cells"
+            let shape = size == .large ? " (2 × 2)" : size == .medium ? " (2 side by side)" : ""
+            return "\(kind.title) at \(size.label.lowercased()) needs \(need)\(shape) in both orientations. Remove or shrink a widget first."
+        }
+    }
 
     /// Preview cells are the real landscape cell size, scaled to the sheet.
     private static let cell = CGSize(width: 191, height: 177)
@@ -114,6 +127,12 @@ struct WidgetLibraryList: View {
                 .padding(Self.margin)
             }
         }
+        .alert("No room for this widget", isPresented: Binding(get: { noRoom != nil }, set: { if !$0 { noRoom = nil } }),
+               presenting: noRoom) { _ in
+            Button("OK", role: .cancel) {}
+        } message: { item in
+            Text(item.message)
+        }
     }
 
     private func section(_ size: WidgetSize, kinds: [WidgetKind], width: CGFloat,
@@ -130,17 +149,18 @@ struct WidgetLibraryList: View {
             LazyVGrid(columns: Array(repeating: GridItem(.fixed(previewW), spacing: Self.gap), count: columns),
                       alignment: .leading, spacing: Self.gap) {
                 ForEach(kinds, id: \.self) { kind in
-                    let fits = fitting(kind).contains(size)
                     Button {
-                        if pick(kind, size) { onDone() }
+                        if fitting(kind).contains(size) {
+                            if pick(kind, size) { onDone() }
+                        } else {
+                            noRoom = NoRoom(kind: kind, size: size)
+                        }
                     } label: {
                         WidgetPreview(kind: kind, size: size, live: live, units: units, track: track,
                                       nominal: CGSize(width: cellW, height: cellH), scale: scale)
                     }
                     .buttonStyle(PressableButtonStyle())
-                    .disabled(!fits)
-                    .opacity(fits ? 1 : 0.35)
-                    .accessibilityLabel("\(kind.title), \(size.label)\(fits ? "" : ", doesn't fit")")
+                    .accessibilityLabel("\(kind.title), \(size.label)")
                 }
             }
         }

@@ -78,9 +78,13 @@ struct DashboardPagerView: View {
             let fullSize = CGSize(width: outer.size.width + safe.leading + safe.trailing,
                                   height: outer.size.height + safe.top + safe.bottom)
             TimelineView(.periodic(from: .now, by: 0.1)) { context in
-                let live = feed.tick(model: model, now: uptimeNow(), date: context.date, metric: metric)
-                let units = UnitsFormatter(metric: metric)
                 let track = model.metrics.track ?? previewTrack
+                // Editing or previewing without a session: show plausible
+                // values so the layout reads, not a wall of dashes.
+                let live = mode.isRecording
+                    ? feed.tick(model: model, now: uptimeNow(), date: context.date, metric: metric)
+                    : LiveSnapshot.demo(track: track)
+                let units = UnitsFormatter(metric: metric)
                 let landscape = verticalSizeClass == .compact
 
                 ZStack(alignment: .top) {

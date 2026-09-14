@@ -40,6 +40,7 @@ final class ToolbarVisibility {
 
     func toggle() {
         guard Date().timeIntervalSince(armedAt) > 1 else { return }
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
         visible ? hide() : show()
     }
     /// Any interaction restarts the auto-hide clock.
