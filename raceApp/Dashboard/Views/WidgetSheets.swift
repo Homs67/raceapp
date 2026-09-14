@@ -145,11 +145,14 @@ struct WidgetLibraryList: View {
 
     private func section(_ size: WidgetSize, kinds: [WidgetKind], width: CGFloat,
                          live: LiveSnapshot, units: UnitsFormatter, track: Track?) -> some View {
-        // Smalls sit two per row; medium and large take the full width.
-        let columns = size == .small ? 2 : 1
+        // As many columns as fit at (about) real size — tiles are never
+        // enlarged, so a wide landscape sheet gets more per row rather than
+        // bigger previews. Rounding lets a tile shrink slightly to fit one
+        // more column (portrait: two smalls per row).
         let cellW = Self.cell.width * CGFloat(size.span.cols)
         let cellH = Self.cell.height * CGFloat(size.span.rows)
-        let previewW = (width - Self.gap * CGFloat(columns - 1)) / CGFloat(columns)
+        let columns = max(1, Int(((width + Self.gap) / (cellW + Self.gap)).rounded()))
+        let previewW = min(cellW, (width - Self.gap * CGFloat(columns - 1)) / CGFloat(columns))
         let scale = previewW / cellW
         return VStack(alignment: .leading, spacing: 10) {
             Text(size.label.uppercased())
