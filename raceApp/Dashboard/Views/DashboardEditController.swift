@@ -172,7 +172,8 @@ final class DashboardEditController {
     // MARK: - Drag to reorder
 
     func dragBegan(id: UUID, from frame: CGRect) {
-        guard dragging == nil else { return }
+        guard dragging == nil,
+              working.placements.first(where: { $0.id == id })?.kind != .empty else { return }
         dragging = Drag(id: id, origin: frame, translation: .zero, lastIndex: nil)
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
     }

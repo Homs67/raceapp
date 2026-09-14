@@ -66,6 +66,9 @@ struct DashboardGridView: View {
                         // and hold-then-move (reorder); a LongPress→Drag
                         // sequence at high priority swallowed plain taps.
                         .highPriorityGesture(edit.map { editGesture(for: placement, edit: $0, geom: geom, stretched: stretched) })
+                        // Holes are inert in the live view; in edit mode they
+                        // take taps (→ library) but never lift.
+                        .allowsHitTesting(edit != nil || placement.kind != .empty)
                         // A lifted widget takes its panel with it: the canvas
                         // leaves its slot dashed, so it draws its own bg/border.
                         .background(lifted ? Color.black : Color.clear,
@@ -76,7 +79,7 @@ struct DashboardGridView: View {
                                     .stroke(Color.widgetBorder, lineWidth: WidgetMetrics.borderWidth)
                             }
                         }
-                        .scaleEffect(lifted ? 1.04 : (edit != nil ? 0.97 : 1))
+                        .scaleEffect(lifted ? 1.04 : (edit != nil && placement.kind != .empty ? 0.97 : 1))
                         .shadow(color: .black.opacity(lifted ? 0.6 : 0), radius: 18, y: 8)
                         .offset(x: shown.minX, y: shown.minY)
                         .zIndex(lifted ? 1 : 0)
@@ -84,8 +87,12 @@ struct DashboardGridView: View {
                     }
                 }
 
-                GridBordersCanvas(geom: geom, frames: Array(frames.values),
-                                  emptyCells: packed.emptyCells.map { geom.frame(for: $0) },
+                // Holes left by a removed widget are drawn like never-filled
+                // cells: no border of their own, a dashed + target when editing.
+                GridBordersCanvas(geom: geom,
+                                  frames: placements.filter { $0.kind != .empty }.compactMap { frames[$0.id] },
+                                  emptyCells: packed.emptyCells.map { geom.frame(for: $0) }
+                                      + placements.filter { $0.kind == .empty }.compactMap { frames[$0.id] },
                                   draggingFrame: edit?.dragging.flatMap { frames[$0.id] },
                                   editing: edit != nil, edgeToEdge: edgeToEdge)
                     .animation(.snappy(duration: 0.25), value: frames)
@@ -93,7 +100,8 @@ struct DashboardGridView: View {
                 // Badges last, so they sit above the border strokes.
                 if let edit {
                     ForEach(placements) { placement in
-                        if let frame = frames[placement.id], edit.dragging?.id != placement.id {
+                        if let frame = frames[placement.id], edit.dragging?.id != placement.id,
+                           placement.kind != .empty {
                             RemoveBadge(placement: placement, edit: edit)
                                 .offset(x: frame.minX, y: frame.minY)
                                 .animation(.snappy(duration: 0.25), value: frame)
