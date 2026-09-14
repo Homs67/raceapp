@@ -18,7 +18,7 @@ final class DashboardStoreTests: XCTestCase {
 
     func testSeedsLapTimerWhenNoFile() {
         let store = DashboardStore(fileURL: url)
-        XCTAssertEqual(store.dashboards.map(\.name), ["Lap Timer"])
+        XCTAssertEqual(store.dashboards.map(\.name), ["Lap Timer", "Driving"])
         XCTAssertEqual(store.selectedId, store.dashboards.first?.id)
         XCTAssertTrue(FileManager.default.fileExists(atPath: url.path), "seed is persisted immediately")
     }
@@ -49,7 +49,7 @@ final class DashboardStoreTests: XCTestCase {
         _ = DashboardStore(fileURL: url)
         try "not json".write(to: url, atomically: true, encoding: .utf8)
         let store = DashboardStore(fileURL: url)
-        XCTAssertEqual(store.dashboards.map(\.name), ["Lap Timer"])
+        XCTAssertEqual(store.dashboards.map(\.name), ["Lap Timer", "Driving"])
     }
 
     func testAddRejectsOverflowAndCap() {
@@ -65,7 +65,8 @@ final class DashboardStoreTests: XCTestCase {
         let store = DashboardStore(fileURL: url)
         XCTAssertNil(UserDefaults.standard.object(forKey: "dashboardFace"))
         store.remove(id: store.dashboards[0].id)
-        XCTAssertEqual(store.dashboards.count, 1)
+        store.remove(id: store.dashboards[0].id)
+        XCTAssertEqual(store.dashboards.count, 2, "removing the last dashboard reseeds")
         XCTAssertEqual(store.selectedId, store.dashboards[0].id)
     }
 
@@ -75,6 +76,6 @@ final class DashboardStoreTests: XCTestCase {
         let copy = store.duplicate(id: source.id)!
         XCTAssertNotEqual(copy.id, source.id)
         XCTAssertEqual(Set(copy.placements.map(\.id)).intersection(source.placements.map(\.id)).count, 0)
-        XCTAssertEqual(store.dashboards.count, 2)
+        XCTAssertEqual(store.dashboards.count, 3)
     }
 }

@@ -110,7 +110,7 @@ final class DashboardStore {
     }
 
     static func seed() -> [Dashboard] {
-        [Dashboard.lapTimer()]
+        [Dashboard.lapTimer(), Dashboard.driving()]
     }
 
     // MARK: - Persistence

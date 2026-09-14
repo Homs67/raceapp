@@ -33,6 +33,12 @@ final class SessionMetrics {
     private(set) var delta: TimeInterval?
     /// Distance along the current lap from the start/finish line, metres.
     private(set) var lapProgressMeters: Double?
+    /// Equal-thirds sectors: delta gained/lost inside each completed sector of
+    /// the current lap, plus the live figure for the sector we're in.
+    private(set) var sectorDeltas: [TimeInterval?] = [nil, nil, nil]
+    private(set) var currentSector = 0
+    private(set) var currentSectorDelta: TimeInterval?
+    private var sectorStartDelta: TimeInterval?
 
     init(bus: TelemetryBus) { self.bus = bus }
 
@@ -63,6 +69,7 @@ final class SessionMetrics {
         task?.cancel(); task = nil
         lap = nil; lastGpsT = nil; lastSpeedT = nil
         progress = nil; lapDelta = nil; delta = nil; lapProgressMeters = nil
+        sectorDeltas = [nil, nil, nil]; currentSector = 0; currentSectorDelta = nil; sectorStartDelta = nil
         lapState = LapTimer.State(completedLaps: 0, currentLapTime: nil,
                                   lastLapTime: nil, bestLapTime: nil, lapTimes: [])
         dragRun = DragMeter.Run()
@@ -80,12 +87,30 @@ final class SessionMetrics {
             let st = lap.state(now: latR.t)
             if completed, let last = st.lastLapTime {
                 lapDelta?.lapCompleted(lapTime: last, isNewBest: st.bestLapTime == last)
+                sectorDeltas = [nil, nil, nil]
+                currentSector = 0
+                currentSectorDelta = nil
+                sectorStartDelta = nil
             }
-            if let fix = progress?.locate(lat: latR.value, lon: lonR.value) {
+            if let fix = progress?.locate(lat: latR.value, lon: lonR.value), let lapDelta {
                 lapProgressMeters = fix.s
                 if let elapsed = st.currentLapTime {
-                    lapDelta?.add(s: fix.s, elapsed: elapsed)
-                    delta = lapDelta?.delta
+                    lapDelta.add(s: fix.s, elapsed: elapsed)
+                    delta = lapDelta.delta
+                }
+                let sector = min(2, Int(fix.s / (lapDelta.lapLength / 3)))
+                if sector > currentSector {
+                    // Crossed into the next sector: bank the one we left.
+                    if let d = delta, let start = sectorStartDelta ?? (currentSector == 0 ? 0 : nil) {
+                        sectorDeltas[currentSector] = d - start
+                    }
+                    sectorStartDelta = delta
+                    currentSector = sector
+                }
+                if let d = delta, let start = sectorStartDelta ?? (currentSector == 0 ? 0 : nil) {
+                    currentSectorDelta = d - start
+                } else {
+                    currentSectorDelta = nil
                 }
             }
         }

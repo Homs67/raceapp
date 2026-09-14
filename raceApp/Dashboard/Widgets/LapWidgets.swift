@@ -16,18 +16,20 @@ struct LapTimeWidget: View {
         let lap = context.live.lap
         switch context.size {
         case .large:
-            HStack(alignment: .bottom, spacing: 24) {
-                WidgetValue(text: LapTimeFormat.string(lap.currentLapTime), context: context)
+            // Recent laps stack above the hero: a 100 pt time already fills
+            // the cell's width, so nothing fits beside it.
+            VStack(alignment: .leading, spacing: 12) {
                 VStack(alignment: .leading, spacing: 2) {
                     ForEach(Array(lap.lapTimes.suffix(3).enumerated().reversed()), id: \.offset) { i, t in
-                        HStack(spacing: 10) {
+                        HStack(alignment: .lastTextBaseline, spacing: 10) {
                             WidgetCaption(text: "L\(lap.lapTimes.count - (lap.lapTimes.suffix(3).count - 1 - i))")
+                                .frame(width: 32, alignment: .leading)
                             WidgetSecondaryValue(text: LapTimeFormat.string(t),
                                                  color: t == lap.bestLapTime ? Color.deltaGreen : .white.opacity(0.9))
                         }
                     }
                 }
-                Spacer(minLength: 0)
+                WidgetValue(text: LapTimeFormat.string(lap.currentLapTime), context: context)
             }
         default:
             WidgetValue(text: LapTimeFormat.string(lap.currentLapTime), context: context)

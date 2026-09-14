@@ -17,9 +17,7 @@ struct SettingsView: View {
     @AppStorage("keepScreenAwake") private var keepAwake = false
     @AppStorage("shiftEnabled") private var shiftEnabled = false
     @AppStorage("shiftRPM") private var shiftRPM: Double = 5500
-    @AppStorage("dashboardFace") private var dashboardFace = 0
     @State private var preferredCar = PreferredCar.load()
-    @State private var showDashboardPicker = false
 
     private var connection: ConnectionController { model.connection }
     private let connectedGreen = Color(hex: 0x30D158)
@@ -59,17 +57,6 @@ struct SettingsView: View {
                 default:
                     EmptyView()
                 }
-            }
-            .sheet(isPresented: $showDashboardPicker) {
-                NavigationStack {
-                    DefaultDashboardPicker(selection: $dashboardFace)
-                        .toolbar {
-                            ToolbarItem(placement: .topBarTrailing) {
-                                Button("Done") { showDashboardPicker = false }
-                            }
-                        }
-                }
-                .presentationDetents([.medium, .large])
             }
             .onAppear { connection.beginAdapterDiscoveryIfNeeded() }
         }
@@ -610,73 +597,3 @@ private struct MyCarPickerView: View {
     }
 }
 
-// MARK: - Default dashboard
-
-private struct DefaultDashboardPreview: View {
-    var face: Int
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(DashboardFaces.name(for: face).uppercased())
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(Color.muted)
-                .kerning(1)
-            HStack(alignment: .firstTextBaseline, spacing: 16) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("RPM")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(Color.muted)
-                    Text("9545")
-                        .font(.numeral(28, weight: .bold))
-                        .foregroundStyle(Color.textPrimary)
-                }
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("SPEED")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(Color.muted)
-                    Text("53")
-                        .font(.numeral(28, weight: .bold))
-                        .foregroundStyle(Color.textPrimary)
-                    + Text(" mph")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(Color.muted)
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color.white.opacity(0.35), lineWidth: 1)
-        )
-    }
-}
-
-private struct DefaultDashboardPicker: View {
-    @Binding var selection: Int
-
-    var body: some View {
-        List {
-            ForEach(DashboardFaces.names.indices, id: \.self) { index in
-                Button {
-                    selection = index
-                } label: {
-                    HStack {
-                        Text(DashboardFaces.names[index])
-                            .foregroundStyle(Color.textPrimary)
-                        Spacer()
-                        if selection == index {
-                            Image(systemName: "checkmark")
-                                .foregroundStyle(Color.accent)
-                        }
-                    }
-                }
-                .listRowBackground(Color.cardGray)
-            }
-        }
-        .scrollContentBackground(.hidden)
-        .background(Color.bgScreen)
-        .navigationTitle("Default dashboard")
-        .navigationBarTitleDisplayMode(.inline)
-    }
-}

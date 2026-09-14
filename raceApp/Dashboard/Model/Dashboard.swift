@@ -75,6 +75,17 @@ struct Dashboard: Codable, Identifiable, Equatable {
         ])
     }
 
+    /// Row 1 rpm + speed (medium), row 2 gear · g-force · status.
+    static func driving() -> Dashboard {
+        Dashboard(name: "Driving", placements: [
+            WidgetPlacement(kind: .rpm, size: .medium),
+            WidgetPlacement(kind: .speed, size: .medium),
+            WidgetPlacement(kind: .gear, size: .small),
+            WidgetPlacement(kind: .gForce, size: .medium),
+            WidgetPlacement(kind: .status, size: .small),
+        ])
+    }
+
     /// Both orientations must pack without overflow.
     var fitsEverywhere: Bool { GridPacker.fits(placements, grid: grid) }
 }

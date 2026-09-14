@@ -11,6 +11,7 @@ import Foundation
 import SwiftUI
 import SessionKit
 import ObdKit
+import RaceBoxKit
 
 @MainActor
 final class DashboardLiveFeed {
@@ -47,6 +48,12 @@ final class DashboardLiveFeed {
             live.gear = model.gearEstimator.gear(rpm: rpm, speedMps: speedMps)
         }
         live.obdHz = model.bus.obdHz(now: now)
+        live.coolantC = snapshot.fresh(.obd(.coolantTemp), now: now, maxAge: 90)
+        live.accelPedal = snapshot.fresh(.canAccelPedal, now: now, maxAge: 1) ?? live.throttle
+        live.brake = snapshot.fresh(.canBrake, now: now, maxAge: 1)
+        let defaults = UserDefaults.standard
+        live.shift = ShiftIndicator(enabled: defaults.bool(forKey: "shiftEnabled"),
+                                    shiftRPM: defaults.object(forKey: "shiftRPM") as? Double ?? 5500)
 
         // Prefer auto-calibrated car-frame G; fall back to raw device axes
         // until leveling + alignment complete (flagged so the UI stays honest).
@@ -79,6 +86,18 @@ final class DashboardLiveFeed {
         live.delta = model.metrics.delta
         live.lapProgressMeters = model.metrics.lapProgressMeters
         live.trackId = model.metrics.track?.id
+        live.sectorDeltas = model.metrics.sectorDeltas
+        live.currentSector = model.metrics.currentSector
+        live.currentSectorDelta = model.metrics.currentSectorDelta
+
+        if model.raceBox.state == .connected, let msg = model.raceBox.latest {
+            let power: String
+            switch msg.power(for: model.raceBox.deviceInfo?.model ?? .micro) {
+            case .inputVoltage(let v): power = String(format: "%.1f V", v)
+            case .battery(let pct, let charging): power = "\(pct)%" + (charging ? " ⚡︎" : "")
+            }
+            live.raceBox = RaceBoxLink(satellites: msg.satellites, has3DFix: msg.hasValidFix, powerText: power)
+        }
 
         live.isRecording = model.recording.isRecording
         live.elapsed = model.recording.startedAt.map { date.timeIntervalSince($0) } ?? 0

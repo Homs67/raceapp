@@ -54,17 +54,3 @@ struct PreferredCar: Codable, Equatable, Identifiable, Hashable {
 
     private static let storageKey = "preferredCar"
 }
-
-enum DashboardFaces {
-    static let names = [
-        "Primary",
-        "G-Force",
-        "Track Map",
-        "Lap Timing",
-    ]
-
-    static func name(for index: Int) -> String {
-        guard names.indices.contains(index) else { return names[0] }
-        return names[index]
-    }
-}

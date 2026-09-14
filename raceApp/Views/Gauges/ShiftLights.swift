@@ -9,7 +9,7 @@
 
 import SwiftUI
 
-struct ShiftIndicator {
+struct ShiftIndicator: Equatable {
     var enabled: Bool
     var shiftRPM: Double
     /// RPM below the shift point where the lights begin to fill.

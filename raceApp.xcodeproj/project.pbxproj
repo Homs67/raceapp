@@ -626,6 +626,10 @@
 			isa = XCSwiftPackageProductDependency;
 			productName = ObdKit;
 		};
+		AA0000000000000000000004 /* SessionKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = SessionKit;
+		};
 		AA0000000000000000000012 /* BleKit */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = BleKit;
@@ -633,10 +637,6 @@
 		AA0000000000000000000014 /* RaceBoxKit */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = RaceBoxKit;
-		};
-		AA0000000000000000000004 /* SessionKit */ = {
-			isa = XCSwiftPackageProductDependency;
-			productName = SessionKit;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

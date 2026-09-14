@@ -28,8 +28,6 @@ enum LaunchArgs {
         if CommandLine.arguments.contains("-open-diagnostics") { return "diagnostics" }
         return nil
     }
-    /// Render the pre-widget faces dashboard for side-by-side screenshots.
-    static var legacyDashboard: Bool { CommandLine.arguments.contains("-legacy-dashboard") }
     #else
     static var openLatestSession: Bool { false }
     static var openLatestGraph: Bool { false }
@@ -37,7 +35,6 @@ enum LaunchArgs {
     static var openSettings: Bool { false }
     static var openDebug: Bool { false }
     static var debugRoute: String? { nil }
-    static var legacyDashboard: Bool { false }
     #endif
 }
 
@@ -51,13 +48,8 @@ struct ContentView: View {
                 get: { model.dashboardExpanded && model.recording.isRecording },
                 set: { if !$0 { model.dashboardExpanded = false } }
             )) {
-                if LaunchArgs.legacyDashboard {
-                    LiveDashboardView(onCollapse: { model.dashboardExpanded = false })
-                        .environment(model)
-                } else {
-                    DashboardPagerView(mode: .recording(onCollapse: { model.dashboardExpanded = false }))
-                        .environment(model)
-                }
+                DashboardPagerView(mode: .recording(onCollapse: { model.dashboardExpanded = false }))
+                    .environment(model)
             }
             .sheet(isPresented: Binding(
                 get: { model.showSettings },

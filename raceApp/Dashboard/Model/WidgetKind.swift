@@ -25,13 +25,28 @@ enum WidgetCategory: String, CaseIterable, Identifiable {
 }
 
 enum WidgetKind: String, CaseIterable {
-    // Phase 1 — Lap Timer dashboard
-    case lapTime, lapDelta, lapMap, lastLap, bestLap
+    // Lap timing
+    case lapTime, lapDelta, lapMap, lastLap, bestLap, predictedLap, sectorDelta, lapCount, sessionTime
+    // Engine / driver inputs
+    case rpm, speed, gear, shiftLights, pedals, coolant
+    // Dynamics
+    case gForce
+    // Track / position
+    case trackMap, altitude, heading
+    // Status
+    case status, raceBox
+    // Camera
+    case camera
     // Placeholder for kinds a newer build wrote that this one doesn't know
     case unknown
 
-    /// Kinds offered in the library (everything except the placeholder).
-    static var library: [WidgetKind] { allCases.filter { $0 != .unknown } }
+    /// Kinds offered in the library, in gallery order.
+    static let library: [WidgetKind] = [
+        .lapTime, .lapDelta, .predictedLap, .sectorDelta, .lapMap, .lastLap, .bestLap, .lapCount, .sessionTime,
+        .rpm, .speed, .gear, .shiftLights, .pedals, .coolant,
+        .gForce, .trackMap, .altitude, .heading,
+        .status, .raceBox, .camera,
+    ]
 
     var title: String {
         switch self {
@@ -40,41 +55,56 @@ enum WidgetKind: String, CaseIterable {
         case .lapMap: return "Lap"
         case .lastLap: return "Last lap"
         case .bestLap: return "Best lap"
+        case .predictedLap: return "Predicted"
+        case .sectorDelta: return "Sectors"
+        case .lapCount: return "Lap"
+        case .sessionTime: return "Session"
+        case .rpm: return "RPM"
+        case .speed: return "Speed"
+        case .gear: return "Gear"
+        case .shiftLights: return "Shift"
+        case .pedals: return "Pedals"
+        case .coolant: return "Coolant"
+        case .gForce: return "G-Force"
+        case .trackMap: return "Track"
+        case .altitude: return "Altitude"
+        case .heading: return "Heading"
+        case .status: return "Status"
+        case .raceBox: return "RaceBox"
+        case .camera: return "Camera"
         case .unknown: return "Unavailable"
-        }
-    }
-
-    var libraryDescription: String {
-        switch self {
-        case .lapTime: return "Running time of the current lap"
-        case .lapDelta: return "Ahead or behind your best lap, live"
-        case .lapMap: return "Lap number with your position on the track"
-        case .lastLap: return "Time of the lap you just completed"
-        case .bestLap: return "Fastest lap this session"
-        case .unknown: return ""
         }
     }
 
     var category: WidgetCategory {
         switch self {
-        case .lapTime, .lapDelta, .lapMap, .lastLap, .bestLap: return .lapTiming
-        case .unknown: return .status
+        case .lapTime, .lapDelta, .lapMap, .lastLap, .bestLap, .predictedLap, .sectorDelta, .lapCount, .sessionTime:
+            return .lapTiming
+        case .rpm, .speed, .gear, .shiftLights, .pedals, .coolant: return .engine
+        case .gForce: return .dynamics
+        case .trackMap, .altitude, .heading: return .navigation
+        case .status, .raceBox, .unknown: return .status
+        case .camera: return .camera
         }
     }
 
     var supportedSizes: [WidgetSize] {
         switch self {
-        case .lapTime: return [.small, .medium, .large]
-        case .lapDelta: return [.small, .medium]
-        case .lapMap: return [.small, .medium, .large]
-        case .lastLap, .bestLap: return [.small, .medium]
+        case .lapTime, .lapMap, .trackMap: return [.small, .medium, .large]
+        case .lapDelta, .lastLap, .bestLap, .predictedLap, .lapCount, .sessionTime,
+             .rpm, .speed, .pedals, .raceBox: return [.small, .medium]
+        case .sectorDelta, .shiftLights: return [.medium]
+        case .gForce: return [.medium, .large]
+        case .gear, .coolant, .altitude, .heading, .status: return [.small]
+        case .camera: return [.large]
         case .unknown: return [.small]
         }
     }
 
     var defaultSize: WidgetSize {
         switch self {
-        case .lapTime, .lapDelta: return .medium
+        case .lapTime, .lapDelta, .predictedLap, .sectorDelta, .rpm, .speed, .shiftLights, .gForce: return .medium
+        case .camera: return .large
         default: return .small
         }
     }
@@ -84,22 +114,22 @@ enum WidgetKind: String, CaseIterable {
     /// bigger text).
     var isHero: Bool {
         switch self {
-        case .lapTime, .lapDelta: return true
+        case .lapTime, .lapDelta, .predictedLap, .rpm, .speed: return true
         default: return false
         }
     }
 
-    var libraryIcon: String {
+    /// Widest string a hero can show, for the fits-at-100-pt check.
+    var heroTemplate: String {
         switch self {
-        case .lapTime: return "stopwatch"
-        case .lapDelta: return "plusminus"
-        case .lapMap: return "map"
-        case .lastLap: return "arrow.uturn.backward"
-        case .bestLap: return "trophy"
-        case .unknown: return "questionmark"
+        case .lapTime, .predictedLap: return "0:00.00"
+        case .lapDelta: return "+00.00"
+        case .rpm: return "0000"
+        case .speed: return "000"
+        default: return "00000"
         }
     }
 
-    /// Cap per dashboard (camera preview later = 1); nil = unlimited.
-    var maxPerDashboard: Int? { nil }
+    /// Cap per dashboard (one camera preview); nil = unlimited.
+    var maxPerDashboard: Int? { self == .camera ? 1 : nil }
 }

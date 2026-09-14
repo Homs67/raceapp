@@ -42,12 +42,7 @@ enum WidgetMetrics {
 
     static func heroFits(kind: WidgetKind, width: CGFloat) -> Bool {
         let needed = heroWidthCache[kind] ?? {
-            let template: String
-            switch kind {
-            case .lapTime: template = "0:00.00"
-            case .lapDelta: template = "+00.00"
-            default: template = "00000"
-            }
+            let template = kind.heroTemplate
             let base = UIFont(name: SofiaFace.name(for: .bold), size: heroValueSize) ?? .boldSystemFont(ofSize: heroValueSize)
             let tabular = UIFont(descriptor: base.fontDescriptor.addingAttributes([
                 .featureSettings: [[UIFontDescriptor.FeatureKey.type: kNumberSpacingType,
