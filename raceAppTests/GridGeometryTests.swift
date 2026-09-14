@@ -1,29 +1,30 @@
 import XCTest
+import SwiftUI
 @testable import raceApp
 
 final class GridGeometryTests: XCTestCase {
 
-    func testLandscapeMatchesFigmaFrame() {
-        // Figma 125:4704: 874×402 frame, content at (54, 24) 766×354.
-        let g = GridGeometry(available: CGSize(width: 874, height: 402), grid: .base, landscape: true)
-        XCTAssertEqual(g.bounds, CGRect(x: 54, y: 24, width: 766, height: 354))
+    func testLandscapeFillsTheScreenPastTheIsland() {
+        // iPhone 17 landscape: the island side carries a 59 pt inset.
+        let g = GridGeometry(available: CGSize(width: 874, height: 402), grid: .base, landscape: true,
+                             safe: EdgeInsets(top: 0, leading: 59, bottom: 21, trailing: 0))
+        XCTAssertEqual(g.bounds, CGRect(x: 59, y: 0, width: 815, height: 402))
         XCTAssertEqual(g.grid, GridSpec(rows: 2, cols: 4))
         let medium = g.frame(for: UnitRect(x: 0, y: 0, width: 2, height: 1))
-        XCTAssertEqual(medium.width, 383)
-        XCTAssertEqual(medium.height, 177)
+        XCTAssertEqual(medium.width, 408)   // 815 / 2, rounded edges
+        XCTAssertEqual(medium.height, 201)
         let third = g.frame(for: UnitRect(x: 4.0 / 3.0, y: 1, width: 4.0 / 3.0, height: 1))
-        XCTAssertEqual(third.minX, 54 + 255)
-        XCTAssertEqual(third.width, 256)   // rounded edges: 309→565 vs 54+255.33/510.67
+        XCTAssertEqual(third.minX, 59 + 272)
     }
 
-    func testPortraitTransposesAndHonoursSafeArea() {
+    func testPortraitTransposesAndKeepsOnlyTheTopClear() {
         let g = GridGeometry(available: CGSize(width: 402, height: 874), grid: .base, landscape: false,
-                             safeTop: 59, safeBottom: 34)
+                             safe: EdgeInsets(top: 59, leading: 0, bottom: 34, trailing: 0))
         XCTAssertEqual(g.grid, GridSpec(rows: 4, cols: 2))
-        XCTAssertEqual(g.bounds.minX, 24)
-        XCTAssertEqual(g.bounds.minY, 24 + 59)
-        XCTAssertEqual(g.bounds.maxY, 874 - 24 - 34)
-        XCTAssertEqual(g.bounds.width, 354)
+        XCTAssertEqual(g.bounds.minX, 0)
+        XCTAssertEqual(g.bounds.minY, 59)
+        XCTAssertEqual(g.bounds.maxY, 874)
+        XCTAssertEqual(g.bounds.width, 402)
     }
 
     func testEdgesAreWholePoints() {
@@ -36,9 +37,10 @@ final class GridGeometryTests: XCTestCase {
     }
 
     func testCellHitTesting() {
-        let g = GridGeometry(available: CGSize(width: 874, height: 402), grid: .base, landscape: true)
+        let g = GridGeometry(available: CGSize(width: 874, height: 402), grid: .base, landscape: true,
+                             safe: EdgeInsets(top: 0, leading: 59, bottom: 0, trailing: 0))
         XCTAssertNil(g.cell(at: CGPoint(x: 10, y: 10)))
-        let c = g.cell(at: CGPoint(x: 54 + 191 * 3 + 10, y: 24 + 177 + 10))
+        let c = g.cell(at: CGPoint(x: 59 + 204 * 3 + 10, y: 201 + 10))
         XCTAssertEqual(c?.row, 1)
         XCTAssertEqual(c?.col, 3)
         let clamped = g.clampedUnitPoint(at: CGPoint(x: 2000, y: -50))

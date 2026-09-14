@@ -166,8 +166,7 @@ struct DashboardPagerView: View {
     /// not the frame's — to just under the nav bar, so the zoom-out is only as
     /// much as the bar needs.
     private static func zoom(fullSize: CGSize, barTop: CGFloat, gridSafe: EdgeInsets, landscape: Bool) -> CGFloat {
-        let gridTop = GridGeometry(available: fullSize, grid: .base, landscape: landscape,
-                                   safeTop: gridSafe.top, safeBottom: gridSafe.bottom).bounds.minY
+        let gridTop = GridGeometry(available: fullSize, grid: .base, landscape: landscape, safe: gridSafe).bounds.minY
         let gap: CGFloat = 12
         let z = (fullSize.height - barTop - gap) / max(1, fullSize.height - gridTop)
         return min(1, max(0.5, z))

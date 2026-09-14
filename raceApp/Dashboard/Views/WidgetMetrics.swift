@@ -15,7 +15,10 @@ enum WidgetMetrics {
     static let titleSize: CGFloat = 21
     static let heroValueSize: CGFloat = 100
     static let valueSize: CGFloat = 48
-    static let outerCornerRadius: CGFloat = 8
+    /// The grid runs to the screen edge, so the display's own corners do the
+    /// rounding; only lifted widgets and gallery tiles use this.
+    static let outerCornerRadius: CGFloat = 0
+    static let panelCornerRadius: CGFloat = 8
     static let borderWidth: CGFloat = 1
 
     static var titleFont: Font { .sofia(titleSize, .heavy) }

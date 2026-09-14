@@ -27,8 +27,7 @@ struct DashboardGridView: View {
     var body: some View {
         GeometryReader { geo in
             let landscape = verticalSizeClass == .compact
-            let geom = GridGeometry(available: geo.size, grid: dashboard.grid, landscape: landscape,
-                                    safeTop: safeArea.top, safeBottom: safeArea.bottom)
+            let geom = GridGeometry(available: geo.size, grid: dashboard.grid, landscape: landscape, safe: safeArea)
             let placements = edit?.working.placements ?? dashboard.placements
             let packed = GridPacker.pack(placements, grid: geom.grid)
             // View mode stretches partial rows (Figma); the editor shows the
@@ -63,10 +62,10 @@ struct DashboardGridView: View {
                         // A lifted widget takes its panel with it: the canvas
                         // leaves its slot dashed, so it draws its own bg/border.
                         .background(lifted ? Color.black : Color.clear,
-                                    in: RoundedRectangle(cornerRadius: WidgetMetrics.outerCornerRadius))
+                                    in: RoundedRectangle(cornerRadius: WidgetMetrics.panelCornerRadius))
                         .overlay {
                             if lifted {
-                                RoundedRectangle(cornerRadius: WidgetMetrics.outerCornerRadius)
+                                RoundedRectangle(cornerRadius: WidgetMetrics.panelCornerRadius)
                                     .stroke(Color.widgetBorder, lineWidth: WidgetMetrics.borderWidth)
                             }
                         }

@@ -13,19 +13,16 @@ struct GridGeometry: Equatable {
     let bounds: CGRect          // content area after insets
     let landscape: Bool
 
-    static let landscapeInsets = (vertical: CGFloat(24), horizontal: CGFloat(54))
-    static let portraitInsets = (vertical: CGFloat(24), horizontal: CGFloat(24))
-
-    init(available: CGSize, grid: GridSpec, landscape: Bool, safeTop: CGFloat = 0, safeBottom: CGFloat = 0) {
-        let insets = landscape ? Self.landscapeInsets : Self.portraitInsets
-        // Top always clears the safe area (notch, or the nav bar while
-        // editing). The landscape home indicator sits inside the 24 pt inset,
-        // so only portrait reserves the bottom.
-        let top = insets.vertical + safeTop
-        let bottom = insets.vertical + (landscape ? 0 : safeBottom)
-        let raw = CGRect(x: insets.horizontal, y: top,
-                         width: available.width - 2 * insets.horizontal,
-                         height: available.height - top - bottom)
+    /// Edge to edge: the only thing kept clear is the sensor housing —
+    /// the top in portrait, the leading/trailing edge that carries it in
+    /// landscape. The home indicator overlays the bottom row (it auto-hides).
+    init(available: CGSize, grid: GridSpec, landscape: Bool, safe: EdgeInsets = EdgeInsets()) {
+        let top = landscape ? 0 : safe.top
+        let leading = landscape ? safe.leading : 0
+        let trailing = landscape ? safe.trailing : 0
+        let raw = CGRect(x: leading, y: top,
+                         width: available.width - leading - trailing,
+                         height: available.height - top)
         // Snap to whole points, absorbing the remainder into the insets.
         self.bounds = CGRect(x: raw.minX.rounded(), y: raw.minY.rounded(),
                              width: raw.width.rounded(.down), height: raw.height.rounded(.down))

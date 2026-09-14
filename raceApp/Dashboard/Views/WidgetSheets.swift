@@ -105,7 +105,15 @@ struct WidgetLibraryList: View {
     }
 
     /// Preview cells are the real landscape cell size, scaled to the sheet.
-    private static let cell = CGSize(width: 191, height: 177)
+    private static var cell: CGSize {
+        let b = UIScreen.main.bounds
+        let safe = DeviceSafeArea.insets()
+        let side = max(safe?.top ?? 0, safe?.leading ?? 0, safe?.trailing ?? 0)
+        let g = GridGeometry(available: CGSize(width: max(b.width, b.height), height: min(b.width, b.height)),
+                             grid: .base, landscape: true,
+                             safe: EdgeInsets(top: 0, leading: side, bottom: 0, trailing: 0))
+        return CGSize(width: g.unitWidth.rounded(), height: g.unitHeight.rounded())
+    }
     private static let gap: CGFloat = 8
     private static let margin: CGFloat = 16
 
@@ -199,9 +207,9 @@ private struct WidgetPreview: View {
             isLandscape: true, live: live, units: units, isEditing: false, track: track))
         .frame(width: nominal.width, height: nominal.height)
         .background(Color.black)
-        .clipShape(RoundedRectangle(cornerRadius: WidgetMetrics.outerCornerRadius / scale))
+        .clipShape(RoundedRectangle(cornerRadius: WidgetMetrics.panelCornerRadius / scale))
         .overlay {
-            RoundedRectangle(cornerRadius: WidgetMetrics.outerCornerRadius / scale)
+            RoundedRectangle(cornerRadius: WidgetMetrics.panelCornerRadius / scale)
                 .stroke(Color.widgetBorder, lineWidth: WidgetMetrics.borderWidth / scale)
         }
         .scaleEffect(scale, anchor: .topLeading)
