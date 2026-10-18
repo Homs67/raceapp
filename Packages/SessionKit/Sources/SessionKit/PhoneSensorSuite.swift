@@ -51,10 +51,12 @@ public final class PhoneSensorSuite: NSObject, @unchecked Sendable {
     /// course is an independent quantity — leaving it unpublished would blind
     /// the G-force validator and the heading readout.
     private var lastExternalCourseT: TimeInterval?
-    /// Set while a logger is publishing car-frame G of its own. Its
-    /// accelerometer is bolted to the car where the phone's rides in a
-    /// cradle, so when both are available the logger wins.
-    private var lastExternalCarFrameT: TimeInterval?
+    /// Set while a logger is streaming motion at all — not merely once its
+    /// own frame has converged. Its accelerometer is bolted to the car where
+    /// the phone's rides in a cradle, so the phone must never be the one
+    /// reporting the car's G: picking the phone up in a stationary car was
+    /// swinging the gauge.
+    private var lastExternalMotionT: TimeInterval?
 
     /// How long a logger's silence is tolerated before the phone takes over.
     /// Matches the recorder's motion-source rule.
@@ -71,16 +73,17 @@ public final class PhoneSensorSuite: NSObject, @unchecked Sendable {
     }
 
     private var externalOwnsCarFrame: Bool {
-        guard let last = lastExternalCarFrameT else { return false }
+        guard let last = lastExternalMotionT else { return false }
         return monotonicNow() - last < Self.externalSourceGrace
     }
 
-    /// A logger reported car-frame G: stand down until it stops. Separate from
-    /// position ownership because the logger's alignment converges later than
-    /// its first fix, and the phone should keep driving the gauge until then.
-    public func noteExternalCarFrame(at t: TimeInterval) {
+    /// A logger delivered a motion sample: stand down from car-frame G until
+    /// it stops. Deliberately not gated on the logger having *converged* —
+    /// a stationary car never gives it the speed changes it needs to align,
+    /// and phone-derived G in the meantime is worse than none.
+    public func noteExternalMotion(at t: TimeInterval) {
         calibrationLock.lock()
-        lastExternalCarFrameT = monotonicNow()
+        lastExternalMotionT = monotonicNow()
         calibrationLock.unlock()
     }
 
@@ -109,7 +112,7 @@ public final class PhoneSensorSuite: NSObject, @unchecked Sendable {
         smoothedLongG = nil
         lastExternalFixT = nil
         lastExternalCourseT = nil
-        lastExternalCarFrameT = nil
+        lastExternalMotionT = nil
         calibrationLock.unlock()
     }
 

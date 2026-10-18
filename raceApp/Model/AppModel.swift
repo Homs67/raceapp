@@ -80,8 +80,8 @@ final class AppModel {
         raceBox.onPositionFix = { [sensors] mps, course, t in
             sensors.ingestExternalFix(speed: mps, course: course, at: t)
         }
-        raceBox.onCarFrameG = { [sensors] t in
-            sensors.noteExternalCarFrame(at: t)
+        raceBox.onMotionSample = { [sensors] t in
+            sensors.noteExternalMotion(at: t)
         }
         recording.onEnterBackgroundWhileRecording = { [weak self] in
             self?.sensors.enterBackgroundRecordingMode()

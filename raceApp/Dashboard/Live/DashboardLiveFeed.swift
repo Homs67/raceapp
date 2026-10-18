@@ -55,14 +55,16 @@ final class DashboardLiveFeed {
         live.shift = ShiftIndicator(enabled: defaults.bool(forKey: "shiftEnabled"),
                                     shiftRPM: defaults.object(forKey: "shiftRPM") as? Double ?? 5500)
 
-        // Prefer auto-calibrated car-frame G; fall back to raw device axes
-        // until leveling + alignment complete (flagged so the UI stays honest).
+        // Prefer auto-calibrated car-frame G. Without it, raw phone axes are
+        // the honest stand-in ONLY when the phone is the motion source: with a
+        // logger attached they are somebody else's accelerometer, and a car
+        // sitting still would swing the gauge as the phone was handled.
         if let lat = snapshot.fresh(.carLatG, now: now, maxAge: 1),
            let long = snapshot.fresh(.carLongG, now: now, maxAge: 1) {
             live.latG = lat
             live.longG = long
             live.gCalibrated = true
-        } else {
+        } else if !model.raceBox.ownsMotion {
             live.latG = snapshot.fresh(.imuAccelX, now: now, maxAge: 1)
             live.longG = snapshot.fresh(.imuAccelY, now: now, maxAge: 1)
         }

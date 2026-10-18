@@ -247,9 +247,13 @@ final class RaceBoxController {
     /// can fill that one channel in without touching position.
     var onPositionFix: ((_ speedMps: Double, _ course: Double?, _ t: TimeInterval) -> Void)?
 
-    /// Called whenever the logger publishes car-frame G, so the phone's own
-    /// (cradle-mounted) estimate stands down.
-    var onCarFrameG: ((TimeInterval) -> Void)?
+    /// Called for every motion sample, so the phone's own (cradle-mounted)
+    /// car-frame estimate stands down for as long as this device is streaming.
+    var onMotionSample: ((TimeInterval) -> Void)?
+
+    /// True while this device is streaming into the bus: the dashboard uses
+    /// it to avoid falling back to phone axes for the car's G.
+    var ownsMotion: Bool { publishesToBus && state == .connected }
 
     /// Car-frame G from the logger's own accelerometer. Separate from the
     /// phone's calibrator: different mount, different rate, its own levelling.
@@ -275,13 +279,15 @@ final class RaceBoxController {
         bus.publish(.rbGForceZ, m.gForce.z, at: t)
 
         // Car-frame G from this accelerometer. Fed on every packet — levelling
-        // happens parked, before there is any fix to speak of.
+        // happens parked, before there is any fix to speak of. The phone is
+        // told on every sample, so it stops reporting the car's G the moment
+        // this device is live rather than once the alignment converges.
+        onMotionSample?(t)
         if let g = frame.ingest(accel: Vector3(m.gForce.x, m.gForce.y, m.gForce.z),
                                 rotationRate: Vector3(m.rotationRate.x, m.rotationRate.y, m.rotationRate.z),
                                 at: t) {
             bus.publish(.carLatG, g.latG, at: t)
             bus.publish(.carLongG, g.longG, at: t)
-            onCarFrameG?(t)
         }
         bus.publish(.rbRollRate, m.rotationRate.x, at: t)
         bus.publish(.rbPitchRate, m.rotationRate.y, at: t)
