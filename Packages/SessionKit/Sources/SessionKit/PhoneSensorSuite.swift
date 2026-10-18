@@ -41,6 +41,47 @@ public final class PhoneSensorSuite: NSObject, @unchecked Sendable {
     private var calibrator = CarFrameCalibrator()
     private var smoothedLatG: Double?
     private var smoothedLongG: Double?
+    /// Last time an external logger reported a fix. While that is recent the
+    /// logger owns `gps.*` and the car-frame alignment; the phone's own fixes
+    /// become the `phone.*` cross-check. Time-based rather than a flag so a
+    /// logger that drops out mid-drive hands position back on its own.
+    private var lastExternalFixT: TimeInterval?
+    /// Separately tracked: a logger can have a position solution but no
+    /// heading one (the ND2 drive never set RaceBox `headingValid`), and
+    /// course is an independent quantity — leaving it unpublished would blind
+    /// the G-force validator and the heading readout.
+    private var lastExternalCourseT: TimeInterval?
+
+    /// How long a logger's silence is tolerated before the phone takes over.
+    /// Matches the recorder's motion-source rule.
+    private static let externalSourceGrace: TimeInterval = 3
+
+    private var externalOwnsPosition: Bool {
+        guard let last = lastExternalFixT else { return false }
+        return monotonicNow() - last < Self.externalSourceGrace
+    }
+
+    private var externalOwnsCourse: Bool {
+        guard let last = lastExternalCourseT else { return false }
+        return monotonicNow() - last < Self.externalSourceGrace
+    }
+
+    /// Speed from an external logger (RaceBox, 25 Hz). Drives the car-frame
+    /// alignment in place of the phone's 1 Hz CoreLocation estimate, and marks
+    /// the logger as the owner of `gps.*`.
+    ///
+    /// The alignment solves for the car's forward axis by correlating IMU
+    /// acceleration against the derivative of ground speed, so its accuracy is
+    /// capped by the speed source: phone speed (±0.2–4 m/s, 1 Hz, smoothed) was
+    /// good for ~50° of misalignment on a real drive.
+    public func ingestExternalFix(speed mps: Double, course: Double?, at t: TimeInterval) {
+        calibrationLock.lock()
+        let now = monotonicNow()
+        lastExternalFixT = now
+        if course != nil { lastExternalCourseT = now }
+        calibrator.ingestSpeed(mps, at: t)
+        calibrationLock.unlock()
+    }
 
     /// Restart calibration (called at each session start — mounts move between drives).
     public func recalibrate() {
@@ -48,6 +89,8 @@ public final class PhoneSensorSuite: NSObject, @unchecked Sendable {
         calibrator.reset()
         smoothedLatG = nil
         smoothedLongG = nil
+        lastExternalFixT = nil
+        lastExternalCourseT = nil
         calibrationLock.unlock()
     }
 
@@ -288,6 +331,26 @@ extension PhoneSensorSuite: CLLocationManagerDelegate {
             // CLLocation timestamps are wall-clock; map to the monotonic session
             // clock via the current offset (sub-100ms error, fine at 1Hz GPS).
             let t = monotonicNow() - Date().timeIntervalSince(location.timestamp)
+
+            // A connected logger owns gps.*: mixing the phone's 1 Hz ±10 m
+            // fixes into a 25 Hz ±0.3 m stream poisons every consumer that
+            // reads the latest value. Keep them as an independent cross-check.
+            calibrationLock.lock()
+            let external = externalOwnsPosition
+            let externalCourse = externalOwnsCourse
+            calibrationLock.unlock()
+            guard !external else {
+                emit(.phoneLatitude, location.coordinate.latitude, t)
+                emit(.phoneLongitude, location.coordinate.longitude, t)
+                if location.speed >= 0 { emit(.phoneSpeed, location.speed, t) }
+                // Course is not position: when the logger has no heading
+                // solution the phone's is the only one there is.
+                if location.course >= 0, !externalCourse {
+                    emit(.gpsCourse, location.course, t)
+                }
+                continue
+            }
+
             emit(.gpsLatitude, location.coordinate.latitude, t)
             emit(.gpsLongitude, location.coordinate.longitude, t)
             emit(.gpsAltitude, location.altitude, t)

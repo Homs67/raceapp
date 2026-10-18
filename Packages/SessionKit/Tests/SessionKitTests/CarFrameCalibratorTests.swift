@@ -61,6 +61,27 @@ final class CarFrameCalibratorTests: XCTestCase {
         return calibrator
     }
 
+    /// Same drive, but speed arrives at 25 Hz like a RaceBox rather than 1 Hz.
+    /// The window rule is time-based, so a faster source must still close one
+    /// window per second and solve — and land at least as accurately.
+    func testSolvesWhenSpeedArrivesAtLoggerRate() {
+        var calibrator = CarFrameCalibrator()
+        level(&calibrator, mount: tiltedMount)
+        for step in 0..<(40 * 100) {
+            let t = Double(step) / 100
+            let longG = (8.0 / 6.0) * cos(t / 6) / 9.81
+            calibrator.ingestMotion(gravity: tiltedMount.down,
+                                    userAccel: tiltedMount.accel(lat: 0, long: longG))
+            if step % 4 == 0 {   // 25 Hz
+                calibrator.ingestSpeed(15 + 8 * sin(t / 6), at: 1000 + t)
+            }
+        }
+        XCTAssertEqual(calibrator.phase, .calibrated)
+        let g = calibrator.carFrame(userAccel: tiltedMount.accel(lat: 0, long: 0.5))
+        XCTAssertEqual(g!.longG, 0.5, accuracy: 0.05)
+        XCTAssertEqual(g!.latG, 0, accuracy: 0.05)
+    }
+
     // MARK: - Core transform
 
     func testCalibratesAndTransformsAtArbitraryMountAngle() {

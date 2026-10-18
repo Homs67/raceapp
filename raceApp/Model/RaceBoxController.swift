@@ -241,6 +241,12 @@ final class RaceBoxController {
         publish(message)
     }
 
+    /// Called with every valid fix: 25 Hz ground speed for the car-frame
+    /// G calibration, which otherwise runs on the phone's 1 Hz GPS.
+    /// `course` is nil when the receiver has no heading solution, so the phone
+    /// can fill that one channel in without touching position.
+    var onPositionFix: ((_ speedMps: Double, _ course: Double?, _ t: TimeInterval) -> Void)?
+
     /// Feed the telemetry bus. Position and speed go to the canonical `gps.*`
     /// channels so every existing consumer — lap timer, drag meter, highlights,
     /// graphs, video review — gets 25 Hz data with no change; `rb.*` carries
@@ -271,6 +277,7 @@ final class RaceBoxController {
         // cold-start packet carries confident-looking coordinates that are
         // kilometres wrong, so gate on the flags rather than plausibility.
         guard m.hasValidFix, m.coordinatesValid else { return }
+        onPositionFix?(m.speedMps, m.headingValid ? m.headingDegrees : nil, t)
         bus.publish(.gpsLatitude, m.latitude, at: t)
         bus.publish(.gpsLongitude, m.longitude, at: t)
         bus.publish(.gpsSpeed, m.speedMps, at: t)

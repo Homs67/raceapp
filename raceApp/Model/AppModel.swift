@@ -75,6 +75,11 @@ final class AppModel {
         // 25 Hz position lands in gps.* and every existing consumer benefits
         // without knowing the device exists.
         raceBox.bus = bus
+        // The logger's 25 Hz speed drives the car-frame G alignment, and its
+        // presence demotes the phone's own fixes to the phone.* cross-check.
+        raceBox.onPositionFix = { [sensors] mps, course, t in
+            sensors.ingestExternalFix(speed: mps, course: course, at: t)
+        }
         recording.onEnterBackgroundWhileRecording = { [weak self] in
             self?.sensors.enterBackgroundRecordingMode()
         }
