@@ -1,7 +1,7 @@
 import Foundation
 
 /// Minimal 3-vector for frame math.
-public struct Vector3: Sendable, Equatable {
+public struct Vector3: Sendable, Equatable, Codable {
     public var x: Double
     public var y: Double
     public var z: Double
@@ -121,7 +121,60 @@ public struct CarFrameCalibrator: Sendable {
     }
 
     public mutating func reset() {
-        self = CarFrameCalibrator()
+        self = CarFrameCalibrator(levelingSamplesNeeded: levelingSamplesNeeded)
+    }
+
+    // MARK: - Persistence
+
+    /// A solved frame, enough to resume without re-driving the alignment.
+    /// Carries the normal equations too, so a restored fit keeps refining
+    /// from everything it already learned rather than restarting the count.
+    public struct Snapshot: Codable, Equatable, Sendable {
+        public var down: Vector3
+        public var forward: Vector3
+        public var right: Vector3
+        public var gyroBias: Vector3?
+        public var mtm: [[Double]]
+        public var mtb: [Double]
+        public var windowCount: Int
+        public var minAccel: Double
+        public var maxAccel: Double
+        public var scale: Double
+    }
+
+    /// Nil until the frame has actually solved — there is nothing worth
+    /// keeping before that.
+    public var snapshot: Snapshot? {
+        guard phase == .calibrated, let quality = fitQuality else { return nil }
+        return Snapshot(down: down, forward: forward, right: right, gyroBias: gyroBias,
+                        mtm: mtm, mtb: mtb, windowCount: windowCount,
+                        minAccel: minAccel, maxAccel: maxAccel, scale: quality.scale)
+    }
+
+    /// Resume a stored frame. Levelling and alignment are both skipped: the
+    /// device is in the same socket at the same angle it was solved for.
+    public mutating func restore(_ s: Snapshot) {
+        down = s.down
+        forward = s.forward
+        right = s.right
+        gyroBias = s.gyroBias
+        mtm = s.mtm
+        mtb = s.mtb
+        windowCount = s.windowCount
+        minAccel = s.minAccel
+        maxAccel = s.maxAccel
+        fitQuality = FitQuality(windowCount: s.windowCount, scale: s.scale,
+                                accelSpread: s.maxAccel - s.minAccel)
+        phase = .calibrated
+    }
+
+    /// Angle between the stored "down" and a freshly measured one, in degrees.
+    /// Road camber and parking slope move this by a few degrees; a device
+    /// pulled out and refitted moves it by a lot.
+    public func downDrift(from measured: Vector3) -> Double? {
+        guard phase == .calibrated, down.magnitude > 0, measured.magnitude > 0 else { return nil }
+        let c = max(-1, min(1, down.normalized.dot(measured.normalized)))
+        return acos(c) * 180 / .pi
     }
 
     // MARK: - Input

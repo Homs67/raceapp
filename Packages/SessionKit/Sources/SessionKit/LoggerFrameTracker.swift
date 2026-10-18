@@ -50,10 +50,31 @@ public struct LoggerFrameTracker: Sendable {
     public var phase: CarFrameCalibrator.Phase { calibrator.phase }
     public var fitQuality: CarFrameCalibrator.FitQuality? { calibrator.fitQuality }
 
+    /// Store this against the device's serial; an OBD plug plus a fixed
+    /// socket means the alignment holds between drives, so a restored frame
+    /// is live from the first packet instead of after a few minutes of
+    /// driving. Nil until solved.
+    public var snapshot: CarFrameCalibrator.Snapshot? { calibrator.snapshot }
+
+    /// How far the mount may have shifted before a stored frame is thrown
+    /// away. Generous on purpose: the measured "down" also moves with parking
+    /// slope and road camber, and an OBD connector only fits one way round,
+    /// so anything under this is the road, not the mount.
+    private static let maxMountDriftDegrees = 25.0
+
+    public mutating func restore(_ snapshot: CarFrameCalibrator.Snapshot) {
+        calibrator.restore(snapshot)
+    }
+
+    /// Set once a restored frame has been checked against reality; also the
+    /// flag that says the check already happened.
+    private var driftChecked = false
+
     public mutating func reset() {
         calibrator = CarFrameCalibrator(levelingSamplesNeeded: Self.levelingSamples)
         gravity = nil
         lastT = nil
+        driftChecked = false
     }
 
     /// Ground speed for the alignment fit. Only call with a valid fix.
@@ -84,6 +105,16 @@ public struct LoggerFrameTracker: Sendable {
         let updated = current + (accel - current) * alpha
         gravity = updated
         let linear = accel - updated
+
+        // First settled reading after a restore: if the device is not where
+        // it was when the frame was solved, that frame is worthless.
+        if !driftChecked, !manoeuvring, let drift = calibrator.downDrift(from: updated * -1) {
+            driftChecked = true
+            if drift > Self.maxMountDriftDegrees {
+                calibrator = CarFrameCalibrator(levelingSamplesNeeded: Self.levelingSamples)
+            }
+        }
+
         // The logger reports specific force: at rest the vector points UP
         // (+1 g), where CoreMotion's `gravity` points down. Verified against
         // the ND2 drive — taking the un-negated vector as "down" mirrors the

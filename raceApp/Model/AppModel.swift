@@ -152,7 +152,7 @@ final class AppModel {
             sensors.requestPermissions()
         }
         sensors.recalibrate() // fresh mount alignment every session
-        raceBox.recalibrateFrame()
+        raceBox.prepareFrameForSession()
         // Track for lap timing / map: the demo's track, else auto-match by GPS.
         var track = connection.activeTrack
         if track == nil {

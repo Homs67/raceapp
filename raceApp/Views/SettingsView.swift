@@ -336,6 +336,18 @@ struct SettingsView: View {
                         .font(.system(size: 12))
                         .foregroundStyle(Color.muted)
                 }
+                NavigationLink {
+                    GCalibrationView()
+                } label: {
+                    HStack(spacing: 6) {
+                        Text("Calibrate G-force")
+                        Spacer()
+                        Text(calibrationSummary)
+                            .font(.system(size: 12))
+                            .foregroundStyle(Color.muted)
+                    }
+                    .font(.system(size: 14))
+                }
                 Button("Disconnect") { rb.forget() }
                     .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(Color.recordRed)
@@ -383,6 +395,17 @@ struct SettingsView: View {
                     .foregroundStyle(Color.accent)
                     .buttonStyle(.borderless)
             }
+        }
+    }
+
+    /// Right-hand hint on the calibration row.
+    private var calibrationSummary: String {
+        switch model.raceBox.framePhase {
+        case .leveling: return "not started"
+        case .aligning: return "needs a drive"
+        case .calibrated:
+            guard let q = model.raceBox.frameQuality else { return "ready" }
+            return q.isTrustworthy ? "ready" : "improving"
         }
     }
 

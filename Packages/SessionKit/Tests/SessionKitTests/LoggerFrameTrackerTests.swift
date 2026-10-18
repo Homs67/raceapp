@@ -114,6 +114,69 @@ final class LoggerFrameTrackerTests: XCTestCase {
         XCTAssertEqual(last, -0.7, accuracy: 0.06)
     }
 
+    // MARK: - Persistence
+
+    /// An OBD plug does not move between drives, so a solved frame should
+    /// come back ready rather than making the driver re-align every session.
+    func testRestoredFrameIsImmediatelyUsable() {
+        let (solved, _) = calibrate()
+        let snap = solved.snapshot
+        XCTAssertNotNil(snap, "a calibrated frame can be stored")
+
+        var fresh = LoggerFrameTracker()
+        fresh.restore(snap!)
+        XCTAssertEqual(fresh.phase, .calibrated, "restored, not re-levelling")
+
+        var t = 2000.0
+        // One settled sample seeds gravity, the next produces output.
+        fresh.ingest(accel: mount.reading(lat: 0, long: 0), at: t); t += 0.04
+        let g = fresh.ingest(accel: mount.reading(lat: 0, long: 0.5), at: t)
+        XCTAssertNotNil(g, "usable from the first packets, with no drive")
+        XCTAssertEqual(g!.longG, 0.5, accuracy: 0.06)
+        XCTAssertEqual(g!.latG, 0, accuracy: 0.06)
+    }
+
+    func testSnapshotIsNilBeforeTheFrameSolves() {
+        var tracker = LoggerFrameTracker()
+        var t = 1000.0
+        for _ in 0..<100 { tracker.ingest(accel: mount.reading(lat: 0, long: 0), at: t); t += 0.04 }
+        XCTAssertEqual(tracker.phase, .aligning)
+        XCTAssertNil(tracker.snapshot, "nothing worth storing until it has solved")
+    }
+
+    /// A frame restored onto a device that has since been moved is worse than
+    /// no frame: it silently mislabels every corner.
+    func testRestoredFrameIsDiscardedWhenTheDeviceHasMoved() {
+        let (solved, _) = calibrate()
+        var moved = LoggerFrameTracker()
+        moved.restore(solved.snapshot!)
+
+        // Refitted rotated ~70° about the forward axis.
+        let elsewhere = Mount(down: Vector3(-0.85, 0.2, -0.49),
+                              roughForward: Vector3(0.3, 0.9, 0.1))
+        var t = 2000.0
+        for _ in 0..<10 { moved.ingest(accel: elsewhere.reading(lat: 0, long: 0), at: t); t += 0.04 }
+        XCTAssertEqual(moved.phase, .leveling, "stale frame thrown away, re-levelling from scratch")
+    }
+
+    /// Parking slope and camber move "down" by a few degrees every drive;
+    /// that must not throw the frame away.
+    func testParkingOnASlopeKeepsTheRestoredFrame() {
+        let (solved, _) = calibrate()
+        var onSlope = LoggerFrameTracker()
+        onSlope.restore(solved.snapshot!)
+
+        // Same mount, car nose-up on a ~8° slope.
+        let a = 8.0 * .pi / 180
+        let tilted = Mount(down: Vector3(mount.down.x,
+                                         mount.down.y * cos(a) - mount.down.z * sin(a),
+                                         mount.down.y * sin(a) + mount.down.z * cos(a)),
+                           roughForward: mount.forward)
+        var t = 2000.0
+        for _ in 0..<10 { onSlope.ingest(accel: tilted.reading(lat: 0, long: 0), at: t); t += 0.04 }
+        XCTAssertEqual(onSlope.phase, .calibrated, "a slope is not a moved device")
+    }
+
     /// A disconnect leaves a hole; the EMA must re-seed rather than smear the
     /// step in gravity across the next several seconds of output.
     func testGapReseedsGravityInsteadOfSmearing() {

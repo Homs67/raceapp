@@ -30,6 +30,8 @@ final class RaceBoxController {
         static let deviceId = "racebox.uuid"
         static let deviceName = "racebox.name"
         static let useForRecording = "racebox.useForRecording"
+        /// Solved car frame, per device serial.
+        static func frame(_ serial: String) -> String { "racebox.frame.\(serial)" }
     }
 
     /// Settings toggle: let a connected RaceBox provide session position and
@@ -170,6 +172,7 @@ final class RaceBoxController {
                 await self.attach(session: RaceBoxSession(transport: self.transport))
                 self.state = .connected
                 self.publishesToBus = self.useForRecording
+                self.prepareFrameForSession()
                 // Recording status is the first thing worth knowing on a
                 // Mini S / Micro: it may already be logging on its own.
                 if info.supportsStandaloneRecording { await self.refreshRecordingStatus() }
@@ -258,9 +261,56 @@ final class RaceBoxController {
     /// Car-frame G from the logger's own accelerometer. Separate from the
     /// phone's calibrator: different mount, different rate, its own levelling.
     private var frame = LoggerFrameTracker()
+    private var lastFrameSave: TimeInterval = 0
 
-    /// Fresh mount alignment per session, matching the phone's `recalibrate()`.
-    func recalibrateFrame() { frame = LoggerFrameTracker() }
+    /// Where the phone recalibrates every session because it moves in and out
+    /// of a cradle, a logger plugged into the OBD port does not move — and an
+    /// OBD connector only fits one way round. So the solved frame is kept per
+    /// device and restored, which is the difference between G being live
+    /// immediately and being blank for the first minutes of every drive.
+    /// `LoggerFrameTracker` discards a restored frame if the measured "down"
+    /// says the device is somewhere else now.
+    func prepareFrameForSession() {
+        frame = LoggerFrameTracker()
+        if let stored = storedFrame() { frame.restore(stored) }
+    }
+
+    /// Discard the stored alignment and start over — the guided flow's
+    /// "recalibrate", and the escape hatch if a frame ever goes bad.
+    func forgetFrameCalibration() {
+        frame = LoggerFrameTracker()
+        lastFrameSave = 0
+        if let serial = frameKeySerial {
+            UserDefaults.standard.removeObject(forKey: Keys.frame(serial))
+        }
+    }
+
+    /// Progress for the calibration UI.
+    var framePhase: CarFrameCalibrator.Phase { frame.phase }
+    var frameQuality: CarFrameCalibrator.FitQuality? { frame.fitQuality }
+    var hasStoredFrame: Bool { storedFrame() != nil }
+
+    /// Serial identifies the device; fall back to the remembered name so one
+    /// whose Device Info read failed still keeps its frame.
+    private var frameKeySerial: String? {
+        deviceInfo?.serialNumber ?? storedDeviceName
+    }
+
+    private func storedFrame() -> CarFrameCalibrator.Snapshot? {
+        guard let serial = frameKeySerial,
+              let data = UserDefaults.standard.data(forKey: Keys.frame(serial)) else { return nil }
+        return try? JSONDecoder().decode(CarFrameCalibrator.Snapshot.self, from: data)
+    }
+
+    /// Writing at 25 Hz would hammer UserDefaults; the frame only improves
+    /// every few seconds anyway.
+    private func saveFrameIfDue(now: TimeInterval) {
+        guard now - lastFrameSave > 10, let serial = frameKeySerial,
+              let snapshot = frame.snapshot,
+              let data = try? JSONEncoder().encode(snapshot) else { return }
+        lastFrameSave = now
+        UserDefaults.standard.set(data, forKey: Keys.frame(serial))
+    }
 
     /// Feed the telemetry bus. Position and speed go to the canonical `gps.*`
     /// channels so every existing consumer — lap timer, drag meter, highlights,
@@ -288,6 +338,7 @@ final class RaceBoxController {
                                 at: t) {
             bus.publish(.carLatG, g.latG, at: t)
             bus.publish(.carLongG, g.longG, at: t)
+            saveFrameIfDue(now: t)
         }
         bus.publish(.rbRollRate, m.rotationRate.x, at: t)
         bus.publish(.rbPitchRate, m.rotationRate.y, at: t)
@@ -503,6 +554,7 @@ final class RaceBoxController {
             source.start()
             self.state = .connected
             self.publishesToBus = self.useForRecording
+            self.prepareFrameForSession()
             await self.refreshRecordingStatus()
         }
     }
