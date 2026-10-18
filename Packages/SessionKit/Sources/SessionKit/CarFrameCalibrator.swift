@@ -79,7 +79,9 @@ public struct CarFrameCalibrator: Sendable {
 
     // Tunables
     private let quasiStaticMaxAccel = 0.06     // |userAccel| g below this = static enough to level
-    private let levelingSamplesNeeded = 150    // ~1.5 s at 100 Hz
+    /// Quasi-static samples needed to level. Rate-dependent, so a 25 Hz logger
+    /// passes its own count rather than waiting 6 s for the 100 Hz default.
+    private let levelingSamplesNeeded: Int
     /// Reverse shows up as *rising* speed (GPS speed is unsigned), which would
     /// teach the fit a backwards forward axis. Real driving clears this well
     /// before any manoeuvring speed.
@@ -112,7 +114,11 @@ public struct CarFrameCalibrator: Sendable {
     private var forward = Vector3.zero
     private var right = Vector3.zero
 
-    public init() {}
+    /// - Parameter levelingSamplesNeeded: quasi-static samples before the
+    ///   frame is considered level — ~1.5 s at the source's rate.
+    public init(levelingSamplesNeeded: Int = 150) {
+        self.levelingSamplesNeeded = levelingSamplesNeeded
+    }
 
     public mutating func reset() {
         self = CarFrameCalibrator()

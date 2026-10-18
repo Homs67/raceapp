@@ -80,6 +80,9 @@ final class AppModel {
         raceBox.onPositionFix = { [sensors] mps, course, t in
             sensors.ingestExternalFix(speed: mps, course: course, at: t)
         }
+        raceBox.onCarFrameG = { [sensors] t in
+            sensors.noteExternalCarFrame(at: t)
+        }
         recording.onEnterBackgroundWhileRecording = { [weak self] in
             self?.sensors.enterBackgroundRecordingMode()
         }
@@ -149,6 +152,7 @@ final class AppModel {
             sensors.requestPermissions()
         }
         sensors.recalibrate() // fresh mount alignment every session
+        raceBox.recalibrateFrame()
         // Track for lap timing / map: the demo's track, else auto-match by GPS.
         var track = connection.activeTrack
         if track == nil {

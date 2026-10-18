@@ -247,6 +247,17 @@ final class RaceBoxController {
     /// can fill that one channel in without touching position.
     var onPositionFix: ((_ speedMps: Double, _ course: Double?, _ t: TimeInterval) -> Void)?
 
+    /// Called whenever the logger publishes car-frame G, so the phone's own
+    /// (cradle-mounted) estimate stands down.
+    var onCarFrameG: ((TimeInterval) -> Void)?
+
+    /// Car-frame G from the logger's own accelerometer. Separate from the
+    /// phone's calibrator: different mount, different rate, its own levelling.
+    private var frame = LoggerFrameTracker()
+
+    /// Fresh mount alignment per session, matching the phone's `recalibrate()`.
+    func recalibrateFrame() { frame = LoggerFrameTracker() }
+
     /// Feed the telemetry bus. Position and speed go to the canonical `gps.*`
     /// channels so every existing consumer — lap timer, drag meter, highlights,
     /// graphs, video review — gets 25 Hz data with no change; `rb.*` carries
@@ -262,6 +273,16 @@ final class RaceBoxController {
         bus.publish(.rbGForceX, m.gForce.x, at: t)
         bus.publish(.rbGForceY, m.gForce.y, at: t)
         bus.publish(.rbGForceZ, m.gForce.z, at: t)
+
+        // Car-frame G from this accelerometer. Fed on every packet — levelling
+        // happens parked, before there is any fix to speak of.
+        if let g = frame.ingest(accel: Vector3(m.gForce.x, m.gForce.y, m.gForce.z),
+                                rotationRate: Vector3(m.rotationRate.x, m.rotationRate.y, m.rotationRate.z),
+                                at: t) {
+            bus.publish(.carLatG, g.latG, at: t)
+            bus.publish(.carLongG, g.longG, at: t)
+            onCarFrameG?(t)
+        }
         bus.publish(.rbRollRate, m.rotationRate.x, at: t)
         bus.publish(.rbPitchRate, m.rotationRate.y, at: t)
         bus.publish(.rbYawRate, m.rotationRate.z, at: t)
@@ -278,6 +299,7 @@ final class RaceBoxController {
         // kilometres wrong, so gate on the flags rather than plausibility.
         guard m.hasValidFix, m.coordinatesValid else { return }
         onPositionFix?(m.speedMps, m.headingValid ? m.headingDegrees : nil, t)
+        frame.ingestSpeed(m.speedMps, at: t)
         bus.publish(.gpsLatitude, m.latitude, at: t)
         bus.publish(.gpsLongitude, m.longitude, at: t)
         bus.publish(.gpsSpeed, m.speedMps, at: t)
@@ -444,15 +466,25 @@ final class RaceBoxController {
         var t = 0.0
         let source = RaceBoxSimulatedTransport(model: .micro, rate: .hz25) {
             t += 0.04
-            let speed = max(0, 18 + 14 * sin(t / 7))
+            // Parked first, then accelerometer values consistent with the
+            // speed profile: the car-frame fit needs a still period to level
+            // and real dv/dt to align against, so an arbitrary oscillation
+            // never leaves `calibrating`.
+            let parked = 6.0
+            let drive = max(0, t - parked)
+            let moving = t >= parked
+            let speed = moving ? max(0, 18 + 14 * sin(drive / 7)) : 0
+            let longG = moving ? (14.0 / 7.0) * cos(drive / 7) / 9.81 : 0
+            let latG = moving ? sin(drive / 4) * 0.3 : 0
             return RaceBoxSample(
-                latitude: 36.5844 + sin(t / 30) * 0.002,
-                longitude: -121.7536 + cos(t / 30) * 0.002,
-                altitudeMeters: 30 + sin(t / 11) * 4,
+                latitude: 36.5844 + sin(drive / 30) * 0.002,
+                longitude: -121.7536 + cos(drive / 30) * 0.002,
+                altitudeMeters: 30 + sin(drive / 11) * 4,
                 speedMps: speed,
-                headingDegrees: (t * 6).truncatingRemainder(dividingBy: 360),
-                gForce: RaceBoxVector3(x: cos(t / 5) * 0.35, y: sin(t / 4) * 0.6, z: 1.0),
-                rotationRate: RaceBoxVector3(x: sin(t / 6) * 3, y: cos(t / 8) * 2, z: sin(t / 4) * 20),
+                headingDegrees: (drive * 6).truncatingRemainder(dividingBy: 360),
+                // z = +1 g: a logger at rest reads one g "up" (specific force).
+                gForce: RaceBoxVector3(x: latG, y: longG, z: 1.0),
+                rotationRate: RaceBoxVector3(x: 0, y: 0, z: moving ? sin(drive / 4) * 20 : 0),
                 satellites: 14, hasFix: true)
         }
         simulated = source

@@ -51,6 +51,10 @@ public final class PhoneSensorSuite: NSObject, @unchecked Sendable {
     /// course is an independent quantity — leaving it unpublished would blind
     /// the G-force validator and the heading readout.
     private var lastExternalCourseT: TimeInterval?
+    /// Set while a logger is publishing car-frame G of its own. Its
+    /// accelerometer is bolted to the car where the phone's rides in a
+    /// cradle, so when both are available the logger wins.
+    private var lastExternalCarFrameT: TimeInterval?
 
     /// How long a logger's silence is tolerated before the phone takes over.
     /// Matches the recorder's motion-source rule.
@@ -64,6 +68,20 @@ public final class PhoneSensorSuite: NSObject, @unchecked Sendable {
     private var externalOwnsCourse: Bool {
         guard let last = lastExternalCourseT else { return false }
         return monotonicNow() - last < Self.externalSourceGrace
+    }
+
+    private var externalOwnsCarFrame: Bool {
+        guard let last = lastExternalCarFrameT else { return false }
+        return monotonicNow() - last < Self.externalSourceGrace
+    }
+
+    /// A logger reported car-frame G: stand down until it stops. Separate from
+    /// position ownership because the logger's alignment converges later than
+    /// its first fix, and the phone should keep driving the gauge until then.
+    public func noteExternalCarFrame(at t: TimeInterval) {
+        calibrationLock.lock()
+        lastExternalCarFrameT = monotonicNow()
+        calibrationLock.unlock()
     }
 
     /// Speed from an external logger (RaceBox, 25 Hz). Drives the car-frame
@@ -91,6 +109,7 @@ public final class PhoneSensorSuite: NSObject, @unchecked Sendable {
         smoothedLongG = nil
         lastExternalFixT = nil
         lastExternalCourseT = nil
+        lastExternalCarFrameT = nil
         calibrationLock.unlock()
     }
 
@@ -285,7 +304,9 @@ public final class PhoneSensorSuite: NSObject, @unchecked Sendable {
             self.calibrator.ingestMotion(
                 gravity: gravity, userAccel: accel,
                 rotationRate: Vector3(motion.rotationRate.x, motion.rotationRate.y, motion.rotationRate.z))
-            if let g = self.calibrator.carFrame(userAccel: accel) {
+            if self.externalOwnsCarFrame {
+                self.calibrationLock.unlock()
+            } else if let g = self.calibrator.carFrame(userAccel: accel) {
                 // Light EMA (~4 Hz at 100 Hz sampling): keeps the gauge readable
                 // without hiding real transients. Raw imu.* stay unfiltered.
                 let alpha = 0.2
