@@ -181,6 +181,13 @@ final class AppModel {
         }
     }
 
+    /// Pull the logger's own recordings into Sessions.
+    func importRaceBoxMemory() {
+        let car = PreferredCar.load()?.asCarInfo ?? connection.carInfo
+        let units = UserDefaults.standard.bool(forKey: "useMetricUnits") ? "metric" : "imperial"
+        raceBox.downloadStoredData(into: store, car: car, units: units)
+    }
+
     func applyRecordingIdlePolicy() {
         recording.applyIdleTimerPolicy(forceAwake: forceScreenAwakeForSession)
     }

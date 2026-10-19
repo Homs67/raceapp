@@ -8,28 +8,44 @@
 import SwiftUI
 import SessionKit
 
-/// Steering wheel angle from the CAN bus, + to the right.
+/// Front wheel angle, + to the right.
+///
+/// The CAN bus reports the *steering wheel*, which swings about ±480° and is
+/// hard to read at a glance. Dividing by the steering ratio gives the angle
+/// the road wheels are actually turned to — a much smaller number that means
+/// something physical. The recorded `can.steering` channel keeps the raw
+/// wheel angle; only the display converts.
 struct SteeringWidget: View {
     let context: WidgetContext
 
-    /// ND2 is roughly 2.6 turns lock to lock, so ±470°. Used only to scale
-    /// the bar — the number itself is never clamped.
-    private static let lock: Double = 470
+    /// ND MX-5: roughly 2.7 turns lock to lock (~±486° at the wheel) through
+    /// a ~15:1 rack, which puts full lock near ±32° at the road wheels.
+    /// Worth confirming against your own car — it only scales the reading.
+    static let steeringRatio: Double = 15.0
+    /// End stops for the gauge. The number itself is never clamped.
+    static let maxWheelAngle: Double = 33
+
+    private var wheelAngle: Double? {
+        context.live.steering.map { $0 / Self.steeringRatio }
+    }
 
     var body: some View {
-        let angle = context.live.steering
         switch context.size {
         case .medium:
-            VStack(alignment: .leading, spacing: 12) {
-                HStack(alignment: .lastTextBaseline, spacing: 10) {
-                    WidgetValue(text: text(angle), context: context)
-                    WidgetCaption(text: side(angle))
+            HStack(alignment: .bottom, spacing: 18) {
+                SteeringArc(angle: wheelAngle, maxAngle: Self.maxWheelAngle)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                VStack(alignment: .leading, spacing: 2) {
+                    WidgetCaption(text: side(wheelAngle))
+                    WidgetValue(text: text(wheelAngle), context: context)
                 }
-                SteeringBar(angle: angle, lock: Self.lock)
-                    .frame(height: 12)
+                .fixedSize()
             }
         default:
-            WidgetValue(text: text(angle), context: context)
+            HStack(alignment: .lastTextBaseline, spacing: 8) {
+                WidgetValue(text: text(wheelAngle), context: context)
+                WidgetCaption(text: side(wheelAngle))
+            }
         }
     }
 
@@ -39,34 +55,66 @@ struct SteeringWidget: View {
     }
 
     private func side(_ angle: Double?) -> String {
-        guard let angle, abs(angle) >= 5 else { return "centred" }
+        guard let angle, abs(angle) >= 1 else { return "centred" }
         return angle > 0 ? "right" : "left"
     }
 }
 
-/// Centre-zero bar: fills from the middle toward the lock the driver is
-/// winding on, so a glance shows direction and how much.
-private struct SteeringBar: View {
+/// Arc gauge with zero straight up: the needle leans the way the wheels are
+/// pointed, which reads the same way the car feels.
+private struct SteeringArc: View {
     let angle: Double?
-    let lock: Double
+    let maxAngle: Double
+
+    /// Half the visual sweep. Full lock lands here, well short of the
+    /// horizontal, so the arc still reads as "ahead".
+    private static let halfSweep: Double = 70
 
     var body: some View {
-        GeometryReader { geo in
-            let half = geo.size.width / 2
-            let fraction = min(1, abs(angle ?? 0) / lock)
-            let width = half * fraction
-            ZStack(alignment: .leading) {
-                Capsule().fill(Color.white.opacity(0.08))
-                Rectangle().fill(Color.mutedWeak)
-                    .frame(width: 1, height: geo.size.height)
-                    .offset(x: half - 0.5)
-                if let angle {
-                    Capsule().fill(Color.accent)
-                        .frame(width: max(2, width))
-                        .offset(x: angle < 0 ? half - width : half)
-                }
-            }
+        Canvas { ctx, size in
+            // Pivot low so the arc uses the cell's width, like a rev counter.
+            let radius = min(size.width / 2, size.height) * 0.92
+            let centre = CGPoint(x: size.width / 2, y: size.height)
+            let up = -90.0
+
+            var track = Path()
+            track.addArc(center: centre, radius: radius,
+                         startAngle: .degrees(up - Self.halfSweep),
+                         endAngle: .degrees(up + Self.halfSweep),
+                         clockwise: false)
+            ctx.stroke(track, with: .color(.white.opacity(0.10)),
+                       style: StrokeStyle(lineWidth: 6, lineCap: .round))
+
+            // Centre tick: the reference the eye returns to.
+            let tickOuter = point(centre, radius + 5, up)
+            let tickInner = point(centre, radius - 9, up)
+            var tick = Path()
+            tick.move(to: tickInner)
+            tick.addLine(to: tickOuter)
+            ctx.stroke(tick, with: .color(.white.opacity(0.45)), lineWidth: 2)
+
+            guard let angle else { return }
+            let fraction = max(-1, min(1, angle / maxAngle))
+            let target = up + fraction * Self.halfSweep
+
+            var fill = Path()
+            fill.addArc(center: centre, radius: radius,
+                        startAngle: .degrees(min(up, target)),
+                        endAngle: .degrees(max(up, target)),
+                        clockwise: false)
+            ctx.stroke(fill, with: .color(.accent),
+                       style: StrokeStyle(lineWidth: 6, lineCap: .round))
+
+            let knob = point(centre, radius, target)
+            ctx.fill(Path(ellipseIn: CGRect(x: knob.x - 6, y: knob.y - 6, width: 12, height: 12)),
+                     with: .color(.accent))
         }
+        .aspectRatio(2, contentMode: .fit)
+    }
+
+    private func point(_ centre: CGPoint, _ radius: Double, _ degrees: Double) -> CGPoint {
+        let r = degrees * .pi / 180
+        return CGPoint(x: centre.x + cos(r) * radius, y: centre.y + sin(r) * radius)
     }
 }
 

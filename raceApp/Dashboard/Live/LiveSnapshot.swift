@@ -110,7 +110,7 @@ extension LiveSnapshot {
         s.sectorDeltas = [-0.12, 0.31, nil]
         s.currentSector = 2
         s.currentSectorDelta = -0.53
-        s.steering = -38
+        s.steering = -186      // wheel degrees → about 12° at the road wheels
         s.dragRun = DragMeter.Run(zeroToSixty: 6.2, zeroToHundred: 16.8,
                                   quarterMile: 14.6, quarterMileTrapKmh: 155)
         s.dragBest = DragMeter.Run(zeroToSixty: 5.9, zeroToHundred: 16.1,

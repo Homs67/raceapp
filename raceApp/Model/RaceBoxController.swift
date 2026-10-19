@@ -50,6 +50,17 @@ final class RaceBoxController {
     private(set) var latest: RaceBoxDataMessage?
     private(set) var stats = RaceBoxLinkStats()
     private(set) var recordingStatus: RaceBoxRecordingStatus?
+
+    /// Progress of a memory dump or erase, for the memory screen.
+    enum MemoryTask: Equatable {
+        case idle
+        case downloading(received: Int, expected: Int, drives: Int)
+        case erasing(percent: Int)
+        case finished(drives: Int, records: Int)
+        case failed(String)
+    }
+    private(set) var memoryTask: MemoryTask = .idle
+    private var memoryWork: Task<Void, Never>?
     private(set) var lastCommandResult: String?
     private(set) var selfTestChecks: [RaceBoxSelfTest.Check] = []
     private(set) var selfTestRunAt: Date?
@@ -208,6 +219,99 @@ final class RaceBoxController {
         deviceInfo = nil
         rawLog = []
         selfTestChecks = []
+    }
+
+    // MARK: - Stored memory
+
+    /// Pull everything the logger has recorded on its own and turn it into
+    /// app sessions.
+    ///
+    /// The device stores one continuous log, not files: separate drives are
+    /// recovered from the start/stop markers saved alongside the data. Each
+    /// run of records between markers becomes its own session, written
+    /// through the ordinary recorder so imported drives get the same
+    /// manifest, highlights and export path as live ones.
+    ///
+    /// Records are written as they arrive rather than buffered — a full
+    /// memory is hundreds of thousands of messages and will not fit in RAM.
+    func downloadStoredData(into store: SessionStore, car: SessionManifest.CarInfo?, units: String?) {
+        guard case .idle = memoryTask, let session else { return }
+        memoryWork?.cancel()
+        memoryWork = Task { [weak self] in
+            guard let self else { return }
+            let importer = RaceBoxMemoryImporter(store: store, car: car, units: units)
+            self.memoryTask = .downloading(received: 0, expected: 0, drives: 0)
+            do {
+                // Subscribe BEFORE asking for the dump: the device starts
+                // streaming the moment it answers, and anything emitted
+                // between the reply and a late subscription is gone.
+                let events = await session.historyEvents
+                let expected = Int(try await session.startDownload())
+                var received = 0
+                for await event in events {
+                    if Task.isCancelled { try? await session.cancelDownload(); break }
+                    switch event {
+                    case .record(let message):
+                        await importer.add(message)
+                        received += 1
+                        if received % 25 == 0 {
+                            self.memoryTask = .downloading(received: received, expected: expected,
+                                                           drives: await importer.driveCount)
+                        }
+                    case .stateChange(let change):
+                        // A marker closes the drive before it; `running` opens
+                        // the next one.
+                        await importer.mark(running: change.state == .running)
+                    case .eraseProgress(let percent):
+                        self.memoryTask = .erasing(percent: percent)
+                    case .finished:
+                        let drives = await importer.finish()
+                        self.memoryTask = .finished(drives: drives, records: received)
+                        return
+                    }
+                }
+                let drives = await importer.finish()
+                self.memoryTask = .finished(drives: drives, records: received)
+            } catch {
+                _ = await importer.finish()
+                self.memoryTask = .failed(Self.describe(error))
+            }
+        }
+    }
+
+    func eraseStoredData() {
+        guard case .idle = memoryTask, let session else { return }
+        memoryWork?.cancel()
+        memoryWork = Task { [weak self] in
+            guard let self else { return }
+            self.memoryTask = .erasing(percent: 0)
+            do {
+                try await session.eraseMemory()
+                self.memoryTask = .finished(drives: 0, records: 0)
+                await self.refreshRecordingStatus()
+            } catch {
+                self.memoryTask = .failed(Self.describe(error))
+            }
+        }
+    }
+
+    func cancelMemoryTask() {
+        memoryWork?.cancel()
+        memoryWork = nil
+        if let session { Task { try? await session.cancelDownload() } }
+        memoryTask = .idle
+    }
+
+    func clearMemoryResult() {
+        if case .idle = memoryTask { return }
+        if case .downloading = memoryTask { return }
+        if case .erasing = memoryTask { return }
+        memoryTask = .idle
+    }
+
+    /// Ask the device what it is holding.
+    func refreshMemoryStatus() {
+        Task { await refreshRecordingStatus() }
     }
 
     // MARK: - Session plumbing

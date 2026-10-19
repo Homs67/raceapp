@@ -353,6 +353,20 @@ struct SettingsView: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
+                if rb.deviceInfo?.supportsStandaloneRecording != false {
+                    NavigationLink {
+                        RaceBoxMemoryView().environment(model)
+                    } label: {
+                        HStack(spacing: 6) {
+                            Text("Recorded on device").foregroundStyle(Color.textPrimary)
+                            Spacer()
+                            if let status = rb.recordingStatus, status.storedMessages > 0 {
+                                Text("\(status.memoryLevelPercent)% full").foregroundStyle(Color.muted)
+                            }
+                        }
+                        .font(.system(size: 14))
+                    }
+                }
                 Button("Disconnect") { rb.forget() }
                     .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(Color.recordRed)
