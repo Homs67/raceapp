@@ -15,6 +15,7 @@ struct SettingsView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     @AppStorage("useMetricUnits") private var metric = false
+    @State private var showCalibration = false
     @AppStorage("keepScreenAwake") private var keepAwake = false
     @AppStorage("shiftEnabled") private var shiftEnabled = false
     @AppStorage("shiftRPM") private var shiftRPM: Double = 5500
@@ -59,6 +60,9 @@ struct SettingsView: View {
                 default:
                     EmptyView()
                 }
+            }
+            .sheet(isPresented: $showCalibration) {
+                GCalibrationView().environment(model)
             }
             .onAppear { connection.beginAdapterDiscoveryIfNeeded() }
         }
@@ -336,18 +340,6 @@ struct SettingsView: View {
                         .font(.system(size: 12))
                         .foregroundStyle(Color.muted)
                 }
-                NavigationLink {
-                    GCalibrationView()
-                } label: {
-                    HStack(spacing: 6) {
-                        Text("Calibrate G-force")
-                        Spacer()
-                        Text(calibrationSummary)
-                            .font(.system(size: 12))
-                            .foregroundStyle(Color.muted)
-                    }
-                    .font(.system(size: 14))
-                }
                 Button("Disconnect") { rb.forget() }
                     .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(Color.recordRed)
@@ -400,6 +392,7 @@ struct SettingsView: View {
 
     /// Right-hand hint on the calibration row.
     private var calibrationSummary: String {
+        guard model.raceBox.state == .connected else { return "no RaceBox" }
         switch model.raceBox.framePhase {
         case .leveling: return "not started"
         case .aligning: return "needs a drive"
@@ -477,6 +470,23 @@ struct SettingsView: View {
                 .onChange(of: keepAwake) {
                     model.applyRecordingIdlePolicy()
                 }
+
+            Button {
+                showCalibration = true
+            } label: {
+                HStack(spacing: 6) {
+                    Text("Calibrate G-force").foregroundStyle(Color.textPrimary)
+                    Spacer()
+                    Text(calibrationSummary)
+                        .foregroundStyle(Color.muted)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Color.mutedWeak)
+                }
+                .font(.system(size: 13))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
 
             LabeledContent("Sessions on device") {
                 Text(ByteCountFormatter.string(fromByteCount: model.store.totalStorageBytes(), countStyle: .file))
