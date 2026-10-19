@@ -94,12 +94,12 @@ final class DashboardLiveFeed {
         live.currentSectorDelta = model.metrics.currentSectorDelta
 
         if model.raceBox.state == .connected, let msg = model.raceBox.latest {
-            let power: String
+            let power: LoggerPower
             switch msg.power(for: model.raceBox.deviceInfo?.model ?? .micro) {
-            case .inputVoltage(let v): power = String(format: "%.1f V", v)
-            case .battery(let pct, let charging): power = "\(pct)%" + (charging ? " ⚡︎" : "")
+            case .inputVoltage(let v): power = .from(inputVolts: v)
+            case .battery(let pct, let charging): power = .battery(percent: pct, charging: charging)
             }
-            live.raceBox = RaceBoxLink(satellites: msg.satellites, has3DFix: msg.hasValidFix, powerText: power)
+            live.raceBox = RaceBoxLink(satellites: msg.satellites, has3DFix: msg.hasValidFix, power: power)
         }
 
         live.dragRun = model.metrics.dragRun

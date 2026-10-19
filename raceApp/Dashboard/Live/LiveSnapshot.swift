@@ -81,7 +81,7 @@ struct LiveSnapshot: Equatable {
 struct RaceBoxLink: Equatable {
     var satellites: Int
     var has3DFix: Bool
-    var powerText: String     // "12.4 V" or "82%"
+    var power: LoggerPower
 }
 
 extension LiveSnapshot {
@@ -116,7 +116,8 @@ extension LiveSnapshot {
         s.dragBest = DragMeter.Run(zeroToSixty: 5.9, zeroToHundred: 16.1,
                                    quarterMile: 14.3, quarterMileTrapKmh: 158)
         s.distanceMeters = 8428
-        s.raceBox = RaceBoxLink(satellites: 14, has3DFix: true, powerText: "12.4 V")
+        s.raceBox = RaceBoxLink(satellites: 14, has3DFix: true,
+                                power: .from(inputVolts: 12.4))
         s.obdConnected = true
         s.obdLive = true
         if let pt = track?.centerline.dropFirst(40).first, pt.count == 2 {

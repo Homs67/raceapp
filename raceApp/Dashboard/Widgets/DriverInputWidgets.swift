@@ -172,7 +172,8 @@ struct LinksWidget: View {
         case .medium:
             HStack(alignment: .bottom, spacing: 28) {
                 link("RaceBox", up: live.raceBox != nil,
-                     detail: live.raceBox.map { "\($0.satellites) sats" } ?? "not linked")
+                     detail: live.raceBox.map { "\($0.satellites) sats · \($0.power.shortText)" } ?? "not linked",
+                     warn: live.raceBox?.power.needsAttention == true)
                 link("OBD-II", up: live.obdConnected,
                      detail: live.obdConnected ? (live.obdLive ? "live" : "no engine data") : "not linked")
                 Spacer(minLength: 0)
@@ -185,7 +186,7 @@ struct LinksWidget: View {
         }
     }
 
-    private func link(_ name: String, up: Bool, detail: String) -> some View {
+    private func link(_ name: String, up: Bool, detail: String, warn: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             WidgetCaption(text: name)
             HStack(spacing: 8) {
@@ -193,7 +194,7 @@ struct LinksWidget: View {
                     .frame(width: 10, height: 10)
                 Text(detail)
                     .font(.sofia(WidgetMetrics.minTextSize, .regular))
-                    .foregroundStyle(.white.opacity(0.9))
+                    .foregroundStyle(warn ? Color.warnAmber : .white.opacity(0.9))
                     .lineLimit(1)
             }
         }

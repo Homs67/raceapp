@@ -336,9 +336,22 @@ struct SettingsView: View {
                         .foregroundStyle(Color.textPrimary)
                 }
                 if let msg = rb.latest {
-                    Text(msg.hasValidFix ? "\(msg.satellites) satellites · 3D fix" : "\(msg.satellites) satellites · waiting for fix")
+                    let power: LoggerPower = {
+                        switch msg.power(for: rb.deviceInfo?.model ?? .micro) {
+                        case .inputVoltage(let v): return .from(inputVolts: v)
+                        case .battery(let pct, let charging): return .battery(percent: pct, charging: charging)
+                        }
+                    }()
+                    Text((msg.hasValidFix ? "\(msg.satellites) satellites · 3D fix" : "\(msg.satellites) satellites · waiting for fix")
+                         + " · " + power.shortText)
                         .font(.system(size: 12))
-                        .foregroundStyle(Color.muted)
+                        .foregroundStyle(power.needsAttention ? Color.warnAmber : Color.muted)
+                    if let why = power.explanation {
+                        Text(why)
+                            .font(.system(size: 11))
+                            .foregroundStyle(Color.muted)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
                 Button("Disconnect") { rb.forget() }
                     .font(.system(size: 14, weight: .medium))
