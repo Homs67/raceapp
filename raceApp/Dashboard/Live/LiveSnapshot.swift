@@ -24,6 +24,7 @@ struct LiveSnapshot: Equatable {
     /// CAN pedal channels when the stream is up; accel falls back to OBD throttle.
     var accelPedal: Double?       // %
     var brake: Double?            // %
+    var steering: Double?         // degrees, + = right
     var shift = ShiftIndicator(enabled: false, shiftRPM: 5500)
 
     // Dynamics
@@ -57,8 +58,17 @@ struct LiveSnapshot: Equatable {
     var currentSector = 0
     var currentSectorDelta: TimeInterval?
 
-    // RaceBox link
+    // Acceleration runs
+    var dragRun = DragMeter.Run()
+    var dragBest = DragMeter.Run()
+
+    // Session
+    var distanceMeters: Double = 0
+
+    // Links
     var raceBox: RaceBoxLink?
+    var obdConnected = false
+    var obdLive = false
 
     // Session
     var elapsed: TimeInterval = 0
@@ -100,7 +110,15 @@ extension LiveSnapshot {
         s.sectorDeltas = [-0.12, 0.31, nil]
         s.currentSector = 2
         s.currentSectorDelta = -0.53
+        s.steering = -38
+        s.dragRun = DragMeter.Run(zeroToSixty: 6.2, zeroToHundred: 16.8,
+                                  quarterMile: 14.6, quarterMileTrapKmh: 155)
+        s.dragBest = DragMeter.Run(zeroToSixty: 5.9, zeroToHundred: 16.1,
+                                   quarterMile: 14.3, quarterMileTrapKmh: 158)
+        s.distanceMeters = 8428
         s.raceBox = RaceBoxLink(satellites: 14, has3DFix: true, powerText: "12.4 V")
+        s.obdConnected = true
+        s.obdLive = true
         if let pt = track?.centerline.dropFirst(40).first, pt.count == 2 {
             s.gpsLat = pt[0]; s.gpsLon = pt[1]
         }

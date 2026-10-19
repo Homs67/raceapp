@@ -99,6 +99,13 @@ final class DashboardEditController {
         return commitIfFits(trial, failure: "No room for \(kind.title) — remove or shrink a widget")
     }
 
+    /// Change one of a widget's own options. Never affects packing, so it
+    /// needs no fit check.
+    func setSetting(id: UUID, key: String, value: String) {
+        guard let i = working.placements.firstIndex(where: { $0.id == id }) else { return }
+        working.placements[i].settings[key] = value
+    }
+
     /// Sizes of `kind` that would fit if it replaced / were added.
     func fittingSizes(for kind: WidgetKind, replacing id: UUID?) -> [WidgetSize] {
         kind.supportedSizes.filter { size in

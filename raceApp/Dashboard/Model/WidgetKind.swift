@@ -24,17 +24,28 @@ enum WidgetCategory: String, CaseIterable, Identifiable {
     }
 }
 
+/// A per-widget choice, stored in `WidgetPlacement.settings`. Kept simple
+/// (a key and a list of string choices) because that is all the stored
+/// dictionary can hold without a migration.
+struct WidgetSetting: Identifiable {
+    let key: String
+    let title: String
+    let choices: [(value: String, label: String)]
+    let defaultValue: String
+    var id: String { key }
+}
+
 enum WidgetKind: String, CaseIterable {
     // Lap timing
-    case lapTime, lapDelta, lapMap, lastLap, bestLap, sectorDelta, sessionTime
+    case lapTime, lapDelta, lapMap, lastLap, bestLap, sectorDelta, sessionTime, distance
     // Engine / driver inputs
-    case rpm, speed, gear, shiftLights, pedals, coolant
+    case rpm, speed, gear, shiftLights, pedals, coolant, steering, drag
     // Dynamics
     case gForce
     // Position
     case altitude, heading
     // Status
-    case status
+    case status, links
     // Camera
     case camera
     // Placeholder for kinds a newer build wrote that this one doesn't know
@@ -46,10 +57,10 @@ enum WidgetKind: String, CaseIterable {
 
     /// Kinds offered in the library, in gallery order.
     static let library: [WidgetKind] = [
-        .lapTime, .lapDelta, .sectorDelta, .lapMap, .lastLap, .bestLap, .sessionTime,
-        .rpm, .speed, .gear, .shiftLights, .pedals, .coolant,
+        .lapTime, .lapDelta, .sectorDelta, .lapMap, .lastLap, .bestLap, .sessionTime, .distance,
+        .rpm, .speed, .gear, .shiftLights, .pedals, .coolant, .steering, .drag,
         .gForce, .altitude, .heading,
-        .status, .camera,
+        .status, .links, .camera,
     ]
 
     var title: String {
@@ -61,6 +72,10 @@ enum WidgetKind: String, CaseIterable {
         case .bestLap: return "Best lap"
         case .sectorDelta: return "Sectors"
         case .sessionTime: return "Session"
+        case .distance: return "Distance"
+        case .steering: return "Steering"
+        case .drag: return "Acceleration"
+        case .links: return "Links"
         case .rpm: return "RPM"
         case .speed: return "Speed"
         case .gear: return "Gear"
@@ -79,12 +94,12 @@ enum WidgetKind: String, CaseIterable {
 
     var category: WidgetCategory {
         switch self {
-        case .lapTime, .lapDelta, .lapMap, .lastLap, .bestLap, .sectorDelta, .sessionTime:
+        case .lapTime, .lapDelta, .lapMap, .lastLap, .bestLap, .sectorDelta, .sessionTime, .distance:
             return .lapTiming
-        case .rpm, .speed, .gear, .shiftLights, .pedals, .coolant: return .engine
+        case .rpm, .speed, .gear, .shiftLights, .pedals, .coolant, .steering, .drag: return .engine
         case .gForce: return .dynamics
         case .altitude, .heading: return .navigation
-        case .status, .unknown, .empty: return .status
+        case .status, .links, .unknown, .empty: return .status
         case .camera: return .camera
         }
     }
@@ -92,7 +107,8 @@ enum WidgetKind: String, CaseIterable {
     var supportedSizes: [WidgetSize] {
         switch self {
         case .lapTime, .lapMap: return [.small, .medium, .large]
-        case .lapDelta, .lastLap, .bestLap, .sessionTime, .rpm, .speed, .pedals: return [.small, .medium]
+        case .lapDelta, .lastLap, .bestLap, .sessionTime, .rpm, .speed, .pedals,
+             .distance, .steering, .drag, .links: return [.small, .medium]
         case .sectorDelta, .shiftLights: return [.medium]
         case .gForce: return [.medium, .large]
         case .gear, .coolant, .altitude, .heading, .status: return [.small]
@@ -104,7 +120,8 @@ enum WidgetKind: String, CaseIterable {
 
     var defaultSize: WidgetSize {
         switch self {
-        case .lapTime, .lapDelta, .sectorDelta, .rpm, .speed, .shiftLights, .gForce: return .medium
+        case .lapTime, .lapDelta, .sectorDelta, .rpm, .speed, .shiftLights, .gForce,
+             .steering, .drag: return .medium
         case .camera: return .large
         default: return .small
         }
@@ -133,4 +150,18 @@ enum WidgetKind: String, CaseIterable {
 
     /// Cap per dashboard (one camera preview); nil = unlimited.
     var maxPerDashboard: Int? { self == .camera ? 1 : nil }
+
+    /// Choices offered in the widget's options sheet.
+    var settings: [WidgetSetting] {
+        switch self {
+        case .drag:
+            return [WidgetSetting(
+                key: DragWidget.metricKey,
+                title: "Measure",
+                choices: DragWidget.Metric.allCases.map { ($0.rawValue, $0.label) },
+                defaultValue: DragWidget.Metric.zeroToSixty.rawValue)]
+        default:
+            return []
+        }
+    }
 }

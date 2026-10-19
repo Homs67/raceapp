@@ -51,6 +51,7 @@ final class DashboardLiveFeed {
         live.coolantC = snapshot.fresh(.obd(.coolantTemp), now: now, maxAge: 90)
         live.accelPedal = snapshot.fresh(.canAccelPedal, now: now, maxAge: 1) ?? live.throttle
         live.brake = snapshot.fresh(.canBrake, now: now, maxAge: 1)
+        live.steering = snapshot.fresh(.canSteering, now: now, maxAge: 1)
         let defaults = UserDefaults.standard
         live.shift = ShiftIndicator(enabled: defaults.bool(forKey: "shiftEnabled"),
                                     shiftRPM: defaults.object(forKey: "shiftRPM") as? Double ?? 5500)
@@ -100,6 +101,12 @@ final class DashboardLiveFeed {
             }
             live.raceBox = RaceBoxLink(satellites: msg.satellites, has3DFix: msg.hasValidFix, powerText: power)
         }
+
+        live.dragRun = model.metrics.dragRun
+        live.dragBest = model.metrics.dragBest
+        live.distanceMeters = model.recording.liveDistanceMeters
+        live.obdConnected = model.connection.adapterLinkUp
+        live.obdLive = model.connection.carLinkUp
 
         live.isRecording = model.recording.isRecording
         live.elapsed = model.recording.startedAt.map { date.timeIntervalSince($0) } ?? 0

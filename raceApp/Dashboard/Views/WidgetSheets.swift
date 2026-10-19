@@ -44,6 +44,24 @@ struct WidgetOptionsSheet: View {
                             .foregroundStyle(fits ? Color.textPrimary : Color.mutedWeak)
                         }
                     }
+                    ForEach(placement.kind.settings) { setting in
+                        Section(setting.title) {
+                            ForEach(setting.choices, id: \.value) { choice in
+                                Button {
+                                    edit.setSetting(id: placement.id, key: setting.key, value: choice.value)
+                                } label: {
+                                    HStack {
+                                        Text(choice.label)
+                                        Spacer()
+                                        if (placement.settings[setting.key] ?? setting.defaultValue) == choice.value {
+                                            Image(systemName: "checkmark").foregroundStyle(Color.accent)
+                                        }
+                                    }
+                                }
+                                .foregroundStyle(Color.textPrimary)
+                            }
+                        }
+                    }
                     Section {
                         Button("Replace…") { showLibrary = true }
                         Button("Remove", role: .destructive) {
