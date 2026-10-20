@@ -19,6 +19,9 @@ final class DashboardLiveFeed {
     private var peakG = 0.0
     private var trail: [CGPoint] = []
     private var lastSessionId: UUID?
+    /// Gear with memory: N at idle, 1st on launch, the previous gear held
+    /// through a shift. See `GearTracker`.
+    private var gearTracker = GearTracker()
 
     nonisolated deinit {}   // see DashboardStore
 
@@ -33,6 +36,7 @@ final class DashboardLiveFeed {
             lastSessionId = sessionId
             peakG = 0
             trail = []
+            gearTracker.reset()
         }
 
         // While the CAN stream owns the adapter, a quiet channel is not a dead
@@ -56,9 +60,7 @@ final class DashboardLiveFeed {
             live.speedMps = gpsMps
             live.speedDisplay = units.speed(fromMps: gpsMps)
         }
-        if let rpm = live.rpm, let speedMps = live.speedMps {
-            live.gear = model.gearEstimator.gear(rpm: rpm, speedMps: speedMps)
-        }
+        live.gear = gearTracker.update(rpm: live.rpm, speedMps: live.speedMps, at: now)
         live.obdHz = model.bus.obdHz(now: now)
         live.coolantC = snapshot.fresh(.obd(.coolantTemp), now: now, maxAge: 90)
         live.accelPedal = snapshot.fresh(.canAccelPedal, now: now, maxAge: canHold) ?? live.throttle

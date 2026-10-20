@@ -18,7 +18,6 @@ final class AppModel {
     let connection: ConnectionController
     let recording: RecordingCoordinator
     let camera = SessionCameraRecorder()
-    let gearEstimator = GearEstimator()
     let metrics: SessionMetrics
     /// RaceBox link — its own BLE central, so it can run alongside the OBD adapter.
     let raceBox = RaceBoxController()

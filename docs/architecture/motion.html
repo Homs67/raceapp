@@ -101,7 +101,7 @@
 
 <h2 id="gear">Gear and steering</h2>
 <ul>
-  <li><strong>Gear</strong> isn't on the bus — <code>GearEstimator</code> derives it from the speed/RPM ratio against the car's gearing table.</li>
+  <li><strong>Gear</strong> isn't on the bus — <code>GearEstimator</code> matches the speed/RPM ratio against the car's gearing table (8% tolerance), and <code>GearTracker</code> (owned by <code>DashboardLiveFeed</code>) adds the context: idling or crawling below 2 m/s is <strong>N</strong>, crawling with revs up is a <strong>1st-gear launch</strong> even while the clutch slips, an unresolved ratio while moving keeps the previous gear for 2 s (a shift), and after that it is N at idle or the last gear otherwise. On the Oct 19 2026 drive this took the blank gear from 55% of the time to 1.4%.</li>
   <li><strong>Steering</strong> is recorded as the steering <em>wheel</em> angle (<code>can.steering</code>, about ±480° on the ND). The widget divides by the rack ratio (15:1, a documented constant to confirm) to show the road-wheel angle, about ±32°.</li>
 </ul>
 
