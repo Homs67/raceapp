@@ -552,13 +552,18 @@ struct SettingsView: View {
                     Text("Sessions capture steering, brake & pedal at 50–105 Hz instead of OBD polling")
                         .font(.system(size: 11))
                         .foregroundStyle(Color.muted)
+                    if let mode = model.connection.canStreamMode {
+                        Text("Streaming now: \(mode)")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Color.accent)
+                    }
                 }
             }
             .tint(Color.accent)
         } header: {
             Text("Experimental")
         } footer: {
-            Text("Listens to the car's CAN bus for data OBD-II can't provide. Currently maps the Mazda MX-5 ND. Read-only. While recording CAN signals, slow OBD data (coolant, fuel, voltage) is polled once a minute.")
+            Text("Listens to the car's CAN bus for data OBD-II can't provide. Currently maps the Mazda MX-5 ND. Read-only. The app first tries to watch every signal through one filter; if the adapter can't keep up it rotates between them a few times a second, and the dashboard holds the last value (dimmed) in between. Slow OBD data (coolant, fuel, voltage) is polled once a minute.")
         }
         .listRowBackground(Color.cardBg)
         .textCase(nil)

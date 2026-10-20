@@ -102,6 +102,12 @@ public enum CanSignalMap {
         },
     ]
 
+    /// What the recording stream actually asks the adapter for. The wheel-speed
+    /// frame has never decoded on the ND2 (0x4B0 is not where the ABS speeds
+    /// live on this car), so it stays out of the live rotation: every filter
+    /// slot spent on it is a slot brake and steering go without.
+    public static let mazdaNDLive: [CanSignal] = mazdaND.filter { $0.key != "wheelSpeed" }
+
     /// Distinct frame IDs referenced by a signal set (for CAN filters).
     public static func frameIDs(_ signals: [CanSignal]) -> [UInt32] {
         var seen = Set<UInt32>()

@@ -35,8 +35,20 @@ final class DashboardLiveFeed {
             trail = []
         }
 
-        live.rpm = snapshot.fresh(.obd(.rpm), now: now, maxAge: 2)
-        live.throttle = snapshot.fresh(.obd(.throttle), now: now, maxAge: 2)
+        // While the CAN stream owns the adapter, a quiet channel is not a dead
+        // one: a cheap ELM can watch one frame ID at a time, so brake and
+        // steering legitimately pause for a second or two while RPM's frame
+        // has the filter (and for ~0.4 s each minute during the slow-PID
+        // interlude). Hold the last value for the whole gap instead of
+        // blanking, and flag it stale so the widgets can dim it. The bound
+        // still catches a stream that has silently stopped; link loss drops
+        // `canStreamActive` and the normal 1–2 s rule returns at once.
+        let canStreaming = model.connection.canStreamActive
+        let canHold: TimeInterval = canStreaming ? 12 : 1
+        let engineHold: TimeInterval = canStreaming ? 12 : 2
+
+        live.rpm = snapshot.fresh(.obd(.rpm), now: now, maxAge: engineHold)
+        live.throttle = snapshot.fresh(.obd(.throttle), now: now, maxAge: engineHold)
         if let obdKmh = snapshot.fresh(.obd(.speed), now: now, maxAge: 2) {
             live.speedMps = obdKmh / 3.6
             live.speedDisplay = units.speed(fromKmh: obdKmh)
@@ -49,9 +61,15 @@ final class DashboardLiveFeed {
         }
         live.obdHz = model.bus.obdHz(now: now)
         live.coolantC = snapshot.fresh(.obd(.coolantTemp), now: now, maxAge: 90)
-        live.accelPedal = snapshot.fresh(.canAccelPedal, now: now, maxAge: 1) ?? live.throttle
-        live.brake = snapshot.fresh(.canBrake, now: now, maxAge: 1)
-        live.steering = snapshot.fresh(.canSteering, now: now, maxAge: 1)
+        live.accelPedal = snapshot.fresh(.canAccelPedal, now: now, maxAge: canHold) ?? live.throttle
+        live.brake = snapshot.fresh(.canBrake, now: now, maxAge: canHold)
+        live.steering = snapshot.fresh(.canSteering, now: now, maxAge: canHold)
+        if canStreaming {
+            let oldest = [ChannelId.canAccelPedal, .canBrake, .canSteering, .obd(.rpm)]
+                .compactMap { snapshot.age($0, now: now) }
+                .max() ?? 0
+            live.canStale = oldest > 2.5
+        }
         let defaults = UserDefaults.standard
         live.shift = ShiftIndicator(enabled: defaults.bool(forKey: "shiftEnabled"),
                                     shiftRPM: defaults.object(forKey: "shiftRPM") as? Double ?? 5500)

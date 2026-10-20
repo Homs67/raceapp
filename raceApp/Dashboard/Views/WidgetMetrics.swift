@@ -112,6 +112,15 @@ struct WidgetValue: View {
     }
 }
 
+extension View {
+    /// A value the feed is holding rather than receiving (see
+    /// `LiveSnapshot.canStale`): still readable, visibly not live.
+    func heldValue(_ held: Bool) -> some View {
+        opacity(held ? 0.45 : 1)
+            .animation(.easeInOut(duration: 0.35), value: held)
+    }
+}
+
 /// Secondary line (48 pt) under or beside a hero value.
 struct WidgetSecondaryValue: View {
     let text: String

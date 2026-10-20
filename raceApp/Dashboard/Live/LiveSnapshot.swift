@@ -5,7 +5,8 @@
 //  Everything a dashboard tick can show, read once per tick. Widgets only ever
 //  see this value — never the bus or SessionMetrics — so a 10 Hz redraw costs
 //  one snapshot, not one per widget. Optionals are the "never a fake zero"
-//  rule (R2.5): stale data is absent, not frozen.
+//  rule (R2.5): stale data is absent, not frozen. The one deliberate
+//  exception is the CAN inputs while the stream is alive — see `canStale`.
 //
 
 import Foundation
@@ -25,6 +26,10 @@ struct LiveSnapshot: Equatable {
     var accelPedal: Double?       // %
     var brake: Double?            // %
     var steering: Double?         // degrees, + = right
+    /// The CAN stream is up but its inputs are a couple of seconds old (the
+    /// adapter is rotating its one filter, or the slow-PID interlude is
+    /// running). Values are held, and widgets dim them rather than blank.
+    var canStale = false
     var shift = ShiftIndicator(enabled: false, shiftRPM: 5500)
 
     // Dynamics

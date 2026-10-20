@@ -61,6 +61,9 @@ final class ConnectionController {
     private var canStreamSession: CanMonitorSession?
     private var canStreamTask: Task<Void, Never>?
     private(set) var canStreamActive = false
+    /// How the adapter is being driven while streaming (for Settings): one
+    /// combined mask, or rotating single-ID filters.
+    private(set) var canStreamMode: String?
     private var reconnectingAfterLinkLoss = false
     /// Prevents repeated auto-select while RSSI updates keep arriving.
     private var didAutoSelectThisScan = false
@@ -246,8 +249,8 @@ final class ConnectionController {
 
         let streamSession = CanMonitorSession(transport: bleTransport)
         canStreamSession = streamSession
-        canStreamTask = Task { [bus] in
-            for await reading in await streamSession.stream(signals: CanSignalMap.mazdaND) {
+        canStreamTask = Task { [weak self, bus] in
+            for await reading in await streamSession.stream(signals: CanSignalMap.mazdaNDLive) {
                 switch reading {
                 case .can(let key, let value, let t):
                     if let channel = Self.canChannel(forSignalKey: key) {
@@ -267,6 +270,8 @@ final class ConnectionController {
                 case .obd(let channel, let value, let t):
                     // Genuinely polled during the slow-PID interlude — recordable.
                     bus.publish(.obd(channel), value, at: t)
+                case .mode(let text):
+                    self?.canStreamMode = text
                 }
             }
         }
@@ -275,6 +280,7 @@ final class ConnectionController {
     private func stopCanStream() {
         guard canStreamActive else { return }
         canStreamActive = false
+        canStreamMode = nil
         canStreamTask?.cancel()
         canStreamTask = nil
         let streamSession = canStreamSession
@@ -301,6 +307,7 @@ final class ConnectionController {
     private func abortCanStreamAfterLinkLoss() {
         guard canStreamActive else { return }
         canStreamActive = false
+        canStreamMode = nil
         canStreamTask?.cancel()
         canStreamTask = nil
         if let streamSession = canStreamSession { Task { await streamSession.shutdown() } }

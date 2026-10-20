@@ -65,18 +65,21 @@ struct PedalsWidget: View {
     var body: some View {
         let accel = context.live.accelPedal
         let brake = context.live.brake
-        switch context.size {
-        case .medium:
-            HStack(alignment: .bottom, spacing: 24) {
-                pedal("throttle", accel, Color.deltaGreen)
-                pedal("brake", brake, Color.toolbarRed)
-            }
-        default:
-            VStack(alignment: .leading, spacing: 10) {
-                PedalBar(percent: accel, color: Color.deltaGreen)
-                PedalBar(percent: brake, color: Color.toolbarRed)
+        Group {
+            switch context.size {
+            case .medium:
+                HStack(alignment: .bottom, spacing: 24) {
+                    pedal("throttle", accel, Color.deltaGreen)
+                    pedal("brake", brake, Color.toolbarRed)
+                }
+            default:
+                VStack(alignment: .leading, spacing: 10) {
+                    PedalBar(percent: accel, color: Color.deltaGreen)
+                    PedalBar(percent: brake, color: Color.toolbarRed)
+                }
             }
         }
+        .heldValue(context.live.canStale)
     }
 
     private func pedal(_ name: String, _ value: Double?, _ color: Color) -> some View {

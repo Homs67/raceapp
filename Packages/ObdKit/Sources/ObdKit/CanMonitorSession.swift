@@ -59,6 +59,9 @@ public actor CanMonitorSession {
     /// Capped so the continuous stream mode can't grow it without bound.
     private var capturedLog: [(ms: Int, line: String)] = []
     private var runStart: TimeInterval = 0
+    /// Prompts (`>`) received so far — how `send(_:awaitingPromptFor:)` knows
+    /// the adapter finished with a command.
+    private var promptsSeen = 0
     private static let logCap = 20_000
 
     public init(transport: any ObdTransport) {
@@ -183,27 +186,67 @@ public actor CanMonitorSession {
     // MARK: - Continuous recording stream
 
     /// One decoded reading from the continuous stream: a broadcast CAN signal,
-    /// or a genuinely polled OBD value from the slow-PID interlude.
+    /// a genuinely polled OBD value from the slow-PID interlude, or a note
+    /// about how the adapter is being driven (for Settings/diagnostics).
     public enum CanStreamReading: Sendable {
         case can(key: String, value: Double, t: TimeInterval)
         case obd(channel: ObdChannel, value: Double, t: TimeInterval)
+        case mode(String)
     }
 
-    /// Continuous capture for a whole recording session. Rotates the single
-    /// hardware filter across the signal frame IDs — the frame carrying RPM
-    /// gets every other slot so the live dashboard/shift lights stay fresh —
-    /// and every `interludeEvery` seconds pauses ~1.5 s to poll slow OBD PIDs
-    /// that we haven't (yet) found on broadcast CAN. Runs until the consumer
-    /// stops iterating or the task is cancelled.
+    /// One hardware filter setting: an `ATCM` mask / `ATCF` filter pair that
+    /// admits every ID in `ids` (and, when they differ in some bits, other
+    /// IDs too — see `admittedCount`).
+    public struct FilterGroup: Hashable, Sendable {
+        public let ids: [UInt32]
+        public let mask: UInt32
+        public let filter: UInt32
+
+        /// The tightest single mask that passes all of `ids`: bits where every
+        /// ID agrees must match; bits where they differ are don't-cares.
+        public init(ids: [UInt32]) {
+            let unique = Array(Set(ids)).sorted()
+            var differing: UInt32 = 0
+            for id in unique { differing |= id ^ (unique.first ?? 0) }
+            self.ids = unique
+            self.mask = ~differing & 0x7FF
+            self.filter = (unique.first ?? 0) & mask
+        }
+
+        /// How many distinct 11-bit IDs the mask lets through.
+        public var admittedCount: Int { 1 << (11 - mask.nonzeroBitCount) }
+        public var isSingle: Bool { ids.count == 1 }
+        var label: String {
+            isSingle ? String(format: "0x%03X", ids[0])
+                     : String(format: "mask 0x%03X/0x%03X (%d IDs)", mask, filter, ids.count)
+        }
+    }
+
+    /// Continuous capture for a whole recording session.
+    ///
+    /// A cheap ELM327 has one hardware filter, so the fallback is to rotate it
+    /// across the signal frame IDs — the frame carrying RPM gets every other
+    /// slot so the live dashboard/shift lights stay fresh. Before settling for
+    /// that, the stream probes whether one mask can admit every wanted ID at
+    /// once without the adapter overflowing (`combineFilters`): if it can,
+    /// every signal streams continuously and nothing rotates. Every
+    /// `interludeEvery` seconds it pauses briefly to poll slow OBD PIDs that
+    /// aren't on broadcast CAN. Runs until the consumer stops iterating or the
+    /// task is cancelled.
     public func stream(signals: [CanSignal],
-                       dwell: Duration = .milliseconds(900),
+                       dwell: Duration = .milliseconds(250),
                        interludePids: [ObdChannel] = [.coolantTemp, .fuelLevel, .controlModuleVoltage, .engineLoad],
-                       interludeEvery: TimeInterval = 60) -> AsyncStream<CanStreamReading> {
+                       interludeEvery: TimeInterval = 60,
+                       combineFilters: Bool = true,
+                       probe: Duration = .milliseconds(1500),
+                       minCombinedHz: Double = 5) -> AsyncStream<CanStreamReading> {
         AsyncStream { continuation in
             let task = Task {
                 await self.runStream(signals: signals, dwell: dwell,
                                      interludePids: interludePids,
                                      interludeEvery: interludeEvery,
+                                     combineFilters: combineFilters,
+                                     probe: probe, minCombinedHz: minCombinedHz,
                                      continuation: continuation)
             }
             continuation.onTermination = { _ in task.cancel() }
@@ -212,52 +255,197 @@ public actor CanMonitorSession {
 
     /// RPM's frame in every other slot: `[202, 086, 202, 078, 202, 4B0]`.
     static func rotationSchedule(for signals: [CanSignal]) -> [UInt32] {
-        let ids = CanSignalMap.frameIDs(signals)
-        guard ids.count > 1,
-              let priority = signals.first(where: { $0.key == "canRpm" })?.frameID else { return ids }
-        var schedule: [UInt32] = []
-        for id in ids where id != priority {
-            schedule.append(priority)
-            schedule.append(id)
+        rotation(of: CanSignalMap.frameIDs(signals).map { FilterGroup(ids: [$0]) },
+                 priority: priorityFrameID(signals)).map { $0.ids[0] }
+    }
+
+    static func priorityFrameID(_ signals: [CanSignal]) -> UInt32? {
+        signals.first(where: { $0.key == "canRpm" })?.frameID
+    }
+
+    /// Interleave the group holding the priority frame between all others.
+    static func rotation(of groups: [FilterGroup], priority: UInt32?) -> [FilterGroup] {
+        guard groups.count > 1, let priority,
+              let hot = groups.first(where: { $0.ids.contains(priority) }) else { return groups }
+        var schedule: [FilterGroup] = []
+        for group in groups where group != hot {
+            schedule.append(hot)
+            schedule.append(group)
         }
-        return schedule.isEmpty ? ids : schedule
+        return schedule.isEmpty ? groups : schedule
     }
 
     private func runStream(signals: [CanSignal], dwell: Duration,
                            interludePids: [ObdChannel], interludeEvery: TimeInterval,
+                           combineFilters: Bool, probe: Duration, minCombinedHz: Double,
                            continuation: AsyncStream<CanStreamReading>.Continuation) async {
         await configure()
-        let schedule = Self.rotationSchedule(for: signals)
-        clear()
-        await send("ATCM 7FF")
-        try? await Task.sleep(for: .milliseconds(120))
+        let ids = CanSignalMap.frameIDs(signals)
+        let priority = Self.priorityFrameID(signals)
+        var schedule = await planSchedule(ids: ids, priority: priority, combine: combineFilters,
+                                          probe: probe, minHz: minCombinedHz)
+        continuation.yield(.mode(Self.describe(schedule, dwell: dwell)))
+
         var lastInterlude = monotonicNow()
         var slot = 0
+        var currentMask: UInt32? = nil
         while !Task.isCancelled {
-            let id = schedule[slot % schedule.count]
+            let group = schedule[slot % schedule.count]
             slot += 1
-            clear()
-            await send(String(format: "ATCF %03X", id))
-            try? await Task.sleep(for: .milliseconds(80))
+            await select(group, currentMask: &currentMask)
             clear()
             await send("ATMA")
-            try? await Task.sleep(for: dwell)
-            await sendRaw(" ")
-            try? await Task.sleep(for: .milliseconds(120))
-            for (t, line) in takeStamped() {
-                guard let frame = CanFrameParser.parse(line, t: t), frame.id == id else { continue }
-                for signal in signals where signal.frameID == id {
-                    if let value = signal.decode(frame.data) {
-                        continuation.yield(.can(key: signal.key, value: value, t: t))
+
+            if schedule.count == 1 {
+                // One filter covers everything: leave the monitor running and
+                // drain it continuously. Fall back to rotating if the adapter
+                // keeps overflowing or goes quiet.
+                var overflows: [TimeInterval] = []
+                var silentSince = monotonicNow()
+                var rearms = 0
+                var healthy = true
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .milliseconds(50))
+                    let lines = takeStamped()
+                    if !lines.isEmpty { silentSince = monotonicNow() }
+                    var overflowed = false
+                    for (t, line) in lines {
+                        if let frame = CanFrameParser.parse(line, t: t) {
+                            emit(frame, signals: signals, continuation: continuation)
+                        } else if Self.isBufferFull(line) {
+                            overflowed = true
+                        }
+                    }
+                    let now = monotonicNow()
+                    if overflowed {
+                        overflows.append(now)
+                        overflows.removeAll { now - $0 > 10 }
+                        if overflows.count >= 3 { healthy = false; break }
+                        await send("ATMA")
+                    } else if now - silentSince > 2 {
+                        rearms += 1
+                        if rearms > 2 { healthy = false; break }
+                        silentSince = now
+                        await send("ATMA")
+                    }
+                    if !interludePids.isEmpty, now - lastInterlude >= interludeEvery {
+                        lastInterlude = now
+                        await stopMonitor()
+                        await pollSlowPids(interludePids, into: continuation)
+                        currentMask = nil   // the interlude moved the filter
+                        break
                     }
                 }
+                if !healthy {
+                    await stopMonitor()
+                    mark("# combined filter unhealthy → rotating")
+                    schedule = Self.rotation(of: ids.map { FilterGroup(ids: [$0]) }, priority: priority)
+                    continuation.yield(.mode(Self.describe(schedule, dwell: dwell)))
+                }
+                continue
+            }
+
+            try? await Task.sleep(for: dwell)
+            await stopMonitor()
+            for (t, line) in takeStamped() {
+                guard let frame = CanFrameParser.parse(line, t: t), group.ids.contains(frame.id) else { continue }
+                emit(frame, signals: signals, continuation: continuation)
             }
             if !interludePids.isEmpty, monotonicNow() - lastInterlude >= interludeEvery {
                 lastInterlude = monotonicNow()
                 await pollSlowPids(interludePids, into: continuation)
+                currentMask = nil
             }
         }
         continuation.finish()
+    }
+
+    /// Decide how to drive the filter: everything at once if the adapter can
+    /// take it, else RPM's frame alone alternating with the rest combined,
+    /// else plain single-ID rotation.
+    private func planSchedule(ids: [UInt32], priority: UInt32?, combine: Bool,
+                              probe: Duration, minHz: Double) async -> [FilterGroup] {
+        let singles = ids.map { FilterGroup(ids: [$0]) }
+        guard combine, ids.count > 1 else { return Self.rotation(of: singles, priority: priority) }
+
+        let all = FilterGroup(ids: ids)
+        if await passes(all, probe: probe, minHz: minHz) { return [all] }
+
+        if let priority, ids.count > 2 {
+            let rest = FilterGroup(ids: ids.filter { $0 != priority })
+            if await passes(rest, probe: probe, minHz: minHz) {
+                return Self.rotation(of: [FilterGroup(ids: [priority]), rest], priority: priority)
+            }
+        }
+        return Self.rotation(of: singles, priority: priority)
+    }
+
+    /// Run the monitor briefly through `group`'s mask and judge it: no
+    /// BUFFER FULL, and every wanted ID arriving at a usable rate.
+    private func passes(_ group: FilterGroup, probe: Duration, minHz: Double) async -> Bool {
+        var mask: UInt32? = nil
+        await select(group, currentMask: &mask)
+        clear()
+        await send("ATMA")
+        try? await Task.sleep(for: probe)
+        await stopMonitor()
+        let lines = takeStamped()
+        var counts: [UInt32: Int] = [:]
+        var overflowed = false
+        for (t, line) in lines {
+            if let frame = CanFrameParser.parse(line, t: t) {
+                counts[frame.id, default: 0] += 1
+            } else if Self.isBufferFull(line) {
+                overflowed = true
+            }
+        }
+        let seconds = max(probe.seconds, 0.001)
+        let rates = group.ids.map { Double(counts[$0] ?? 0) / seconds }
+        let ok = !overflowed && rates.allSatisfy { $0 >= minHz }
+        mark("# probe \(group.label): \(ok ? "pass" : "fail")"
+             + (overflowed ? " (BUFFER FULL)" : "")
+             + " · " + zip(group.ids, rates).map { String(format: "0x%03X %.0f Hz", $0, $1) }.joined(separator: ", ")
+             + " · \(lines.count) lines")
+        return ok
+    }
+
+    private func select(_ group: FilterGroup, currentMask: inout UInt32?) async {
+        clear()
+        if currentMask != group.mask {
+            await send(String(format: "ATCM %03X", group.mask), awaitingPromptFor: .milliseconds(150))
+            currentMask = group.mask
+        }
+        await send(String(format: "ATCF %03X", group.filter), awaitingPromptFor: .milliseconds(150))
+    }
+
+    /// Any byte stops ATMA; the ELM answers STOPPED and a prompt.
+    private func stopMonitor() async {
+        await sendRaw(" ", awaitingPromptFor: .milliseconds(250))
+    }
+
+    private func emit(_ frame: CanFrame, signals: [CanSignal],
+                      continuation: AsyncStream<CanStreamReading>.Continuation) {
+        for signal in signals where signal.frameID == frame.id {
+            if let value = signal.decode(frame.data) {
+                continuation.yield(.can(key: signal.key, value: value, t: frame.t))
+            }
+        }
+    }
+
+    static func isBufferFull(_ line: String) -> Bool {
+        line.replacingOccurrences(of: " ", with: "").uppercased().contains("BUFFERFULL")
+    }
+
+    static func describe(_ schedule: [FilterGroup], dwell: Duration) -> String {
+        if schedule.count == 1, let only = schedule.first {
+            return only.isSingle ? "continuous, \(only.label)"
+                                 : "continuous, \(only.ids.count) IDs through one mask"
+        }
+        let distinct = Array(Set(schedule)).count
+        let combined = schedule.contains { !$0.isSingle }
+        return "rotating \(distinct) filter\(distinct == 1 ? "" : "s")"
+            + (combined ? " (one combined)" : "")
+            + String(format: ", %.0f ms dwell", dwell.seconds * 1000)
     }
 
     /// Monitor is stopped; point the filter at the ECU reply ID and send raw
@@ -265,12 +453,11 @@ public actor CanMonitorSession {
     private func pollSlowPids(_ channels: [ObdChannel],
                               into continuation: AsyncStream<CanStreamReading>.Continuation) async {
         clear()
-        await send("ATCF 7E8")
-        try? await Task.sleep(for: .milliseconds(80))
+        await send("ATCM 7FF", awaitingPromptFor: .milliseconds(150))
+        await send("ATCF 7E8", awaitingPromptFor: .milliseconds(150))
         for channel in channels {
             clear()
-            await send(String(format: "02 01 %02X", channel.pid))
-            try? await Task.sleep(for: .milliseconds(220))
+            await send(String(format: "02 01 %02X", channel.pid), awaitingPromptFor: .milliseconds(400))
             for (t, line) in takeStamped() {
                 guard let frame = CanFrameParser.parse(line, t: t),
                       (0x7E8...0x7EF).contains(frame.id),
@@ -409,6 +596,25 @@ public actor CanMonitorSession {
         try? await transport.send(Data(s.utf8))
     }
 
+    /// Send, then wait for the ELM's next prompt — or give up after `timeout`.
+    /// Replaces fixed sleeps so filter switches cost what the link costs.
+    private func send(_ command: String, awaitingPromptFor timeout: Duration) async {
+        let before = promptsSeen
+        await send(command)
+        await awaitPrompt(after: before, timeout: timeout)
+    }
+    private func sendRaw(_ s: String, awaitingPromptFor timeout: Duration) async {
+        let before = promptsSeen
+        await sendRaw(s)
+        await awaitPrompt(after: before, timeout: timeout)
+    }
+    private func awaitPrompt(after count: Int, timeout: Duration) async {
+        let deadline = monotonicNow() + timeout.seconds
+        while promptsSeen == count, monotonicNow() < deadline, !Task.isCancelled {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+    }
+
     private func clear() { buffered.removeAll() }
     private func take() -> [String] {
         takeStamped().map(\.line)
@@ -448,6 +654,7 @@ public actor CanMonitorSession {
         pending += text.replacingOccurrences(of: "\0", with: "")
         // Frames/responses are newline- or prompt-delimited during monitoring.
         while let idx = pending.firstIndex(where: { $0 == "\r" || $0 == "\n" || $0 == ">" }) {
+            if pending[idx] == ">" { promptsSeen += 1 }
             let line = String(pending[pending.startIndex..<idx]).trimmingCharacters(in: .whitespaces)
             pending = String(pending[pending.index(after: idx)...])
             if !line.isEmpty {

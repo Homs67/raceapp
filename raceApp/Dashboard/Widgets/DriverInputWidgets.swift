@@ -30,23 +30,26 @@ struct SteeringWidget: View {
     }
 
     var body: some View {
-        switch context.size {
-        case .medium:
-            HStack(alignment: .bottom, spacing: 18) {
-                SteeringArc(angle: wheelAngle, maxAngle: Self.maxWheelAngle)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                VStack(alignment: .leading, spacing: 2) {
-                    WidgetCaption(text: side(wheelAngle))
-                    WidgetValue(text: text(wheelAngle), context: context)
+        Group {
+            switch context.size {
+            case .medium:
+                HStack(alignment: .bottom, spacing: 18) {
+                    SteeringArc(angle: wheelAngle, maxAngle: Self.maxWheelAngle)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    VStack(alignment: .leading, spacing: 2) {
+                        WidgetCaption(text: side(wheelAngle))
+                        WidgetValue(text: text(wheelAngle), context: context)
+                    }
+                    .fixedSize()
                 }
-                .fixedSize()
-            }
-        default:
-            HStack(alignment: .lastTextBaseline, spacing: 8) {
-                WidgetValue(text: text(wheelAngle), context: context)
-                WidgetCaption(text: side(wheelAngle))
+            default:
+                HStack(alignment: .lastTextBaseline, spacing: 8) {
+                    WidgetValue(text: text(wheelAngle), context: context)
+                    WidgetCaption(text: side(wheelAngle))
+                }
             }
         }
+        .heldValue(context.live.canStale)
     }
 
     private func text(_ angle: Double?) -> String {

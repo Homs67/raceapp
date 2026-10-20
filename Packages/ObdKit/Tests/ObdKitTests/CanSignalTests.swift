@@ -114,6 +114,86 @@ final class CanSignalTests: XCTestCase {
         XCTAssertEqual(schedule, [0x202, 0x086, 0x202, 0x078, 0x202, 0x4B0])
     }
 
+    func testLiveRotationSkipsTheUndecodedWheelFrame() {
+        XCTAssertEqual(CanMonitorSession.rotationSchedule(for: CanSignalMap.mazdaNDLive),
+                       [0x202, 0x086, 0x202, 0x078])
+    }
+
+    func testFilterGroupMaskAdmitsEveryMember() {
+        let group = CanMonitorSession.FilterGroup(ids: [0x078, 0x086, 0x202])
+        for id in group.ids { XCTAssertEqual(id & group.mask, group.filter) }
+        XCTAssertEqual(group.mask, 0x501)
+        XCTAssertEqual(group.admittedCount, 256)
+        let single = CanMonitorSession.FilterGroup(ids: [0x202])
+        XCTAssertEqual(single.mask, 0x7FF)
+        XCTAssertEqual(single.admittedCount, 1)
+    }
+
+    func testStreamUsesOneMaskWhenTheAdapterKeepsUp() async {
+        // The combined probe sees all three IDs at a healthy rate → no rotation,
+        // and every signal flows from the one continuous monitor.
+        let burst = ["202 1F 40 00 00 0A 00 19 12", "086 3E 80 00 00 00 00 00 00",
+                     "078 00 00 00 0A 00 00 00 00"].joined(separator: "\r")
+        let transport = ReplayTransport(responses: [
+            "ATZ": ["ELM327 v2.2"], "ATE0": ["OK"], "ATL0": ["OK"], "ATS1": ["OK"],
+            "ATH1": ["OK"], "ATCAF0": ["OK"], "ATSP6": ["OK"],
+            "ATCM 501": ["OK"], "ATCF 000": ["OK"], "ATMA": [burst],
+        ])
+        let session = CanMonitorSession(transport: transport)
+        var keys = Set<String>()
+        var modes: [String] = []
+        var iterations = 0
+        for await reading in await session.stream(signals: CanSignalMap.mazdaNDLive,
+                                                  dwell: .milliseconds(80),
+                                                  interludePids: [], probe: .milliseconds(100),
+                                                  minCombinedHz: 5) {
+            switch reading {
+            case .can(let key, _, _): keys.insert(key)
+            case .mode(let text): modes.append(text)
+            case .obd: break
+            }
+            iterations += 1
+            if keys.isSuperset(of: ["canRpm", "accelPedal", "steeringAngle", "brakePos"]) || iterations > 200 { break }
+        }
+        await session.shutdown()
+        XCTAssertTrue(keys.isSuperset(of: ["canRpm", "accelPedal", "steeringAngle", "brakePos"]), "\(keys)")
+        XCTAssertEqual(modes.first, "continuous, 3 IDs through one mask")
+        XCTAssertTrue(transport.sentCommands.contains("ATCM 501"))
+        XCTAssertFalse(transport.sentCommands.contains("ATCF 086"), "never fell back to single-ID rotation")
+    }
+
+    func testStreamFallsBackToRotationWhenTheMaskOverflows() async {
+        // Every multi-ID probe overflows; singles rotate as before.
+        let transport = ReplayTransport(responses: [
+            "ATZ": ["ELM327 v2.2"], "ATE0": ["OK"], "ATL0": ["OK"], "ATS1": ["OK"],
+            "ATH1": ["OK"], "ATCAF0": ["OK"], "ATSP6": ["OK"],
+            "ATCM 501": ["OK"], "ATCM 701": ["OK"], "ATCM 7FF": ["OK"],
+            "ATCF 000": ["OK"], "ATCF 202": ["OK"], "ATCF 086": ["OK"], "ATCF 078": ["OK"],
+            "ATMA": ["202 1F 40 00 00 0A 00 19 12\rBUFFER FULL",
+                     "086 3E 80 00 00 00 00 00 00\rBUFFER FULL",
+                     "202 1F 40 00 00 0A 00 19 12\r086 3E 80 00 00 00 00 00 00"],
+        ])
+        let session = CanMonitorSession(transport: transport)
+        var modes: [String] = []
+        var sawSteering = false
+        var iterations = 0
+        for await reading in await session.stream(signals: CanSignalMap.mazdaNDLive,
+                                                  dwell: .milliseconds(60),
+                                                  interludePids: [], probe: .milliseconds(60)) {
+            if case .mode(let text) = reading { modes.append(text) }
+            if case .can(let key, _, _) = reading, key == "steeringAngle" { sawSteering = true }
+            iterations += 1
+            if sawSteering || iterations > 200 { break }
+        }
+        await session.shutdown()
+        XCTAssertEqual(modes.first, "rotating 3 filters, 60 ms dwell")
+        XCTAssertTrue(sawSteering)
+        let sent = transport.sentCommands
+        XCTAssertTrue(sent.contains("ATCM 501"), "tried everything through one mask first")
+        XCTAssertTrue(sent.contains("ATCM 701"), "then brake+steering together")
+        XCTAssertTrue(sent.contains("ATCF 086") && sent.contains("ATCF 202"), "then plain rotation")
+    }
+
     func testStreamDecodesRotationAndInterlude() async {
         // ATMA replays a mixed burst; each rotation slot keeps only its filtered
         // ID. interludeEvery 0 → slow-PID poll after the first slot.
@@ -132,7 +212,7 @@ final class CanSignalTests: XCTestCase {
         for await reading in await session.stream(signals: CanSignalMap.mazdaND,
                                                   dwell: .milliseconds(80),
                                                   interludePids: [.coolantTemp],
-                                                  interludeEvery: 0) {
+                                                  interludeEvery: 0, combineFilters: false) {
             switch reading {
             case .can(let key, let value, _):
                 if key == "canRpm", abs(value - 2000) < 0.01 { sawRpm = true }
@@ -140,6 +220,8 @@ final class CanSignalTests: XCTestCase {
                 if key == "steeringAngle", abs(value) < 0.01 { sawSteering = true }
             case .obd(let channel, let value, _):
                 if channel == .coolantTemp, abs(value - 50) < 0.01 { sawCoolant = true }
+            case .mode:
+                break
             }
             iterations += 1
             if (sawRpm && sawPedal && sawSteering && sawCoolant) || iterations > 400 { break }
