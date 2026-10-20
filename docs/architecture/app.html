@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>App layer · raceApp Architecture</title>
+<link rel="stylesheet" href="assets/site.css">
+<script src="assets/site.js"></script>
+</head>
+<body>
+<header class="top">
+  <a href="index.html" class="brand">raceApp <span>architecture</span></a>
+  <span class="spacer"></span>
+  <span class="meta">Updated October 2026</span>
+  <button class="theme-toggle" id="theme-toggle">Auto</button>
+</header>
+<div class="layout">
+<nav id="nav" class="side"><a href="index.html">Overview</a></nav>
+<main>
+
+<h1>App layer</h1>
+<p class="lede">The <code>raceApp</code> target is SwiftUI views plus a handful of controllers that own live connections and iOS framework objects. One object, <code>AppModel</code>, creates them all and wires them together.</p>
+
+<h2 id="launch">Launch</h2>
+<ol class="steps">
+  <li><span class="path">raceAppApp.swift</span> creates a single <code>AppModel</code>, puts it in the SwiftUI environment, forces dark mode, and calls <code>model.onLaunch()</code>.</li>
+  <li><code>onLaunch()</code> recovers interrupted sessions, requests sensor permissions, starts phone sensors publishing to the bus, starts OBD discovery, and auto-connects a remembered RaceBox. In DEBUG it also honours <a href="workflow.html#launch-args">launch arguments</a> such as <code>-demo</code>.</li>
+  <li><span class="path">ContentView.swift</span> shows <code>SessionsView</code> as the root. While a session records, the dashboard (<code>DashboardPagerView</code>) covers everything as a full-screen cover; Settings and Debug are sheets.</li>
+  <li>Scene-phase changes go to <code>AppModel.scenePhaseChanged</code>, which re-checks permissions, reconnects devices on foreground, and switches sensors into background recording mode.</li>
+</ol>
+
+<h2 id="root">AppModel — the composition root</h2>
+<p><span class="path">raceApp/Model/AppModel.swift</span> is the single best file to read for the shape of the app. It is <code>@MainActor @Observable</code> and owns:</p>
+<div class="table-wrap"><table>
+<tr><th>Property</th><th>Type</th><th>Role</th></tr>
+<tr><td><code>bus</code></td><td><code>TelemetryBus</code></td><td>The sample hub everything publishes to</td></tr>
+<tr><td><code>store</code></td><td><code>SessionStore</code></td><td>Sessions on disk</td></tr>
+<tr><td><code>connection</code></td><td><code>ConnectionController</code></td><td>OBD-II adapter lifecycle, polling, CAN stream, demo mode</td></tr>
+<tr><td><code>raceBox</code></td><td><code>RaceBoxController</code></td><td>RaceBox link, car-frame G from its accelerometer, memory download</td></tr>
+<tr><td><code>recording</code></td><td><code>RecordingCoordinator</code></td><td>Start/stop, the bus tap, auto-stop, geocoding the session location</td></tr>
+<tr><td><code>metrics</code></td><td><code>SessionMetrics</code></td><td>Live laps, delta, sectors and drag runs during a session</td></tr>
+<tr><td><code>camera</code></td><td><code>SessionCameraRecorder</code></td><td>Opt-in front/rear camera capture</td></tr>
+<tr><td><code>dashboards</code></td><td><code>DashboardStore</code></td><td>Saved dashboard layouts</td></tr>
+<tr><td><code>gearEstimator</code></td><td><code>GearEstimator</code></td><td>Gear from speed and RPM</td></tr>
+<tr><td><code>sensors</code> (private)</td><td><code>PhoneSensorSuite</code></td><td>Phone GPS, motion, barometer</td></tr>
+</table></div>
+<p>Cross-component behaviour is wired here with closures rather than by components knowing about each other. For example:</p>
+<pre><code>// RaceBox → phone sensors: the logger owns position and car-frame G while it streams
+raceBox.onPositionFix = { [sensors] mps, course, t in
+    sensors.ingestExternalFix(speed: mps, course: course, at: t)
+}
+raceBox.onMotionSample = { [sensors] t in sensors.noteExternalMotion(at: t) }
+
+// Recording stop → tidy up camera, metrics, sensors, and the CAN stream
+recording.onRecordingDidStop = { [weak self] in … }</code></pre>
+<p>If you're adding a feature that needs two controllers to cooperate, wire it in <code>AppModel</code> the same way.</p>
+
+<h2 id="controllers">Controllers</h2>
+<div class="table-wrap"><table>
+<tr><th>File</th><th>Owns</th><th>Notes</th></tr>
+<tr><td><code>ConnectionController</code></td><td>The OBD adapter: scan → connect → ELM init → ECU → live polling; silent reconnect; adapter persistence; switching to the CAN stream for a recording; demo mode</td><td>The largest controller (~800 lines). States below.</td></tr>
+<tr><td><code>RaceBoxController</code></td><td>Its own BLE central, the <code>RaceBoxSession</code>, publishing to <code>gps.*</code>/<code>rb.*</code>/<code>car.*</code>, the persisted car frame, memory download/erase, self-test</td><td>Gates commands on device model</td></tr>
+<tr><td><code>RecordingCoordinator</code></td><td>One-button session lifecycle; the full-rate bus tap; auto-stop notification; reverse-geocoded location; live distance</td><td>Drives <code>SessionRecorder</code></td></tr>
+<tr><td><code>SessionMetrics</code></td><td>Pure engines (<code>LapTimer</code>, <code>TrackProgress</code>, <code>LapDelta</code>, <code>DragMeter</code>) pumped from bus snapshots at 5 Hz</td><td>Publishes results the dashboard reads</td></tr>
+<tr><td><code>SessionCameraRecorder</code></td><td>Multi-cam front + rear capture, clips stamped with wall-clock start for sync</td><td>Attached to the session at stop</td></tr>
+<tr><td><code>VideoLibrary</code></td><td>Importing external clips and stitching session-cropped segments</td><td>Used by video review</td></tr>
+<tr><td><code>RaceBoxMemoryImporter</code></td><td>Splitting a memory dump into drives and writing them as sessions</td><td>Actor</td></tr>
+<tr><td><code>Track</code> / <code>TrackDatabase</code></td><td>Bundled track maps (centreline, start/finish gate, corners)</td><td>JSON built by <code>tools/build_tracks.py</code></td></tr>
+<tr><td><code>DemoTelemetryFeed</code>, <code>TrackDemoDrive</code></td><td>Synthetic phone channels for demo mode, consistent with the simulated adapter</td><td>DEBUG and "Try with demo data"</td></tr>
+</table></div>
+
+<h3 id="connection-states" data-short="OBD connection states">OBD connection states</h3>
+<figure class="diagram">
+<div class="frame">
+<svg class="dg" viewBox="0 0 900 240" role="img" aria-label="OBD connection state machine: idle, scanning, connecting, discoveringGatt, initializingElm, connectingEcu, live. connectingEcu goes to waitingForIgnition when the ignition is off and back when the ECU answers. live goes to reconnecting on link loss, which returns to connecting.">
+  <rect class="box" x="10" y="40" width="90" height="46" rx="8"/><text x="55" y="68" text-anchor="middle">idle</text>
+  <rect class="box" x="120" y="40" width="100" height="46" rx="8"/><text x="170" y="68" text-anchor="middle">scanning</text>
+  <rect class="box" x="240" y="40" width="110" height="46" rx="8"/><text x="295" y="68" text-anchor="middle">connecting</text>
+  <rect class="box" x="370" y="40" width="130" height="46" rx="8"/><text x="435" y="68" text-anchor="middle">discoveringGatt</text>
+  <rect class="box" x="520" y="40" width="120" height="46" rx="8"/><text x="580" y="68" text-anchor="middle">initializingElm</text>
+  <rect class="box" x="660" y="40" width="120" height="46" rx="8"/><text x="720" y="68" text-anchor="middle">connectingEcu</text>
+  <rect class="box accent" x="800" y="40" width="90" height="46" rx="8"/><text x="845" y="68" text-anchor="middle" class="h">live</text>
+  <rect class="box" x="626" y="150" width="148" height="46" rx="8"/><text x="700" y="178" text-anchor="middle">waitingForIgnition</text>
+  <rect class="box" x="787" y="150" width="108" height="46" rx="8"/><text x="841" y="178" text-anchor="middle">reconnecting(n)</text>
+
+  <line class="edge" x1="100" y1="63" x2="112" y2="63"/><polygon class="head" points="120,63 112,58.5 112,67.5"/>
+  <line class="edge" x1="220" y1="63" x2="232" y2="63"/><polygon class="head" points="240,63 232,58.5 232,67.5"/>
+  <line class="edge" x1="350" y1="63" x2="362" y2="63"/><polygon class="head" points="370,63 362,58.5 362,67.5"/>
+  <line class="edge" x1="500" y1="63" x2="512" y2="63"/><polygon class="head" points="520,63 512,58.5 512,67.5"/>
+  <line class="edge" x1="640" y1="63" x2="652" y2="63"/><polygon class="head" points="660,63 652,58.5 652,67.5"/>
+  <line class="edge strong" x1="780" y1="63" x2="792" y2="63"/><polygon class="head strong" points="800,63 792,58.5 792,67.5"/>
+
+  <line class="edge" x1="700" y1="86" x2="700" y2="142"/><polygon class="head" points="700,150 695.5,142 704.5,142"/>
+  <line class="edge" x1="726" y1="150" x2="726" y2="94"/><polygon class="head" points="726,86 721.5,94 730.5,94"/>
+  <text x="692" y="122" text-anchor="end" class="lbl">ignition off</text>
+  <text x="734" y="122" class="lbl">ECU answers</text>
+
+  <line class="edge dash" x1="845" y1="86" x2="845" y2="142"/><polygon class="head" points="845,150 840.5,142 849.5,142"/>
+  <text x="853" y="122" class="lbl">link lost</text>
+  <path class="edge dash" d="M841 196 L841 212 Q841 224 829 224 L307 224 Q295 224 295 212 L295 94"/><polygon class="head" points="295,86 290.5,94 299.5,94"/>
+  <text x="560" y="218" text-anchor="middle" class="lbl">retry with backoff</text>
+</svg>
+</div>
+<figcaption>States live in <span class="path">ObdKit/…/ObdConnectionState.swift</span> as data; each maps 1:1 to a status string in Settings. <code>needsPermission</code> (not shown) is entered before scanning when Bluetooth access hasn't been granted.</figcaption>
+</figure>
+
+<h2 id="screens">Screens</h2>
+<div class="table-wrap"><table>
+<tr><th>Screen</th><th>File</th><th>What it shows</th></tr>
+<tr><td>Sessions</td><td><code>SessionsView</code></td><td>Root screen: Start button, link status bar, sessions list; session detail with highlights, map trace, laps, graphs, export, delete</td></tr>
+<tr><td>Live dashboard</td><td><code>DashboardPagerView</code> (+ <code>Dashboard/</code>)</td><td>Full-screen while recording. See <a href="dashboard.html">Dashboard system</a>.</td></tr>
+<tr><td>Video review</td><td><code>SessionVideoView</code>, <code>DualCameraSwapView</code></td><td>Stitched session video over the graphs with a synced playhead</td></tr>
+<tr><td>Settings</td><td><code>SettingsView</code></td><td>OBD adapter, RaceBox, car, shift lights, dashboards, units, G-force calibration, experimental tools</td></tr>
+<tr><td>G-force calibration</td><td><code>GCalibrationView</code></td><td>Half-height sheet, one step at a time</td></tr>
+<tr><td>RaceBox memory</td><td><code>RaceBoxMemoryView</code></td><td>What the device recorded on its own; download to Sessions; erase</td></tr>
+<tr><td>Health</td><td><code>HealthView</code></td><td>Slow OBD channels, device health, trouble-code badge</td></tr>
+<tr><td>Tracks</td><td><code>TracksView</code></td><td>The bundled track database on a map</td></tr>
+<tr><td>Debug tools</td><td><code>DebugView</code>, <code>DiagnosticsView</code>, <code>CanMonitorView</code>, <code>RaceBoxDebugView</code></td><td>OBD capability report, raw CAN monitor and discovery, every RaceBox signal with a self-test</td></tr>
+</table></div>
+<p>Reusable drawing lives in <span class="path">raceApp/Views/Gauges/</span> (G-meter, shift lights, track map, 3D chase-cam track view) and design tokens in <span class="path">raceApp/Theme/Theme.swift</span>.</p>
+
+<h2 id="concurrency">Concurrency rules</h2>
+<p>The app target is compiled with <code>SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor</code> (Swift 5 language mode, iOS 17 deployment target). Every type in <code>raceApp/</code> is main-actor isolated unless it says otherwise. The packages are <em>not</em> — they're explicit about isolation.</p>
+<ul>
+  <li><strong>Sources publish from any thread.</strong> Bluetooth and sensor callbacks never hop to the main actor to publish; <code>TelemetryBus</code> is lock-based for that reason.</li>
+  <li><strong>Long-lived mutable state that crosses threads is an actor</strong>: <code>SessionRecorder</code>, <code>SessionWriter</code>, <code>RaceBoxSession</code>, <code>RaceBoxMemoryImporter</code>.</li>
+  <li><strong><code>PhoneSensorSuite</code> uses locks</strong> because CoreMotion and CoreLocation deliver on different queues and calibration state is shared between them.</li>
+  <li><strong>UI reads snapshots</strong>, never live mutable state from another thread.</li>
+</ul>
+<div class="callout warn"><span class="label">Gotcha · back-deployed isolated deinit</span>
+<p>On an iOS 17 target with main-actor default isolation, a class's <code>deinit</code> is routed through a back-deployment shim that can abort in <code>malloc</code> when the object is released. It crashed every <code>DashboardStore</code> test. Short-lived <code>@MainActor</code> classes that don't need the main actor to tear down declare <code>nonisolated deinit {}</code> — you'll see it on <code>DashboardStore</code>, <code>DashboardEditController</code>, <code>ToolbarVisibility</code> and <code>DashboardLiveFeed</code>.</p></div>
+
+</main>
+</div>
+</body>
+</html>

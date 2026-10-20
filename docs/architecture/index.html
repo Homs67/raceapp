@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>raceApp Architecture</title>
+<link rel="stylesheet" href="assets/site.css">
+<script src="assets/site.js"></script>
+</head>
+<body>
+<header class="top">
+  <a href="index.html" class="brand">raceApp <span>architecture</span></a>
+  <span class="spacer"></span>
+  <span class="meta">Updated October 2026</span>
+  <button class="theme-toggle" id="theme-toggle">Auto</button>
+</header>
+<div class="layout">
+<nav id="nav" class="side"><a href="index.html">Overview</a></nav>
+<main>
+
+<h1>How raceApp works</h1>
+<p class="lede">An engineer's map of the app: where the data comes from, how it moves, where it ends up, and which code is responsible for each step. Read this page first, then follow the links into whichever part you're working on.</p>
+
+<div class="stats">
+  <div class="stat"><div class="n">3</div><div class="l">live data sources</div></div>
+  <div class="stat"><div class="n">4</div><div class="l">Swift packages</div></div>
+  <div class="stat"><div class="n">~20k</div><div class="l">lines of Swift</div></div>
+  <div class="stat"><div class="n">~230</div><div class="l">package tests, run on the Mac</div></div>
+</div>
+
+<h2 id="what">What the app is</h2>
+<p><strong>raceApp</strong> (product name <em>Live Data</em>) is an iOS app that records driving sessions — at the track or on the road — and shows a live, customisable dashboard while it does. It was built around one car, a 2022 Mazda MX-5 (ND2), and three kinds of hardware:</p>
+<ul>
+  <li><strong>The iPhone itself</strong> — GPS, a 100 Hz motion sensor, a barometer.</li>
+  <li><strong>An OBD-II Bluetooth adapter</strong> (ELM327 protocol, e.g. Veepeak OBDCheck BLE+) plugged under the dash — engine data by polling, or raw CAN-bus signals such as steering angle and brake pedal.</li>
+  <li><strong>A RaceBox</strong> (Micro, Mini or Mini S) — a 25 Hz GNSS receiver with its own accelerometer and gyro, far more precise than the phone.</li>
+</ul>
+<p>After a session you get laps, a delta to your best lap, graphs, video synced to the data, and a CSV export. A post-session <em>coaching engine</em> is the long-term product goal (see <span class="path">01-architecture.md</span>, <span class="path">02-coaching-engine.md</span>) — <strong>it is not built yet</strong>. Everything on this site describes code that exists today.</p>
+
+<h2 id="model">The 60-second mental model</h2>
+<p>Every piece of data in the app is the same shape: <strong>a channel name, a number and a timestamp</strong> — <code>(gps.speed, 31.4, 1842.07)</code>. Sources publish those samples onto one in-memory hub, the <strong>TelemetryBus</strong>. Everything else reads from it.</p>
+
+<figure class="diagram">
+<div class="frame">
+<svg class="dg" viewBox="0 0 880 460" role="img" aria-label="System map: sources feed drivers, which publish to the TelemetryBus; the bus feeds the live dashboard, session metrics, and the recorder, which writes the session store read by the Sessions UI.">
+  <text class="zone-label" x="20" y="26">SOURCES</text>
+  <text class="zone-label" x="230" y="26">DRIVERS</text>
+  <text class="zone-label" x="460" y="26">FAN-OUT</text>
+  <text class="zone-label" x="650" y="26">CONSUMERS</text>
+
+  <rect class="box hw" x="20" y="44" width="170" height="64" rx="9"/>
+  <text x="105" y="70" text-anchor="middle" class="h">iPhone</text>
+  <text x="105" y="90" text-anchor="middle" class="sm">GPS · IMU · barometer</text>
+  <rect class="box hw" x="20" y="150" width="170" height="64" rx="9"/>
+  <text x="105" y="176" text-anchor="middle" class="h">OBD-II adapter</text>
+  <text x="105" y="196" text-anchor="middle" class="sm">ELM327 · poll or CAN</text>
+  <rect class="box hw" x="20" y="256" width="170" height="64" rx="9"/>
+  <text x="105" y="282" text-anchor="middle" class="h">RaceBox</text>
+  <text x="105" y="302" text-anchor="middle" class="sm">25 Hz GNSS + IMU</text>
+
+  <rect class="box pkg" x="230" y="44" width="190" height="64" rx="9"/>
+  <text x="325" y="70" text-anchor="middle" class="h">PhoneSensorSuite</text>
+  <text x="325" y="90" text-anchor="middle" class="sm">SessionKit</text>
+  <rect class="box app" x="230" y="150" width="190" height="64" rx="9"/>
+  <text x="325" y="176" text-anchor="middle" class="h">ConnectionController</text>
+  <text x="325" y="196" text-anchor="middle" class="sm">ObdKit · BleKit</text>
+  <rect class="box app" x="230" y="256" width="190" height="64" rx="9"/>
+  <text x="325" y="282" text-anchor="middle" class="h">RaceBoxController</text>
+  <text x="325" y="302" text-anchor="middle" class="sm">RaceBoxKit · BleKit</text>
+
+  <rect class="box accent" x="460" y="44" width="150" height="276" rx="11"/>
+  <text x="535" y="170" text-anchor="middle" class="h">TelemetryBus</text>
+  <text x="535" y="192" text-anchor="middle" class="sm">latest value</text>
+  <text x="535" y="208" text-anchor="middle" class="sm">per channel</text>
+  <text x="535" y="230" text-anchor="middle" class="sm">+ full-rate tap</text>
+
+  <rect class="box ui" x="650" y="44" width="210" height="64" rx="9"/>
+  <text x="755" y="70" text-anchor="middle" class="h">Live dashboard</text>
+  <text x="755" y="90" text-anchor="middle" class="sm">snapshot → widgets @ 10 Hz</text>
+  <rect class="box app" x="650" y="150" width="210" height="64" rx="9"/>
+  <text x="755" y="176" text-anchor="middle" class="h">SessionMetrics</text>
+  <text x="755" y="196" text-anchor="middle" class="sm">laps · delta · drag @ 5 Hz</text>
+  <rect class="box app" x="650" y="256" width="210" height="64" rx="9"/>
+  <text x="755" y="282" text-anchor="middle" class="h">RecordingCoordinator</text>
+  <text x="755" y="302" text-anchor="middle" class="sm">→ SessionRecorder, full rate</text>
+
+  <rect class="box store" x="650" y="372" width="210" height="64" rx="9"/>
+  <text x="755" y="398" text-anchor="middle" class="h">SessionStore</text>
+  <text x="755" y="418" text-anchor="middle" class="sm">manifest.json + channels/*.f64</text>
+  <rect class="box ui" x="400" y="372" width="210" height="64" rx="9"/>
+  <text x="505" y="398" text-anchor="middle" class="h">Sessions &amp; export</text>
+  <text x="505" y="418" text-anchor="middle" class="sm">graphs · video · CSV</text>
+
+  <line class="edge" x1="190" y1="76" x2="222" y2="76"/><polygon class="head" points="230,76 222,71.5 222,80.5"/>
+  <line class="edge" x1="190" y1="182" x2="222" y2="182"/><polygon class="head" points="230,182 222,177.5 222,186.5"/>
+  <line class="edge" x1="190" y1="288" x2="222" y2="288"/><polygon class="head" points="230,288 222,283.5 222,292.5"/>
+  <line class="edge" x1="420" y1="76" x2="452" y2="76"/><polygon class="head" points="460,76 452,71.5 452,80.5"/>
+  <line class="edge" x1="420" y1="182" x2="452" y2="182"/><polygon class="head" points="460,182 452,177.5 452,186.5"/>
+  <line class="edge" x1="420" y1="288" x2="452" y2="288"/><polygon class="head" points="460,288 452,283.5 452,292.5"/>
+  <line class="edge" x1="610" y1="76" x2="642" y2="76"/><polygon class="head" points="650,76 642,71.5 642,80.5"/>
+  <line class="edge" x1="610" y1="182" x2="642" y2="182"/><polygon class="head" points="650,182 642,177.5 642,186.5"/>
+  <line class="edge strong" x1="610" y1="288" x2="642" y2="288"/><polygon class="head strong" points="650,288 642,283.5 642,292.5"/>
+  <line class="edge" x1="755" y1="150" x2="755" y2="116"/><polygon class="head" points="755,108 750.5,116 759.5,116"/>
+  <line class="edge strong" x1="755" y1="320" x2="755" y2="364"/><polygon class="head strong" points="755,372 750.5,364 759.5,364"/>
+  <line class="edge" x1="650" y1="404" x2="618" y2="404"/><polygon class="head" points="610,404 618,399.5 618,408.5"/>
+</svg>
+</div>
+<figcaption>The whole app on one page. Orange is the recording path — the one that must never drop a sample.</figcaption>
+</figure>
+<div class="legend">
+  <span><i style="border-color:var(--c-hw)"></i>Hardware</span>
+  <span><i style="border-color:var(--c-pkg)"></i>Swift package</span>
+  <span><i style="border-color:var(--c-app)"></i>App controller</span>
+  <span><i style="border-color:var(--c-ui)"></i>UI</span>
+  <span><i style="border-color:var(--c-store)"></i>Storage</span>
+</div>
+
+<p>Three consequences of this shape explain most of the code:</p>
+<ol>
+  <li><strong>Sources don't know who's listening.</strong> The OBD driver has no idea a dashboard or a recorder exists — it publishes <code>obd.rpm</code> and moves on. Adding a source never touches the UI.</li>
+  <li><strong>The live view and the recording are different reads.</strong> The dashboard reads the bus's <em>latest value</em> ten times a second and can afford to skip samples. The recorder taps <em>every</em> sample at full rate and writes it to disk.</li>
+  <li><strong>A session is just files.</strong> No database: a folder per session with a JSON manifest and one append-only binary file per channel. Anything that analyses a session — graphs, laps, export, video sync — reads those files back.</li>
+</ol>
+
+<h2 id="repo">Repository map</h2>
+<div class="table-wrap"><table>
+<tr><th>Path</th><th>What lives there</th></tr>
+<tr><td><code>raceApp/</code></td><td>The iOS app target: SwiftUI views, controllers that own hardware links, the dashboard system. Uses <em>synchronized file groups</em>, so any file you add under this folder is compiled automatically.</td></tr>
+<tr><td><code>raceApp/Model/</code></td><td>Controllers and app-level state: <code>AppModel</code> (composition root), <code>TelemetryBus</code>, <code>ConnectionController</code>, <code>RaceBoxController</code>, <code>RecordingCoordinator</code>, <code>SessionMetrics</code>, camera, tracks.</td></tr>
+<tr><td><code>raceApp/Dashboard/</code></td><td>The widget dashboard: model (grid, packing, persistence), live feed, views, and one file per widget family.</td></tr>
+<tr><td><code>raceApp/Views/</code></td><td>Every other screen: Sessions, Settings, video review, RaceBox and CAN debug tools, health, tracks.</td></tr>
+<tr><td><code>Packages/BleKit</code></td><td>Bluetooth LE serial transport shared by every device.</td></tr>
+<tr><td><code>Packages/ObdKit</code></td><td>ELM327 protocol, OBD-II PID decoding, polling, CAN monitoring.</td></tr>
+<tr><td><code>Packages/RaceBoxKit</code></td><td>RaceBox binary protocol, commands, memory download, simulator.</td></tr>
+<tr><td><code>Packages/SessionKit</code></td><td>Recording, storage, export, phone sensors, and all the maths: laps, delta, G-force calibration, drag runs.</td></tr>
+<tr><td><code>raceAppTests/</code></td><td>App-level unit tests (dashboard packing, geometry, persistence).</td></tr>
+<tr><td><code>Config/Info.plist</code></td><td>Permissions, background modes (<code>bluetooth-central</code>, <code>location</code>), bundled fonts.</td></tr>
+<tr><td><code>tools/</code></td><td><code>build_tracks.py</code> (track maps from OpenStreetMap), <code>racebox-probe.swift</code> (verify a RaceBox from a Mac).</td></tr>
+<tr><td><code>01-…11-*.md</code></td><td>Design and planning docs at the repo root: product vision, OBD/RaceBox integration plans, requirements, data inventory.</td></tr>
+<tr><td><code>docs/architecture/</code></td><td>This site.</td></tr>
+</table></div>
+
+<h2 id="tour">Where to go next</h2>
+<div class="cards">
+  <a class="card" href="hardware.html"><div class="k">How it works</div><h3>Data sources</h3><p>The phone, the OBD adapter, the CAN bus and the RaceBox — what each provides, at what rate, and which one wins when two overlap.</p></a>
+  <a class="card" href="pipeline.html"><div class="k">How it works</div><h3>Telemetry pipeline</h3><p>From a published sample to bytes on disk: the bus, the recorder, the file format, crash recovery and export.</p></a>
+  <a class="card" href="motion.html"><div class="k">How it works</div><h3>Motion, laps &amp; G-force</h3><p>Turning raw sensors into car-frame G, laps, live delta and acceleration times.</p></a>
+  <a class="card" href="dashboard.html"><div class="k">How it works</div><h3>Dashboard system</h3><p>The widget grid, how a widget gets its data, edit mode, and a step-by-step for adding a widget.</p></a>
+  <a class="card" href="packages.html"><div class="k">Code</div><h3>Swift packages</h3><p>What each package owns, how they depend on each other, and a file-by-file index.</p></a>
+  <a class="card" href="app.html"><div class="k">Code</div><h3>App layer</h3><p>The composition root, the controllers, the screens, and the concurrency rules.</p></a>
+  <a class="card" href="workflow.html"><div class="k">Code</div><h3>Dev workflow</h3><p>Building, testing, demo mode with no hardware, launch arguments, and the gotchas that cost us days.</p></a>
+  <a class="card" href="status.html"><div class="k">Start here</div><h3>Status &amp; known issues</h3><p>What's verified on a real car, what isn't, and what's planned.</p></a>
+</div>
+
+<h2 id="day-one" data-short="Day-one reading">Suggested day-one reading</h2>
+<ol class="steps">
+  <li>This page, then <a href="hardware.html">Data sources</a> and <a href="pipeline.html">Telemetry pipeline</a>. Together they cover the core idea.</li>
+  <li>Open <span class="path">raceApp/Model/AppModel.swift</span>. It is short and wires every component together — it's the best single file for seeing the shape of the app.</li>
+  <li>Read <span class="path">raceApp/Model/TelemetryBus.swift</span> (90 lines) and <span class="path">Packages/SessionKit/Sources/SessionKit/SessionRecorder.swift</span>.</li>
+  <li>Run the app in the Simulator in demo mode — no car or hardware needed. See <a href="workflow.html#demo">Dev workflow → Demo mode</a>.</li>
+  <li>Run <code>swift test</code> inside <span class="path">Packages/SessionKit</span>. The tests are the most precise description of the maths.</li>
+</ol>
+
+</main>
+</div>
+</body>
+</html>

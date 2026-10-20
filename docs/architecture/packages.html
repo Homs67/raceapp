@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Swift packages · raceApp Architecture</title>
+<link rel="stylesheet" href="assets/site.css">
+<script src="assets/site.js"></script>
+</head>
+<body>
+<header class="top">
+  <a href="index.html" class="brand">raceApp <span>architecture</span></a>
+  <span class="spacer"></span>
+  <span class="meta">Updated October 2026</span>
+  <button class="theme-toggle" id="theme-toggle">Auto</button>
+</header>
+<div class="layout">
+<nav id="nav" class="side"><a href="index.html">Overview</a></nav>
+<main>
+
+<h1>Swift packages</h1>
+<p class="lede">Four local Swift packages hold every piece of logic that doesn't need a screen. They build and test on the Mac with <code>swift test</code> — no Simulator, no device, no car — which is why the maths in them is trustworthy.</p>
+
+<h2 id="why">Why packages</h2>
+<div class="callout rule"><span class="label">Rule · what goes where</span>
+<p><strong>In a package:</strong> protocols, decoders, file formats, algorithms — anything you can describe with inputs and outputs. Prefer pure functions and small stateful types fed one sample at a time.<br>
+<strong>In the app:</strong> SwiftUI views, and the controllers that own a live connection or iOS framework object and wire things to the bus.</p></div>
+<p>The practical payoff: a lap timer, a G-force calibrator or a packet parser can be replayed against a recorded real drive in a unit test. Several bugs on this project were found exactly that way, and several algorithm parameters were chosen by replaying a real drive and scoring the result.</p>
+
+<h2 id="graph">Dependency graph</h2>
+<figure class="diagram">
+<div class="frame">
+<svg class="dg" viewBox="0 0 760 300" role="img" aria-label="Dependency graph. The raceApp target depends on SessionKit, ObdKit and RaceBoxKit (and BleKit). SessionKit depends on ObdKit. ObdKit and RaceBoxKit both depend on BleKit.">
+  <rect class="box app" x="280" y="20" width="200" height="60" rx="10"/>
+  <text x="380" y="46" text-anchor="middle" class="h">raceApp (app target)</text>
+  <text x="380" y="65" text-anchor="middle" class="sm">depends on all four</text>
+
+  <rect class="box pkg" x="40" y="120" width="200" height="60" rx="10"/>
+  <text x="140" y="146" text-anchor="middle" class="h">SessionKit</text>
+  <text x="140" y="165" text-anchor="middle" class="sm">recording · maths · sensors</text>
+  <rect class="box pkg" x="280" y="120" width="200" height="60" rx="10"/>
+  <text x="380" y="146" text-anchor="middle" class="h">ObdKit</text>
+  <text x="380" y="165" text-anchor="middle" class="sm">ELM327 · PIDs · CAN</text>
+  <rect class="box pkg" x="520" y="120" width="200" height="60" rx="10"/>
+  <text x="620" y="146" text-anchor="middle" class="h">RaceBoxKit</text>
+  <text x="620" y="165" text-anchor="middle" class="sm">UBX protocol · memory</text>
+
+  <rect class="box pkg" x="280" y="220" width="200" height="60" rx="10"/>
+  <text x="380" y="246" text-anchor="middle" class="h">BleKit</text>
+  <text x="380" y="265" text-anchor="middle" class="sm">BLE serial transport</text>
+
+  <line class="edge" x1="330" y1="80" x2="147.8" y2="118.4"/><polygon class="head" points="140,120 148.7,122.75 146.9,113.95"/>
+  <line class="edge" x1="380" y1="80" x2="380" y2="112"/><polygon class="head" points="380,120 375.5,112 384.5,112"/>
+  <line class="edge" x1="430" y1="80" x2="612.2" y2="118.4"/><polygon class="head" points="620,120 611.3,122.75 613.1,113.95"/>
+  <line class="edge" x1="240" y1="150" x2="272" y2="150"/><polygon class="head" points="280,150 272,145.5 272,154.5"/>
+  <line class="edge" x1="380" y1="180" x2="380" y2="212"/><polygon class="head" points="380,220 375.5,212 384.5,212"/>
+  <line class="edge" x1="620" y1="180" x2="487.2" y2="246.4"/><polygon class="head" points="480,250 489.2,250.4 485.1,242.4"/>
+</svg>
+</div>
+<figcaption>Arrows point at the dependency. SessionKit depends on ObdKit only so that <code>ChannelId.obd(ObdChannel)</code> can name OBD channels in a type-safe way.</figcaption>
+</figure>
+
+<div class="table-wrap"><table>
+<tr><th>Package</th><th>Owns</th><th>Size</th><th>Tests</th></tr>
+<tr><td><a href="#blekit"><strong>BleKit</strong></a></td><td>Bluetooth LE serial links; a transport protocol shared by every device</td><td>4 files · ~700 lines</td><td>6</td></tr>
+<tr><td><a href="#obdkit"><strong>ObdKit</strong></a></td><td>ELM327 session, PID polling and decoding, CAN monitoring and signal discovery, simulated adapter</td><td>11 files · ~1,700 lines</td><td>63</td></tr>
+<tr><td><a href="#raceboxkit"><strong>RaceBoxKit</strong></a></td><td>RaceBox packets, data messages, commands, memory download, self-test, simulated device</td><td>7 files · ~1,500 lines</td><td>55</td></tr>
+<tr><td><a href="#sessionkit"><strong>SessionKit</strong></a></td><td>Recording and storage, export, phone sensors, and all derived maths</td><td>23 files · ~3,400 lines</td><td>107</td></tr>
+</table></div>
+
+<h2 id="blekit">BleKit</h2>
+<p>Bytes in, bytes out. Everything above it is protocol-specific; BleKit knows nothing about OBD or RaceBox beyond a <em>profile</em> describing how to find and talk to a class of device.</p>
+<div class="table-wrap"><table>
+<tr><th>File</th><th>Responsibility</th></tr>
+<tr><td><code>BleTransport.swift</code></td><td>The transport protocol: connect, write, and an <code>incoming</code> byte stream. Real hardware and fakes both conform.</td></tr>
+<tr><td><code>BleDeviceProfile.swift</code></td><td>Service/characteristic UUIDs and name filters per device class (<code>.elm327</code>, <code>.raceBox</code>), plus the CoreBluetooth restore identifier.</td></tr>
+<tr><td><code>CoreBluetoothTransport.swift</code></td><td>The real implementation: one <code>CBCentralManager</code> per profile, scanning, connection, state restoration, write-with/without-response.</td></tr>
+<tr><td><code>ReplayTransport.swift</code></td><td>Scripted fake: canned responses delivered in small chunks, exercising reassembly exactly like a real BLE link. Used by tests.</td></tr>
+</table></div>
+
+<h2 id="obdkit">ObdKit</h2>
+<div class="table-wrap"><table>
+<tr><th>File</th><th>Responsibility</th></tr>
+<tr><td><code>Elm327Session.swift</code></td><td>The ELM327 command/response conversation: <code>AT</code> init, prompt detection, response accumulation across BLE chunks.</td></tr>
+<tr><td><code>ObdChannel.swift</code></td><td>The PIDs we know: mode-01 PID number, unit, and the default fast and slow loops.</td></tr>
+<tr><td><code>PidDecoder.swift</code></td><td>Pure SAE J1979 formulas: response bytes → engineering value.</td></tr>
+<tr><td><code>PidPoller.swift</code></td><td>Fast/slow loop scheduler. Drops channels the ECU answers <code>NO DATA</code> for; never dies on one bad response.</td></tr>
+<tr><td><code>ObdConnectionState.swift</code></td><td>The connection state machine as data — every state maps 1:1 to a UI status string.</td></tr>
+<tr><td><code>CanSignal.swift</code></td><td>Raw CAN frame parsing and per-car signal maps (<code>CanSignalMap.mazdaND</code>): frame ID + decode closure.</td></tr>
+<tr><td><code>CanMonitorSession.swift</code></td><td>ELM327 monitor mode: diagnostic capture, the live stream used while recording (round-robin over frame IDs, OBD interlude), and discovery runs.</td></tr>
+<tr><td><code>CanCorrelator.swift</code></td><td>Signal discovery: correlates every byte of every broadcast frame against OBD ground truth to propose decoders.</td></tr>
+<tr><td><code>SimulatedAdapterTransport.swift</code></td><td>A fake Veepeak that speaks enough ELM327 to drive the whole real pipeline. Powers "Try with demo data".</td></tr>
+<tr><td><code>DemoDrive.swift</code></td><td>What a demo source must supply (RPM, speed, throttle) and an open-road drive model.</td></tr>
+<tr><td><code>BleKitCompat.swift</code></td><td>Type aliases kept after the transport moved to BleKit.</td></tr>
+</table></div>
+
+<h2 id="raceboxkit">RaceBoxKit</h2>
+<div class="table-wrap"><table>
+<tr><th>File</th><th>Responsibility</th></tr>
+<tr><td><code>RaceBoxPacket.swift</code></td><td>The UBX frame: <code>B5 62 · class · id · length · payload · checksum</code>. A streaming parser that reassembles packets split across notifications.</td></tr>
+<tr><td><code>RaceBoxDataMessage.swift</code></td><td>Decodes the 80-byte data message: position, speed, heading, accuracies, fix flags, G-force, rotation rate, power, GNSS time.</td></tr>
+<tr><td><code>RaceBoxCommand.swift</code></td><td>Typed commands and replies: recording status/config/state, memory download, erase, unlock.</td></tr>
+<tr><td><code>RaceBoxSession.swift</code></td><td>Actor that owns a connected device: routes packets to the live stream, the history (memory download) stream, or a waiting command; tracks link health.</td></tr>
+<tr><td><code>RaceBoxDevice.swift</code></td><td>Model detection (Mini / Mini S / Micro), capabilities, firmware version, Device Info.</td></tr>
+<tr><td><code>RaceBoxSelfTest.swift</code></td><td>"Is it working?" as a list of pass/fail checks for the debug screen.</td></tr>
+<tr><td><code>RaceBoxSimulator.swift</code></td><td>Encoder (the inverse of the decoder) and a simulated device: live data, command replies, and a synthetic memory dump and erase.</td></tr>
+</table></div>
+
+<h2 id="sessionkit">SessionKit</h2>
+<p>The biggest package, in three groups.</p>
+<h4>Recording &amp; storage</h4>
+<div class="table-wrap"><table>
+<tr><th>File</th><th>Responsibility</th></tr>
+<tr><td><code>ChannelId.swift</code></td><td>Every channel name, namespaced.</td></tr>
+<tr><td><code>SessionRecorder.swift</code></td><td>Actor that runs one recording: writer, highlights, OBD gaps, motion-source segments, auto-stop, manifest finalisation.</td></tr>
+<tr><td><code>ChannelWriter.swift</code></td><td><code>SessionWriter</code> actor: append-only 16-byte-record channel files with buffered flushing. Also <code>ChannelReader</code>.</td></tr>
+<tr><td><code>SessionManifest.swift</code></td><td>Per-session metadata model (<code>manifest.json</code>).</td></tr>
+<tr><td><code>SessionStore.swift</code></td><td>Directory-per-session store: create, list, delete, recover interrupted sessions.</td></tr>
+<tr><td><code>HighlightsAccumulator.swift</code></td><td>Streaming session highlights; also replays files during recovery.</td></tr>
+<tr><td><code>AutoStopMonitor.swift</code></td><td>The forgotten-stop rule.</td></tr>
+<tr><td><code>SessionExporter.swift</code></td><td>CSV, JSON sidecar and raw dump.</td></tr>
+<tr><td><code>ChannelStats.swift</code></td><td>Measured rate, duty cycle and interval stats per channel.</td></tr>
+<tr><td><code>VideoTimeline.swift</code></td><td>Video clip model and syncing clips to the session timeline.</td></tr>
+<tr><td><code>RecordedSession.swift</code></td><td>Early placeholder — superseded by <code>SessionManifest</code>.</td></tr>
+</table></div>
+<h4>Sensors</h4>
+<div class="table-wrap"><table>
+<tr><th>File</th><th>Responsibility</th></tr>
+<tr><td><code>PhoneSensorSuite.swift</code></td><td>Phone GPS, motion, barometer, device health; phone-side car-frame G; defers to an external logger.</td></tr>
+<tr><td><code>CarFrameCalibrator.swift</code></td><td>Learns a sensor's mount orientation: level from gravity, align forward against GPS acceleration. Also <code>Vector3</code>.</td></tr>
+<tr><td><code>LoggerFrameTracker.swift</code></td><td>Car-frame G from a logger's raw accelerometer (gravity split, manoeuvre-gated filter); persistable.</td></tr>
+<tr><td><code>LoggerPower.swift</code></td><td>Interprets a logger's power byte without inventing a battery percentage.</td></tr>
+<tr><td><code>GForceValidator.swift</code></td><td>Post-session check that recorded G agrees with GPS.</td></tr>
+</table></div>
+<h4>Driving maths</h4>
+<div class="table-wrap"><table>
+<tr><th>File</th><th>Responsibility</th></tr>
+<tr><td><code>LapTimer.swift</code></td><td>Start/finish crossing detection and lap times.</td></tr>
+<tr><td><code>TrackProgress.swift</code></td><td>Projects a GPS fix onto a track centreline: distance along the lap.</td></tr>
+<tr><td><code>LapDelta.swift</code></td><td>Live delta to the session's best lap.</td></tr>
+<tr><td><code>DragMeter.swift</code></td><td>0–60, 0–100 mph, quarter mile and trap speed.</td></tr>
+<tr><td><code>GearEstimator.swift</code></td><td>Gear from the speed/RPM ratio against the car's gearing.</td></tr>
+<tr><td><code>TrackDriveSimulator.swift</code></td><td>Drives a virtual car round a track centreline (demo mode, tests).</td></tr>
+<tr><td><code>PacedLapSchedule.swift</code></td><td>Demo laps at varying pace so the delta has something to show.</td></tr>
+</table></div>
+
+</main>
+</div>
+</body>
+</html>

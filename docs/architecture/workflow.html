@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Dev workflow · raceApp Architecture</title>
+<link rel="stylesheet" href="assets/site.css">
+<script src="assets/site.js"></script>
+</head>
+<body>
+<header class="top">
+  <a href="index.html" class="brand">raceApp <span>architecture</span></a>
+  <span class="spacer"></span>
+  <span class="meta">Updated October 2026</span>
+  <button class="theme-toggle" id="theme-toggle">Auto</button>
+</header>
+<div class="layout">
+<nav id="nav" class="side"><a href="index.html">Overview</a></nav>
+<main>
+
+<h1>Dev workflow</h1>
+<p class="lede">How to build, test and run the app — mostly without a car, an adapter or a RaceBox in reach — and the conventions and gotchas worth knowing before your first change.</p>
+
+<h2 id="build">Build &amp; test</h2>
+<p>Xcode 26, iOS 17 deployment target. Bundle id <code>com.goodproductslab.raceApp</code>.</p>
+<h4>Packages — fast, on the Mac, no Simulator</h4>
+<pre><code>cd Packages/SessionKit &amp;&amp; swift test     # ~107 tests
+cd Packages/ObdKit     &amp;&amp; swift test     # ~63
+cd Packages/RaceBoxKit &amp;&amp; swift test     # ~55
+cd Packages/BleKit     &amp;&amp; swift test     # ~6</code></pre>
+<h4>App</h4>
+<pre><code>xcodebuild -project raceApp.xcodeproj -scheme raceApp \
+  -destination 'platform=iOS Simulator,name=iPhone 17' build
+
+xcodebuild test -project raceApp.xcodeproj -scheme raceApp \
+  -destination 'platform=iOS Simulator,name=iPhone 17' -only-testing:raceAppTests</code></pre>
+<div class="callout note"><span class="label">Note</span>
+<p>The app target uses <strong>synchronized file groups</strong>: anything you add under <code>raceApp/</code> is compiled (or bundled) automatically — no project-file edits. Because resources are flattened, bundled JSON and fonts are loaded by bare file name.</p></div>
+
+<h2 id="demo">Demo mode</h2>
+<p>Every hardware source has a fake that drives the <em>real</em> pipeline — sessions, decoders, recorder, dashboard — so almost everything can be worked on in the Simulator.</p>
+<div class="table-wrap"><table>
+<tr><th>Fake</th><th>Stands in for</th><th>Where</th></tr>
+<tr><td><code>SimulatedAdapterTransport</code></td><td>An ELM327 adapter answering OBD requests from a drive model</td><td>ObdKit</td></tr>
+<tr><td><code>TrackDemoDrive</code> + <code>DemoTelemetryFeed</code></td><td>Phone GPS/IMU following a real track centreline at varying pace, consistent with the fake adapter's speed</td><td>App</td></tr>
+<tr><td><code>RaceBoxSimulatedTransport</code></td><td>A RaceBox: live 25 Hz data, command replies, a synthetic memory dump (two drives, one ending with a marker and one without) and erase</td><td>RaceBoxKit</td></tr>
+<tr><td><code>ReplayTransport</code></td><td>Any BLE device, from scripted responses delivered in small chunks</td><td>BleKit (tests)</td></tr>
+<tr><td><code>DebugVideoFactory</code></td><td>Dashcam clips for the latest session, to test video sync</td><td>App</td></tr>
+</table></div>
+<pre><code>xcrun simctl privacy "iPhone 17" grant location-always com.goodproductslab.raceApp
+xcrun simctl install "iPhone 17" path/to/raceApp.app        # reinstall after every build
+xcrun simctl launch  "iPhone 17" com.goodproductslab.raceApp -demo -demo-track big-willow -record</code></pre>
+
+<h3 id="launch-args" data-short="Launch arguments">Launch arguments (DEBUG only)</h3>
+<div class="table-wrap"><table>
+<tr><th>Argument</th><th>Effect</th></tr>
+<tr><td><code>-demo</code></td><td>Connect the simulated OBD adapter and start the demo drive</td></tr>
+<tr><td><code>-demo-track &lt;id&gt;</code></td><td>Drive a specific track: <code>laguna-seca</code> (default), <code>big-willow</code>, <code>streets-of-willow</code></td></tr>
+<tr><td><code>-record</code></td><td>Start a recording two seconds after launch (with <code>-demo</code> or <code>-racebox-demo</code>)</td></tr>
+<tr><td><code>-racebox-demo</code></td><td>Connect the simulated RaceBox</td></tr>
+<tr><td><code>-shift-demo</code></td><td>Enable shift lights at 5,500 rpm</td></tr>
+<tr><td><code>-dashboard &lt;n&gt;</code></td><td>Open the recording dashboard on page <em>n</em></td></tr>
+<tr><td><code>-dashboard-toolbar</code></td><td>Keep the recording toolbar visible (for screenshots)</td></tr>
+<tr><td><code>-dashboard-edit</code></td><td>Open the selected dashboard in edit mode when Settings → Dashboards appears</td></tr>
+<tr><td><code>-tab-settings</code>, <code>-tab-connection</code></td><td>Open Settings at launch</td></tr>
+<tr><td><code>-tab-debug</code>, <code>-tab-health</code>, <code>-tab-tracks</code>, <code>-open-diagnostics</code></td><td>Open the Debug sheet, optionally at a specific tool</td></tr>
+<tr><td><code>-track-detail &lt;id&gt;</code></td><td>Open a track's map</td></tr>
+<tr><td><code>-open-latest-session</code>, <code>-open-latest-graph</code>, <code>-open-latest-video</code></td><td>Jump into the newest session</td></tr>
+<tr><td><code>-video-autoplay</code>, <code>-make-test-videos</code></td><td>Video review helpers</td></tr>
+</table></div>
+
+<div class="callout warn"><span class="label">What the Simulator can't do</span>
+<ul>
+  <li><strong>No CoreMotion device motion</strong> — phone car-frame G, and anything that depends on handling the phone, can only be checked on a device.</li>
+  <li><strong>No Bluetooth</strong> — real adapters and RaceBoxes need a device. <span class="path">tools/racebox-probe.swift</span> builds a small macOS app that talks to a real RaceBox from a Mac.</li>
+  <li><code>simctl io screenshot</code> captures the <em>unrotated</em> framebuffer — rotate the image yourself for landscape.</li>
+</ul></div>
+
+<h2 id="tools">Tools</h2>
+<div class="table-wrap"><table>
+<tr><th>Tool</th><th>Purpose</th></tr>
+<tr><td><code>tools/build_tracks.py</code></td><td>Builds track JSON from OpenStreetMap (ODbL) geometry: centreline, start/finish gate, corners.</td></tr>
+<tr><td><code>tools/racebox-probe.swift</code></td><td>Verifies the RaceBox protocol against real hardware from a Mac.</td></tr>
+<tr><td>Settings → Experimental → CAN Monitor</td><td>Raw CAN capture and signal discovery on the car.</td></tr>
+<tr><td>Settings → RaceBox → Signals</td><td>Every decoded RaceBox field with raw values, link health and a pass/fail self-test.</td></tr>
+<tr><td>Debug → Diagnostics</td><td>OBD capability report for a car: supported PIDs, live values, effective data rate. Shareable as JSON.</td></tr>
+<tr><td>Session export</td><td>CSV + JSON sidecar + raw dump. The sidecar's rate stats and G-force verdict are the quickest health check on a real drive.</td></tr>
+</table></div>
+
+<h2 id="conventions">Conventions</h2>
+<ul>
+  <li><strong>Never a fake zero.</strong> Stale or missing data is <code>nil</code> and renders as <code>—</code>. Read the bus through <code>fresh(…, maxAge:)</code>.</li>
+  <li><strong>Recorded truth stays honest about its source.</strong> Mirrors for display go through <code>publishLive</code>; one owner per canonical channel at a time.</li>
+  <li><strong>Monotonic time</strong> for every sample; wall-clock only where it's explicitly needed.</li>
+  <li><strong>Logic in packages, wiring in <code>AppModel</code>.</strong> Prefer pure types fed one sample at a time.</li>
+  <li><strong>Verify numeric code against real data.</strong> Replay a real drive and score the result with an independent sensor before trusting a new parameter.</li>
+  <li><strong>Comments explain why.</strong> The codebase leans on comments that record the decision and the evidence ("a steady 0.8 g corner decayed to 0.07 g…"). Keep that up.</li>
+</ul>
+
+<h2 id="gotchas">Gotchas that cost real time</h2>
+<div class="table-wrap"><table>
+<tr><th>Symptom</th><th>Cause</th><th>Fix / rule</th></tr>
+<tr><td>Tests crash in <code>deinit</code> with a malloc error</td><td>Back-deployed isolated deinit on iOS 17 with main-actor default isolation</td><td><code>nonisolated deinit {}</code> on short-lived main-actor classes</td></tr>
+<tr><td>Bluetooth stops working until relaunch</td><td>Two CoreBluetooth centrals sharing a restore identifier</td><td>One <code>BleDeviceProfile</code> per device, distinct identifiers</td></tr>
+<tr><td>RaceBox Device Info has odd trailing characters</td><td>The Micro NUL-pads its strings; whitespace trimming doesn't remove NUL</td><td>Strip NULs explicitly</td></tr>
+<tr><td>Font renders as San Francisco</td><td><code>Font.custom</code> falls back silently on a wrong name</td><td>Use <code>Font.sofia</code>; <code>SofiaFace.audit()</code> asserts at launch</td></tr>
+<tr><td>Numbers jitter as they change</td><td>Proportional digits</td><td><code>.sofiaNumeral</code> / <code>.monospacedDigit()</code></td></tr>
+<tr><td>Simulator runs old code</td><td>App not reinstalled after building</td><td><code>simctl install</code> before every <code>simctl launch</code></td></tr>
+<tr><td>First records of a RaceBox download missing</td><td>Subscribed to history events after starting the download</td><td>Subscribe first</td></tr>
+<tr><td>Dashboard pages offset by the safe area</td><td><code>TabView</code>'s UIKit page host insets its pages</td><td>Paging <code>ScrollView</code>; sizes passed explicitly</td></tr>
+</table></div>
+
+<h2 id="docs">Other documentation</h2>
+<p>Design and planning documents live at the repository root:</p>
+<div class="table-wrap"><table>
+<tr><th>Doc</th><th>About</th></tr>
+<tr><td><code>01-architecture.md</code></td><td>Product vision and long-term system design, including the planned coaching engine</td></tr>
+<tr><td><code>02-coaching-engine.md</code></td><td>The post-session coaching design (not built yet)</td></tr>
+<tr><td><code>03-obd2-integration.md</code></td><td>OBD-II PIDs, polling strategy, adapter behaviour</td></tr>
+<tr><td><code>04-data-capabilities.md</code>, <code>11-data-inventory.md</code></td><td>What data each source can provide</td></tr>
+<tr><td><code>05-design-brief.md</code>, <code>09-design-notes.md</code></td><td>Visual design</td></tr>
+<tr><td><code>06-connection-flow.md</code></td><td>The OBD connection state machine in detail</td></tr>
+<tr><td><code>07-requirements-v1.md</code></td><td>Requirements — the <code>R1.5</code>, <code>R2.5</code>… references in code comments point here</td></tr>
+<tr><td><code>08-build-plan.md</code></td><td>Build phases</td></tr>
+<tr><td><code>10-racebox-integration.md</code></td><td>RaceBox protocol transcription and integration plan</td></tr>
+</table></div>
+<p>This site is plain HTML in <code>docs/architecture/</code>: open <code>index.html</code> directly, or serve the folder with <code>python3 -m http.server --directory docs/architecture</code>. To add a page, copy an existing one and add a line to the list at the top of <code>assets/site.js</code>.</p>
+
+</main>
+</div>
+</body>
+</html>

@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Dashboard system · raceApp Architecture</title>
+<link rel="stylesheet" href="assets/site.css">
+<script src="assets/site.js"></script>
+</head>
+<body>
+<header class="top">
+  <a href="index.html" class="brand">raceApp <span>architecture</span></a>
+  <span class="spacer"></span>
+  <span class="meta">Updated October 2026</span>
+  <button class="theme-toggle" id="theme-toggle">Auto</button>
+</header>
+<div class="layout">
+<nav id="nav" class="side"><a href="index.html">Overview</a></nav>
+<main>
+
+<h1>Dashboard system</h1>
+<p class="lede">While recording, the screen is a grid of widgets the driver arranges themselves — several dashboards, swiped between. Everything for it lives under <span class="path">raceApp/Dashboard/</span>.</p>
+
+<h2 id="model">The model</h2>
+<div class="table-wrap"><table>
+<tr><th>Type</th><th>What it is</th></tr>
+<tr><td><code>Dashboard</code></td><td>A name and an <em>ordered</em> list of placements. Order is reading order; it is not a set of coordinates.</td></tr>
+<tr><td><code>WidgetPlacement</code></td><td><code>id</code>, <code>kind</code>, <code>size</code>, and a <code>settings: [String: String]</code> dictionary for per-widget options (e.g. which acceleration run to show).</td></tr>
+<tr><td><code>WidgetKind</code></td><td>The library: every widget with its title, category, supported sizes, default size, and options. Two special kinds: <code>.empty</code> (a hole left by removing a widget) and <code>.unknown</code> (a kind a newer build saved, dropped on load).</td></tr>
+<tr><td><code>WidgetSize</code></td><td><strong>Small</strong> = 1 cell · <strong>Medium</strong> = 2 cells side by side · <strong>Large</strong> = 2 × 2.</td></tr>
+<tr><td><code>GridSpec</code></td><td>2 rows × 4 columns in landscape; transposed to 4 × 2 in portrait. The same placement list lays out in both.</td></tr>
+</table></div>
+<p>Storing order instead of positions is what makes portrait/landscape reflow, drag-to-reorder and "does this fit?" all the same function.</p>
+
+<h2 id="render">From bus to pixels</h2>
+<figure class="diagram">
+<div class="frame">
+<svg class="dg" viewBox="0 0 900 230" role="img" aria-label="Render path: a 10 Hz TimelineView calls DashboardLiveFeed.tick, which builds one LiveSnapshot from the bus snapshot and session metrics; DashboardGridView computes geometry and packs placements into frames; each widget gets a WidgetChrome with a WidgetContext and is dispatched by the WidgetView switch.">
+  <rect class="box ui" x="10" y="40" width="130" height="62" rx="9"/>
+  <text x="75" y="67" text-anchor="middle" class="h">TimelineView</text>
+  <text x="75" y="86" text-anchor="middle" class="sm">every 0.1 s</text>
+  <rect class="box app" x="170" y="40" width="140" height="62" rx="9"/>
+  <text x="240" y="67" text-anchor="middle" class="h">DashboardLiveFeed</text>
+  <text x="240" y="86" text-anchor="middle" class="sm">.tick(model)</text>
+  <rect class="box accent" x="340" y="40" width="120" height="62" rx="9"/>
+  <text x="400" y="67" text-anchor="middle" class="h">LiveSnapshot</text>
+  <text x="400" y="86" text-anchor="middle" class="sm">one value / tick</text>
+  <rect class="box ui" x="490" y="40" width="140" height="62" rx="9"/>
+  <text x="560" y="67" text-anchor="middle" class="h">DashboardGridView</text>
+  <text x="560" y="86" text-anchor="middle" class="sm">geometry · pack</text>
+  <rect class="box ui" x="660" y="40" width="110" height="62" rx="9"/>
+  <text x="715" y="67" text-anchor="middle" class="h">WidgetChrome</text>
+  <text x="715" y="86" text-anchor="middle" class="sm">title · padding</text>
+  <rect class="box ui" x="800" y="40" width="90" height="62" rx="9"/>
+  <text x="845" y="67" text-anchor="middle" class="h">Widget</text>
+  <text x="845" y="86" text-anchor="middle" class="sm">via switch</text>
+
+  <line class="edge" x1="140" y1="71" x2="162" y2="71"/><polygon class="head" points="170,71 162,66.5 162,75.5"/>
+  <line class="edge" x1="310" y1="71" x2="332" y2="71"/><polygon class="head" points="340,71 332,66.5 332,75.5"/>
+  <line class="edge" x1="460" y1="71" x2="482" y2="71"/><polygon class="head" points="490,71 482,66.5 482,75.5"/>
+  <line class="edge" x1="630" y1="71" x2="652" y2="71"/><polygon class="head" points="660,71 652,66.5 652,75.5"/>
+  <line class="edge" x1="770" y1="71" x2="792" y2="71"/><polygon class="head" points="800,71 792,66.5 792,75.5"/>
+
+  <rect class="box" x="120" y="150" width="240" height="60" rx="9"/>
+  <text x="240" y="175" text-anchor="middle" class="h">bus.snapshot() · SessionMetrics</text>
+  <text x="240" y="194" text-anchor="middle" class="sm">RaceBox · connection · recording state</text>
+  <line class="edge" x1="240" y1="150" x2="240" y2="110"/><polygon class="head" points="240,102 235.5,110 244.5,110"/>
+</svg>
+</div>
+<figcaption>One snapshot per tick. No widget reads the bus or a controller directly — a 10 Hz redraw costs one snapshot, not one per widget.</figcaption>
+</figure>
+<ul>
+  <li><strong><code>DashboardLiveFeed</code></strong> is the only place the dashboard reads the bus. It applies the <code>fresh(…)</code> rule, picks sources (e.g. no phone-axis G fallback while a RaceBox owns motion), and keeps accumulators such as peak G and the G trail, which reset when a new session starts.</li>
+  <li><strong><code>LiveSnapshot</code></strong> is a plain <code>Equatable</code> value. <code>LiveSnapshot.demo(track:)</code> is a fixed, plausible snapshot used by the widget gallery, edit mode and Settings preview.</li>
+  <li><strong><code>WidgetContext</code></strong> is what a widget receives: its placement, content size, orientation, the snapshot, units, edit state and track.</li>
+  <li><strong><code>WidgetView</code></strong> is an exhaustive <code>switch</code> over <code>WidgetKind</code> — adding a kind without a view is a compile error.</li>
+  <li><strong>Exception:</strong> <code>CameraWidget</code> reads <code>AppModel</code> directly, because camera preview layers aren't snapshot data.</li>
+</ul>
+
+<h2 id="layout">Layout</h2>
+<h3>Packing</h3>
+<p><code>GridPacker</code> is pure and unit-tested:</p>
+<ol>
+  <li><strong>Pack</strong> — walk the placements in order and put each at the first free position, row by row (like iOS Home Screen). Anything that doesn't fit lands in <code>overflow</code>.</li>
+  <li><strong>Stretch</strong> (view mode only) — widgets in a partly filled row share its width. Three smalls in a row of four become thirds. Edit mode shows the strict grid so empty cells are real tap targets.</li>
+  <li><strong><code>fits</code></strong> checks <em>both</em> orientations. A layout's area being ≤ 8 cells does not mean it fits — every edit is validated in landscape and portrait.</li>
+</ol>
+<h3>Geometry</h3>
+<p><code>GridGeometry</code> turns unit rectangles into points:</p>
+<ul>
+  <li><strong>Edge to edge.</strong> The grid fills the screen. Only the sensor housing is kept clear: the top in portrait, and only the side with the Dynamic Island in landscape (iOS reports the same inset on both sides; the interface orientation says which one actually has the island).</li>
+  <li><strong>Corners.</strong> A cell that meets the rounded glass in a corner gets 24 pt extra padding — on the whole cell in landscape (title and value stay on one vertical line), on the bottom only in portrait (side padding never changes).</li>
+  <li><strong>Borders</strong> are drawn once by <code>GridBordersCanvas</code> at half-pixel offsets so shared edges stay 1 pt. In the live view, edges on the screen boundary aren't drawn and lines fade to black over their last 20 pt; preview and edit show full outlines.</li>
+  <li><strong>Preview and edit</strong> lay the grid out for the bare screen and scale the whole thing to fit between 12 pt under the navigation bar and 24 pt above the bottom — nothing reflows.</li>
+</ul>
+
+<h2 id="type">Type and spacing rules</h2>
+<div class="callout rule"><span class="label">Rule · three sizes, no scaling</span>
+<p>Defined in <code>WidgetMetrics</code> and nowhere else:</p>
+<ul>
+  <li><strong>21 pt</strong> — widget titles (Sofia Sans Condensed ExtraBold, uppercase, tracked), and the minimum for any text in a widget. Quieter text gets a lighter weight, never a smaller size.</li>
+  <li><strong>100 pt</strong> — hero values (lap time, delta, RPM, speed) at medium and large, when the widest possible string fits; otherwise 48 pt.</li>
+  <li><strong>48 pt</strong> — every other value.</li>
+  <li>At least 16 pt between a title and its content; 16 pt cell padding.</li>
+</ul>
+<p>No <code>minimumScaleFactor</code>. A value that doesn't fit its cell is a layout bug, solved by not offering that size.</p></div>
+<div class="callout warn"><span class="label">Gotcha · fonts</span>
+<p>Sofia Sans Condensed's static files register under different family names per weight, so <code>Font.sofia(_:_:)</code> resolves explicit PostScript names (<code>SofiaSansCondensed-Bold</code>, …). Its digits are proportional by default — always use <code>.sofiaNumeral</code> / <code>.monospacedDigit()</code> for numbers, or values jitter as they change.</p></div>
+
+<h2 id="recording">During a recording</h2>
+<ul>
+  <li><strong>Pages</strong> are a horizontal paging <code>ScrollView</code>, not a <code>TabView</code>: the UIKit page host behind <code>TabView</code> insets and recentres pages by the safe area, which no combination of modifiers fully undid.</li>
+  <li><strong>The toolbar is hidden</strong> until the driver taps (with a light haptic): elapsed time, page pills, STOP. It slides in from the top in landscape and the bottom in portrait. STOP is the only way out — the dashboard can't be swiped away.</li>
+  <li><strong>A pulsing red dot</strong> beside the Dynamic Island shows recording is live. It sits <em>next to</em> the island: the island is a system layer drawn above every app, so nothing inside it would be visible.</li>
+</ul>
+
+<h2 id="edit">Edit mode</h2>
+<p>Long-press a widget when not recording, or Settings → Dashboards → Edit.</p>
+<ul>
+  <li><code>DashboardEditController</code> holds a working copy and validates every mutation against both orientations.</li>
+  <li>One <code>DragGesture(minimumDistance: 0)</code> per widget with a 250 ms lift timer handles everything: a quick tap opens options, a still hold lifts, hold-then-move reorders with live reflow. (A long-press-then-drag gesture sequence swallowed plain taps.)</li>
+  <li><strong>Removing leaves a hole</strong> (<code>.empty</code>) of the same size so nothing else moves. Holes show as dashed + targets and are trimmed from the end when editing finishes.</li>
+  <li><strong>The widget gallery</strong> (<code>WidgetSheets</code>) renders every widget at its real cell size with demo data, grouped by size, up to four small tiles per row. A size that doesn't fit explains how many free cells it needs instead of being greyed out.</li>
+</ul>
+
+<h2 id="persistence">Persistence</h2>
+<p><code>DashboardStore</code> keeps all dashboards in one <code>dashboards.json</code> beside the sessions folder. It seeds <strong>Lap Timer</strong> and <strong>Driving</strong> on first launch, carries a <code>seedVersion</code> so a new default can be offered to existing installs once, and never fails the whole file over a widget kind a newer build wrote.</p>
+
+<h2 id="add-widget" data-short="Recipe: add a widget">Recipe: adding a widget</h2>
+<ol class="steps">
+  <li><strong>Declare it</strong> in <span class="path">Dashboard/Model/WidgetKind.swift</span>: add the case, then its <code>title</code>, <code>category</code>, <code>supportedSizes</code>, <code>defaultSize</code>, and its place in <code>library</code> (gallery order). Mark it <code>isHero</code> only if it's a single big number.</li>
+  <li><strong>Give it data.</strong> Add a field to <code>LiveSnapshot</code>, fill it in <code>DashboardLiveFeed.tick</code> (read through <code>fresh(…)</code>; <code>nil</code> means "no data"), and give it a realistic value in <code>LiveSnapshot.demo</code> so the gallery isn't blank.</li>
+  <li><strong>Draw it</strong> in the matching file under <span class="path">Dashboard/Widgets/</span>. Use <code>WidgetValue</code>, <code>WidgetSecondaryValue</code> and <code>WidgetCaption</code> rather than your own fonts; switch on <code>context.size</code> for layout only.</li>
+  <li><strong>Dispatch it</strong> in <code>WidgetView</code> in <span class="path">WidgetChrome.swift</span> — the compiler will point you there.</li>
+  <li><strong>Options (optional).</strong> Return a <code>WidgetSetting</code> from <code>WidgetKind.settings</code>; read it from <code>context.placement.settings</code>. The options sheet renders it automatically and no data migration is needed.</li>
+  <li><strong>Check it</strong> in the gallery at every size in both orientations, with the demo snapshot and with <code>nil</code> data.</li>
+</ol>
+
+</main>
+</div>
+</body>
+</html>

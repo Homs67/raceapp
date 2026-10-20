@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Telemetry pipeline · raceApp Architecture</title>
+<link rel="stylesheet" href="assets/site.css">
+<script src="assets/site.js"></script>
+</head>
+<body>
+<header class="top">
+  <a href="index.html" class="brand">raceApp <span>architecture</span></a>
+  <span class="spacer"></span>
+  <span class="meta">Updated October 2026</span>
+  <button class="theme-toggle" id="theme-toggle">Auto</button>
+</header>
+<div class="layout">
+<nav id="nav" class="side"><a href="index.html">Overview</a></nav>
+<main>
+
+<h1>Telemetry pipeline</h1>
+<p class="lede">What happens to a sample between a sensor producing it and it being on disk — and how a session is read back for review and export.</p>
+
+<h2 id="sample">The sample</h2>
+<p>Everything is a scalar <strong>sample</strong>: <code>(ChannelId, Double, TimeInterval)</code>.</p>
+<ul>
+  <li><strong><code>ChannelId</code></strong> is a namespaced string — <code>gps.speed</code>, <code>obd.rpm</code>, <code>rb.yawRate</code> — defined in <span class="path">Packages/SessionKit/…/ChannelId.swift</span>. One channel, one physical quantity, one unit.</li>
+  <li><strong>The timestamp is monotonic uptime</strong> in seconds (<code>monotonicNow()</code>), not wall-clock time. It can't jump when the phone's clock syncs. Wall-clock time enters a session in exactly two places: the manifest's <code>startedAtUTC</code>, and the <code>*.wallTime</code> channels the GNSS sources write for clock audits.</li>
+</ul>
+<div class="table-wrap"><table>
+<tr><th>Namespace</th><th>Source</th><th>Examples</th></tr>
+<tr><td><code>gps.*</code></td><td>Whichever source owns position (RaceBox, else phone)</td><td><code>gps.lat</code>, <code>gps.speed</code> (m/s), <code>gps.hAcc</code> (±m)</td></tr>
+<tr><td><code>phone.*</code></td><td>Phone GPS, kept as a cross-check while a RaceBox owns <code>gps.*</code></td><td><code>phone.lat</code>, <code>phone.speed</code></td></tr>
+<tr><td><code>imu.*</code></td><td>Phone CoreMotion, raw device axes</td><td><code>imu.ax</code> (g), <code>imu.yawRate</code> (rad/s)</td></tr>
+<tr><td><code>car.*</code></td><td>Calibrated, car-aligned G (RaceBox or phone)</td><td><code>car.latG</code>, <code>car.longG</code></td></tr>
+<tr><td><code>baro.*</code>, <code>device.*</code></td><td>Phone</td><td><code>baro.relAltitude</code>, <code>device.thermal</code></td></tr>
+<tr><td><code>obd.*</code></td><td>OBD-II polling</td><td><code>obd.rpm</code>, <code>obd.coolantTemp</code></td></tr>
+<tr><td><code>can.*</code></td><td>CAN monitor stream</td><td><code>can.steering</code> (°, + right), <code>can.brake</code> (%)</td></tr>
+<tr><td><code>rb.*</code></td><td>RaceBox-only data and raw axes</td><td><code>rb.sats</code>, <code>rb.gx</code>, <code>rb.power</code></td></tr>
+</table></div>
+
+<h2 id="bus">TelemetryBus</h2>
+<p><span class="path">raceApp/Model/TelemetryBus.swift</span> — about 90 lines, and the most important 90 lines in the app. It's lock-based rather than an actor because sources call it from Bluetooth and sensor queues at up to 100 Hz.</p>
+<div class="table-wrap"><table>
+<tr><th>API</th><th>What it does</th><th>Who uses it</th></tr>
+<tr><td><code>publish(ch, v, at:)</code></td><td>Store as the latest value <em>and</em> forward to the recording tap</td><td>Every source</td></tr>
+<tr><td><code>publishLive(ch, v, at:)</code></td><td>Store as the latest value only — never recorded</td><td>CAN mirrors of <code>obd.*</code></td></tr>
+<tr><td><code>snapshot()</code></td><td>Copy of latest-value-per-channel</td><td>Dashboard (10 Hz), SessionMetrics (5 Hz), Settings</td></tr>
+<tr><td><code>setRecordingTap(_:)</code></td><td>Attach / detach the full-rate tap</td><td>RecordingCoordinator</td></tr>
+<tr><td><code>.fresh(ch, now:, maxAge:)</code></td><td>Latest value only if young enough, else <code>nil</code></td><td>Everything that displays data</td></tr>
+<tr><td><code>clearObdChannels()</code></td><td>Drop <code>obd.*</code>/<code>can.*</code> on link loss so gauges go stale at once</td><td>ConnectionController</td></tr>
+</table></div>
+<div class="callout rule"><span class="label">Rule · "never a fake zero"</span>
+<p>Requirement R2.5. A value that has stopped updating is <em>absent</em>, not frozen and not zero. Always read through <code>fresh(…, maxAge:)</code> and render <code>nil</code> as <code>—</code>. A gauge that holds its last value after the adapter disconnects is a bug.</p></div>
+
+<h2 id="recording">Recording a session</h2>
+<p>One button. <code>AppModel.startRecording()</code> resets per-session state (sensor recalibration, the RaceBox frame, lap metrics) and asks <code>RecordingCoordinator</code> to start. From then on:</p>
+
+<figure class="diagram">
+<div class="frame">
+<svg class="dg" viewBox="0 0 900 250" role="img" aria-label="Recording path: a source publishes to the TelemetryBus, whose tap yields into an AsyncStream; one ingest task drains it into the SessionRecorder actor, which appends to the SessionWriter actor, which flushes channel files to disk. The recorder also updates highlights, gap tracking, motion-source segments and auto-stop.">
+  <rect class="box hw" x="10" y="40" width="118" height="62" rx="9"/>
+  <text x="69" y="67" text-anchor="middle" class="h">Source</text>
+  <text x="69" y="86" text-anchor="middle" class="sm">any driver</text>
+  <rect class="box accent" x="162" y="40" width="118" height="62" rx="9"/>
+  <text x="221" y="67" text-anchor="middle" class="h">TelemetryBus</text>
+  <text x="221" y="86" text-anchor="middle" class="sm">lock, any thread</text>
+  <rect class="box app" x="314" y="40" width="118" height="62" rx="9"/>
+  <text x="373" y="67" text-anchor="middle" class="h">AsyncStream</text>
+  <text x="373" y="86" text-anchor="middle" class="sm">in Coordinator</text>
+  <rect class="box pkg" x="466" y="40" width="118" height="62" rx="9"/>
+  <text x="525" y="67" text-anchor="middle" class="h">SessionRecorder</text>
+  <text x="525" y="86" text-anchor="middle" class="sm">actor</text>
+  <rect class="box pkg" x="618" y="40" width="118" height="62" rx="9"/>
+  <text x="677" y="67" text-anchor="middle" class="h">SessionWriter</text>
+  <text x="677" y="86" text-anchor="middle" class="sm">actor, buffers</text>
+  <rect class="box store" x="770" y="40" width="118" height="62" rx="9"/>
+  <text x="829" y="67" text-anchor="middle" class="h">channels/</text>
+  <text x="829" y="86" text-anchor="middle" class="sm">*.f64 files</text>
+
+  <text x="145" y="30" text-anchor="middle" class="lbl">publish</text>
+  <line class="edge strong" x1="128" y1="71" x2="154" y2="71"/><polygon class="head strong" points="162,71 154,66.5 154,75.5"/>
+  <text x="297" y="30" text-anchor="middle" class="lbl">tap</text>
+  <line class="edge strong" x1="280" y1="71" x2="306" y2="71"/><polygon class="head strong" points="314,71 306,66.5 306,75.5"/>
+  <text x="449" y="30" text-anchor="middle" class="lbl">ingest task</text>
+  <line class="edge strong" x1="432" y1="71" x2="458" y2="71"/><polygon class="head strong" points="466,71 458,66.5 458,75.5"/>
+  <text x="601" y="30" text-anchor="middle" class="lbl">append</text>
+  <line class="edge strong" x1="584" y1="71" x2="610" y2="71"/><polygon class="head strong" points="618,71 610,66.5 610,75.5"/>
+  <text x="753" y="30" text-anchor="middle" class="lbl">flush</text>
+  <line class="edge strong" x1="736" y1="71" x2="762" y2="71"/><polygon class="head strong" points="770,71 762,66.5 762,75.5"/>
+
+  <rect class="box pkg" x="380" y="150" width="290" height="82" rx="9"/>
+  <text x="525" y="174" text-anchor="middle" class="h">Alongside every sample</text>
+  <text x="525" y="194" text-anchor="middle" class="sm">HighlightsAccumulator · OBD gap tracking</text>
+  <text x="525" y="212" text-anchor="middle" class="sm">motion-source segments · AutoStopMonitor</text>
+  <line class="edge dash" x1="525" y1="102" x2="525" y2="142"/><polygon class="head" points="525,150 520.5,142 529.5,142"/>
+</svg>
+</div>
+<figcaption>The tap does no work on the publishing thread — it only yields into a stream. A single task drains that stream, so samples reach the recorder in order without blocking a Bluetooth callback.</figcaption>
+</figure>
+
+<ol class="steps">
+  <li><strong>Start.</strong> <code>SessionRecorder.start</code> creates the session folder and writes <code>manifest.json</code> with status <code>recording</code> <em>before</em> any data — a crash one second in still leaves a recoverable session. It then attaches the bus tap.</li>
+  <li><strong>Every sample</strong> is appended to its channel file, folded into running highlights (distance, max speed, peak G, max RPM, elevation gain), checked for OBD dropouts, and fed to the auto-stop rule.</li>
+  <li><strong>Flushing.</strong> <code>SessionWriter</code> buffers each channel and writes when the buffer passes 4 KB, plus an explicit flush every second. A crash loses at most the unflushed tail (R1.5).</li>
+  <li><strong>Stop.</strong> The tap is detached, the stream drained, files closed, and the manifest finalised: status <code>complete</code>, highlights, gaps, per-channel sample counts, end time. Camera clips are attached in a <code>beforeStop</code> hook.</li>
+</ol>
+
+<h3>Auto-stop</h3>
+<p><code>AutoStopMonitor</code> (R1.6) stops a forgotten recording when the OBD link has been gone <strong>and</strong> the car has been stationary for 5 minutes. It deliberately ignores the RaceBox for "engine on" — a logger on a permanent 12 V feed keeps reporting long after the ignition is off.</p>
+
+<h2 id="storage">On disk</h2>
+<p><span class="path">SessionStore</span> is a directory per session; there is no database. The manifests <em>are</em> the index, which makes crash recovery trivial.</p>
+<pre><code>&lt;Application Support&gt;/LiveData/
+├── dashboards.json              ← dashboard layouts (DashboardStore)
+└── sessions/
+    └── &lt;uuid&gt;/
+        ├── manifest.json        ← metadata, highlights, gaps, channel stats
+        ├── channels/
+        │   ├── gps.lat.f64      ← 16 bytes per sample:
+        │   ├── gps.speed.f64       Float64 LE time + Float64 LE value
+        │   ├── car.latG.f64
+        │   └── …
+        └── videos/              ← optional camera clips</code></pre>
+<p>The channel format is deliberately dumb: fixed 16-byte records, append-only, readable with three lines of Python. <code>ChannelReader</code> reads them back; nothing ever rewrites a channel file.</p>
+
+<h3>Manifest lifecycle</h3>
+<div class="table-wrap"><table>
+<tr><th>Status</th><th>Meaning</th></tr>
+<tr><td><code>recording</code></td><td>Written at start. If the app finds one at launch, the session was interrupted.</td></tr>
+<tr><td><code>complete</code></td><td>Finalised normally at stop.</td></tr>
+<tr><td><code>recovered</code></td><td>Found still <code>recording</code> at launch: <code>recoverInterruptedSessions()</code> replays the channel files through a fresh <code>HighlightsAccumulator</code>, closes the session and badges it in the list.</td></tr>
+</table></div>
+
+<h2 id="export">Export</h2>
+<p><code>SessionExporter</code> writes three files for the share sheet:</p>
+<ul>
+  <li><strong>CSV</strong> on a fixed timeline — 10 Hz normally, rising to 25 Hz when position arrives that fast so a RaceBox isn't downsampled. Each cell holds the last value at or before its instant, but only while that value is fresh for its channel (e.g. 0.2 s for <code>rb.*</code>, 2.5 s for <code>gps.*</code>), so a sensor blackout shows as blank cells instead of a frozen number. Opens in Excel; imports into RaceChrono.</li>
+  <li><strong>JSON sidecar</strong> — the manifest enriched with measured rates per channel (<code>ChannelStats</code>), OBD timing, and the post-session G-force check (<code>GForceValidator</code>).</li>
+  <li><strong>Raw JSON</strong> — every sample at its native rate, unresampled, for accuracy audits.</li>
+</ul>
+
+<h2 id="import">Importing RaceBox memory</h2>
+<p>A Mini S or Micro can record on its own. Its memory is one continuous log, not files, so <span class="path">raceApp/Model/RaceBoxMemoryImporter.swift</span> reconstructs drives during download:</p>
+<ul>
+  <li>A <strong>start/stop marker</strong> saved by the device closes the current drive.</li>
+  <li>A <strong>gap of more than two minutes</strong> between records' own GPS timestamps also closes it — a logger unplugged mid-drive leaves no marker.</li>
+  <li>Each drive is written through an ordinary <code>SessionRecorder</code> on its own timeline starting at zero, so an imported drive is indistinguishable from a live one. Fragments under 25 records are discarded.</li>
+</ul>
+<div class="callout warn"><span class="label">Gotcha</span>
+<p>Subscribe to <code>RaceBoxSession.historyEvents</code> <strong>before</strong> calling <code>startDownload()</code>. The device starts streaming the instant it answers; subscribing afterwards silently drops the first records of every drive. This bug existed and was caught only because a synthetic 600-record dump imported 598.</p></div>
+
+</main>
+</div>
+</body>
+</html>

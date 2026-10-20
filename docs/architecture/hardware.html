@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Data sources · raceApp Architecture</title>
+<link rel="stylesheet" href="assets/site.css">
+<script src="assets/site.js"></script>
+</head>
+<body>
+<header class="top">
+  <a href="index.html" class="brand">raceApp <span>architecture</span></a>
+  <span class="spacer"></span>
+  <span class="meta">Updated October 2026</span>
+  <button class="theme-toggle" id="theme-toggle">Auto</button>
+</header>
+<div class="layout">
+<nav id="nav" class="side"><a href="index.html">Overview</a></nav>
+<main>
+
+<h1>Data sources</h1>
+<p class="lede">Three pieces of hardware feed the app. Each has its own driver, its own quirks, and a different idea of what "accurate" means. This page covers what each provides, and — the part that trips people up — which one wins when two of them report the same thing.</p>
+
+<h2 id="summary">At a glance</h2>
+<p>Rates below are <em>measured</em>, from a 23-minute drive on 2026-09-16 with all three sources connected — not datasheet numbers.</p>
+<div class="table-wrap"><table>
+<tr><th>Source</th><th>Driver (code)</th><th>Channels</th><th>Measured rate</th></tr>
+<tr><td><strong>iPhone GPS</strong><br><span class="path">CoreLocation</span></td><td><code>PhoneSensorSuite</code></td><td><code>gps.*</code>, or <code>phone.*</code> when a RaceBox owns position</td><td>~1 Hz, ±5–10 m</td></tr>
+<tr><td><strong>iPhone motion</strong><br><span class="path">CoreMotion</span></td><td><code>PhoneSensorSuite</code></td><td><code>imu.*</code> raw axes; <code>car.latG/longG</code> when no logger</td><td>99 Hz (20 Hz when backgrounded)</td></tr>
+<tr><td><strong>Barometer</strong></td><td><code>PhoneSensorSuite</code></td><td><code>baro.relAltitude</code></td><td>~1 Hz</td></tr>
+<tr><td><strong>Phone health</strong></td><td><code>PhoneSensorSuite</code></td><td><code>device.battery</code>, <code>device.thermal</code></td><td>0.2 Hz</td></tr>
+<tr><td><strong>OBD-II polling</strong><br><span class="path">ELM327 adapter</span></td><td><code>ConnectionController</code> → <code>Elm327Session</code> → <code>PidPoller</code></td><td><code>obd.*</code></td><td>Fast loop continuous; slow loop sweeps every 5 s</td></tr>
+<tr><td><strong>CAN monitor</strong><br><span class="path">same adapter, ATMA</span></td><td><code>CanMonitorSession.stream</code></td><td><code>can.rpm</code>, <code>can.accelPedal</code>, <code>can.brake</code>, <code>can.steering</code></td><td>~40 Hz in bursts; 15–44% time coverage</td></tr>
+<tr><td><strong>RaceBox</strong><br><span class="path">Micro / Mini / Mini S</span></td><td><code>RaceBoxController</code> → <code>RaceBoxSession</code></td><td><code>gps.*</code> (as owner), <code>rb.*</code>, <code>car.latG/longG</code></td><td>24.8 Hz, ±0.25 m median</td></tr>
+</table></div>
+
+<h2 id="phone">The iPhone</h2>
+<p><span class="path">Packages/SessionKit/…/PhoneSensorSuite.swift</span> owns <code>CLLocationManager</code>, <code>CMMotionManager</code> and <code>CMAltimeter</code>, and publishes everything through a single <code>(channel, value, t)</code> callback that <code>AppModel</code> points at the bus.</p>
+<ul>
+  <li><strong>GPS</strong> runs at the best accuracy iOS allows. Each fix is published with its own accuracy (<code>gps.hAcc</code>, <code>gps.vAcc</code>, <code>gps.speedAcc</code>) — the "honesty channels" that let later analysis decide how much to trust a position.</li>
+  <li><strong>Motion</strong> runs at 100 Hz and drops to 20 Hz when the app is backgrounded during a recording, to stay clear of thermal suspension.</li>
+  <li><strong>Car-frame G</strong> is also computed here when no RaceBox is attached: the phone's axes are arbitrary (it sits in a cradle at any angle), so a calibrator learns which way is down and which way is forward. See <a href="motion.html#g-force">Motion → car-frame G</a>.</li>
+</ul>
+<div class="callout note"><span class="label">Background recording</span>
+<p>Recording continues with the screen locked thanks to the <code>location</code> and <code>bluetooth-central</code> background modes. Without <em>Always</em> location permission iOS may suspend the app, so the recorder falls back to keeping the screen awake for the session.</p></div>
+
+<h2 id="obd">OBD-II adapter</h2>
+<p>A cheap Bluetooth ELM327 clone (the reference is the Veepeak OBDCheck BLE+, deliberately the slowest common adapter). The app speaks to it as a serial line over BLE.</p>
+<h3>Polling mode (default)</h3>
+<p><code>ConnectionController</code> drives the lifecycle — scan, connect, discover GATT, initialise the ELM, reach the ECU — and then hands the link to <code>PidPoller</code>:</p>
+<ul>
+  <li><strong>Fast loop</strong>, polled continuously: RPM, speed, throttle, accelerator pedal.</li>
+  <li><strong>Slow loop</strong>, one channel per window, a full sweep every 5 s: coolant, intake/ambient temp, fuel level, module voltage, engine load, timing advance, MAP, MAF, barometric pressure. Oil temp is in the list but the ND2's ECU doesn't support it.</li>
+</ul>
+<p>Decoding is pure: <code>PidDecoder</code> turns raw response bytes into engineering values per SAE J1979, and is fully unit-tested.</p>
+
+<h3>CAN monitor mode</h3>
+<p>OBD-II only exposes what the ECU chooses to answer. Steering angle, brake pedal and a fast RPM only exist as <em>broadcast</em> frames on the car's CAN bus. With <strong>Settings → Record CAN signals</strong> on, starting a recording switches the adapter into ELM327 monitor mode (<code>ATMA</code>) and decodes those frames instead of polling.</p>
+<div class="table-wrap"><table>
+<tr><th>Signal</th><th>Frame</th><th>Status</th></tr>
+<tr><td>Steering wheel angle</td><td><code>0x086</code></td><td><span class="tag ok">verified on car</span></td></tr>
+<tr><td>Brake pedal</td><td><code>0x078</code></td><td><span class="tag ok">verified on car</span></td></tr>
+<tr><td>Accelerator pedal, RPM</td><td><code>0x202</code></td><td><span class="tag ok">verified on car</span></td></tr>
+<tr><td>Wheel speed</td><td><code>0x4B0</code></td><td><span class="tag bad">decodes nothing on the ND2</span></td></tr>
+</table></div>
+<p>Per-car signal definitions live in <span class="path">Packages/ObdKit/…/CanSignal.swift</span> (<code>CanSignalMap.mazdaND</code>). <code>CanCorrelator</code> finds new signals by recording raw frames alongside OBD "ground truth" and correlating every byte against it — that's how the existing ones were discovered.</p>
+<div class="callout warn"><span class="label">Trade-offs you should know</span>
+<ul>
+  <li>A cheap ELM can only filter one frame ID at a time, so the stream <strong>round-robins</strong> between IDs. On a real drive RPM was captured 44% of the time, steering and brake about 15%.</li>
+  <li>Polling and monitoring can't run at once on one adapter. Slow PIDs are meant to be read in a ~1.5 s <strong>interlude every 60 s</strong> — but on the last real drive that interlude returned nothing, so no <code>obd.*</code> data was recorded at all. Tracked on <a href="status.html">Status</a>.</li>
+  <li>CAN RPM and pedal are mirrored onto <code>obd.rpm</code> / <code>obd.throttle</code> with <code>publishLive</code> — live display only, never recorded — so the recorded data stays honest about where each number came from.</li>
+</ul></div>
+
+<h2 id="racebox">RaceBox</h2>
+<p>A dedicated GNSS logger: 25 Hz position and speed with real accuracy figures, plus a 3-axis accelerometer and gyro. It is plugged into the OBD port (the Micro has no battery and runs from 12 V or USB), so — unlike the phone — it doesn't move.</p>
+<ul>
+  <li><strong>Protocol</strong>: u-blox UBX-style binary packets over BLE, transcribed from RaceBox's protocol document (rev 9) in <span class="path">Packages/RaceBoxKit</span>. Notifications arrive split across MTU-sized chunks; <code>RaceBoxPacketParser</code> reassembles them and verifies checksums.</li>
+  <li><strong>Models differ</strong>: the Mini reports battery percent and has no memory; the Mini S and Micro can record on their own. The Micro reports its <em>input voltage</em> instead of a battery level. Commands are gated by <code>RaceBoxModel</code> capabilities.</li>
+  <li><strong>Stored memory</strong>: Mini S / Micro hold one continuous log. Settings → RaceBox → <em>Recorded on device</em> downloads it and splits it into separate sessions. See <a href="pipeline.html#import">Pipeline → Importing RaceBox memory</a>.</li>
+  <li><strong>Auto-connect</strong>: a remembered device reconnects at launch and on foreground, without scanning.</li>
+</ul>
+
+<h2 id="ble">Two Bluetooth links at once</h2>
+<p>Both devices talk through <span class="path">Packages/BleKit</span>. The design decision that makes simultaneous connections possible: <strong>one <code>CoreBluetoothTransport</code> — and therefore one <code>CBCentralManager</code> — per device profile</strong>, each with its own state-restoration identifier.</p>
+<figure class="diagram">
+<div class="frame">
+<svg class="dg" viewBox="0 0 760 210" role="img" aria-label="The app holds two CoreBluetooth centrals, one per device profile, each with its own restore identifier, connected to the OBD adapter and the RaceBox respectively.">
+  <rect class="box app" x="20" y="70" width="170" height="70" rx="10"/>
+  <text x="105" y="100" text-anchor="middle" class="h">AppModel</text>
+  <text x="105" y="120" text-anchor="middle" class="sm">owns both controllers</text>
+
+  <rect class="box pkg" x="270" y="24" width="220" height="64" rx="9"/>
+  <text x="380" y="50" text-anchor="middle" class="h">CoreBluetoothTransport</text>
+  <text x="380" y="70" text-anchor="middle" class="sm">profile .elm327 · own central</text>
+  <rect class="box pkg" x="270" y="122" width="220" height="64" rx="9"/>
+  <text x="380" y="148" text-anchor="middle" class="h">CoreBluetoothTransport</text>
+  <text x="380" y="168" text-anchor="middle" class="sm">profile .raceBox · own central</text>
+
+  <rect class="box hw" x="570" y="24" width="170" height="64" rx="9"/>
+  <text x="655" y="50" text-anchor="middle" class="h">OBD-II adapter</text>
+  <text x="655" y="70" text-anchor="middle" class="sm">serial over BLE</text>
+  <rect class="box hw" x="570" y="122" width="170" height="64" rx="9"/>
+  <text x="655" y="148" text-anchor="middle" class="h">RaceBox</text>
+  <text x="655" y="168" text-anchor="middle" class="sm">UBX packets over BLE</text>
+
+  <path class="edge" d="M190 95 C 230 95, 230 56, 262 56"/><polygon class="head" points="270,56 262,51.5 262,60.5"/>
+  <path class="edge" d="M190 115 C 230 115, 230 154, 262 154"/><polygon class="head" points="270,154 262,149.5 262,158.5"/>
+  <line class="edge" x1="490" y1="56" x2="562" y2="56"/><polygon class="head" points="570,56 562,51.5 562,60.5"/>
+  <line class="edge" x1="490" y1="154" x2="562" y2="154"/><polygon class="head" points="570,154 562,149.5 562,158.5"/>
+</svg>
+</div>
+<figcaption>Separate centrals, separate restore identifiers. Sharing one restore identifier corrupts CoreBluetooth state until the app is relaunched — learned the hard way.</figcaption>
+</figure>
+
+<h2 id="ownership">Who wins when sources overlap</h2>
+<p>The RaceBox and the phone both measure position, speed and acceleration. Mixing them is worse than using either: a 25 Hz ±0.3 m stream with a 1 Hz ±10 m fix dropped into it means anything reading "the latest value" gets the bad one some of the time. So each canonical channel has exactly one owner at a time.</p>
+<div class="table-wrap"><table>
+<tr><th>Channel</th><th>Owner when a RaceBox is streaming</th><th>Owner otherwise</th><th>Where the rule lives</th></tr>
+<tr><td><code>gps.lat/lon/speed/…</code></td><td>RaceBox, while it has a fresh valid fix (3 s grace). Phone fixes are diverted to <code>phone.lat/lon/speed</code> as a cross-check.</td><td>Phone</td><td><code>PhoneSensorSuite.externalOwnsPosition</code></td></tr>
+<tr><td><code>gps.course</code></td><td>RaceBox only when it reports a valid heading; otherwise the phone fills it in</td><td>Phone</td><td><code>PhoneSensorSuite.externalOwnsCourse</code></td></tr>
+<tr><td><code>car.latG/longG</code></td><td>RaceBox accelerometer via <code>LoggerFrameTracker</code>. The phone stands down as soon as the logger streams anything — even before it has calibrated.</td><td>Phone, via <code>CarFrameCalibrator</code></td><td><code>PhoneSensorSuite.externalOwnsCarFrame</code></td></tr>
+<tr><td><code>obd.rpm</code>, <code>obd.throttle</code></td><td colspan="2">CAN mirrors them live with <code>publishLive</code> while streaming; recorded truth stays in <code>can.*</code></td><td><code>ConnectionController</code></td></tr>
+</table></div>
+<div class="callout rule"><span class="label">Rule</span>
+<p>Ownership is <strong>time-based, not a flag</strong>: a source owns a channel while its samples are fresh. If the RaceBox drops out mid-drive, the phone takes over within three seconds on its own — no code has to remember to hand back. The session manifest records which source drove <code>gps.*</code> over time in <code>motionSourceSegments</code>.</p></div>
+<p>The dashboard follows the same principle: with a logger attached it will show <code>—</code> for G-force rather than fall back to the phone's raw accelerometer, which would report the driver's hand instead of the car.</p>
+
+</main>
+</div>
+</body>
+</html>

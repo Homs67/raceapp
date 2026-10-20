@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Motion, laps &amp; G-force · raceApp Architecture</title>
+<link rel="stylesheet" href="assets/site.css">
+<script src="assets/site.js"></script>
+</head>
+<body>
+<header class="top">
+  <a href="index.html" class="brand">raceApp <span>architecture</span></a>
+  <span class="spacer"></span>
+  <span class="meta">Updated October 2026</span>
+  <button class="theme-toggle" id="theme-toggle">Auto</button>
+</header>
+<div class="layout">
+<nav id="nav" class="side"><a href="index.html">Overview</a></nav>
+<main>
+
+<h1>Motion, laps &amp; G-force</h1>
+<p class="lede">The derived numbers drivers care about — cornering and braking G, lap times, live delta, 0–60 — and the algorithms that produce them. All of it lives in SessionKit as small, pure, sample-at-a-time types.</p>
+
+<div class="callout note"><span class="label">How these were built</span>
+<p>Most parameters on this page weren't guessed. They were chosen by replaying a real recorded drive through the algorithm and scoring the output against an independent sensor. When you change one, do the same — the 2026-09-16 drive export is the reference dataset used so far.</p></div>
+
+<h2 id="g-force" data-short="Car-frame G">Car-frame G</h2>
+<p>A sensor measures acceleration along <em>its own</em> axes. The phone sits in a cradle at an arbitrary angle; the RaceBox is plugged into a steeply raked OBD port. To show "braking 0.8 g" or "cornering 0.6 g left", the app has to learn, for each sensor, which way is down and which way is forward. That is <strong>calibration</strong>, and it produces <code>car.latG</code> (+ right) and <code>car.longG</code> (+ accelerating).</p>
+
+<figure class="diagram">
+<div class="frame">
+<svg class="dg" viewBox="0 0 880 210" role="img" aria-label="CarFrameCalibrator phases: leveling needs about 1.5 seconds still and finds down and gyro bias; aligning needs at least 10 one-second windows above 3 metres per second with at least 0.05 g of spread and finds forward; calibrated keeps refining every 4 windows.">
+  <rect class="box" x="20" y="30" width="230" height="74" rx="10"/>
+  <text x="135" y="58" text-anchor="middle" class="h">1 · Leveling</text>
+  <text x="135" y="80" text-anchor="middle" class="sm">finds "down" + gyro zero</text>
+  <rect class="box" x="325" y="30" width="230" height="74" rx="10"/>
+  <text x="440" y="58" text-anchor="middle" class="h">2 · Aligning</text>
+  <text x="440" y="80" text-anchor="middle" class="sm">finds "forward"</text>
+  <rect class="box accent" x="630" y="30" width="230" height="74" rx="10"/>
+  <text x="745" y="58" text-anchor="middle" class="h">3 · Calibrated</text>
+  <text x="745" y="80" text-anchor="middle" class="sm">emits car.latG / car.longG</text>
+  <line class="edge" x1="250" y1="67" x2="317" y2="67"/><polygon class="head" points="325,67 317,62.5 317,71.5"/>
+  <line class="edge strong" x1="555" y1="67" x2="622" y2="67"/><polygon class="head strong" points="630,67 622,62.5 622,71.5"/>
+  <text x="135" y="140" text-anchor="middle" class="lbl">~1.5 s with |accel| &lt; 0.06 g</text>
+  <text x="135" y="158" text-anchor="middle" class="lbl">no GPS needed</text>
+  <text x="440" y="140" text-anchor="middle" class="lbl">≥ 10 one-second windows above 3 m/s</text>
+  <text x="440" y="158" text-anchor="middle" class="lbl">≥ 0.05 g spread between gentlest and firmest</text>
+  <text x="745" y="140" text-anchor="middle" class="lbl">re-solves every 4 windows</text>
+  <text x="745" y="158" text-anchor="middle" class="lbl">trusted when scale is 0.8 – 1.25</text>
+</svg>
+</div>
+<figcaption><code>CarFrameCalibrator</code>. Cruising at constant speed never finishes step 2 — the fit needs real acceleration <em>and</em> braking to tell forward from noise.</figcaption>
+</figure>
+
+<h3>How alignment works</h3>
+<p>For each one-second window, compare the mean sensor acceleration (a 3-vector) with the change in GPS speed over the same second (a scalar, in g). Accumulate the normal equations and solve for the direction <code>u</code> that best predicts GPS acceleration — a small ridge term keeps straight-line driving from producing garbage perpendicular to the data — then project <code>u</code> into the horizontal plane leveling found. That is forward; right is forward × up.</p>
+<p>The length of <code>u</code> before normalising is the <strong>fit scale</strong>. A correct fit on a correctly-scaled sensor gives about 1.0. A fit can correlate beautifully and still point the wrong way — scale is what catches it.</p>
+
+<h3>Two calibrators</h3>
+<div class="table-wrap"><table>
+<tr><th></th><th>Phone</th><th>RaceBox</th></tr>
+<tr><td>Type</td><td><code>CarFrameCalibrator</code> inside <code>PhoneSensorSuite</code></td><td><code>LoggerFrameTracker</code> (wraps a <code>CarFrameCalibrator</code>) inside <code>RaceBoxController</code></td></tr>
+<tr><td>Input</td><td>CoreMotion: gravity and user acceleration already separated, 100 Hz</td><td>Raw accelerometer: gravity + motion summed, 25 Hz</td></tr>
+<tr><td>Speed for alignment</td><td>Phone GPS (when it owns position)</td><td>RaceBox GPS, 25 Hz</td></tr>
+<tr><td>Persists between drives</td><td>No — the phone moves in and out of its cradle</td><td>Yes, per device serial — an OBD plug only fits one way</td></tr>
+<tr><td>On the 2026-09-16 drive</td><td>scale 0.632 · ~51° out · "marginal"</td><td>replayed: scale 0.996 · "verified"</td></tr>
+</table></div>
+<p>When a RaceBox is streaming, its tracker owns <code>car.*</code> and the phone stands down (see <a href="hardware.html#ownership">Who wins</a>).</p>
+
+<h3>LoggerFrameTracker — three measured decisions</h3>
+<p>The RaceBox reports gravity and motion summed, so the tracker has to split them itself before reusing <code>CarFrameCalibrator</code>. Each of these was wrong in the first version and was found by measurement:</p>
+<ol class="steps">
+  <li><strong>Gravity is the <em>negated</em> filtered vector.</strong> An accelerometer reports specific force: +1 g <em>up</em> at rest. CoreMotion's <code>gravity</code> points down. Getting this wrong mirrors lateral G — caught because the correlation against GPS turn rate flipped sign.</li>
+  <li><strong>The gravity filter freezes while the car is manoeuvring.</strong> A plain moving average mistakes a long corner for gravity and subtracts it: a steady 0.8 g corner read 0.24 g after six seconds and 0.07 g after twelve. The estimate only updates while total specific force is within ±0.03 g of 1 g.</li>
+  <li><strong>The filter time constant is 30 s, not 5.</strong> Scored end to end with the validator's own metric, 5 s gave 0.766 (still marginal), 10 s 0.904, 30 s 0.996, then it plateaus. Only the freeze in step 2 makes a constant this long safe.</li>
+</ol>
+<p>A restored frame is checked once against the first settled reading: if "down" has moved more than 25°, the device has been refitted and the frame is discarded. The threshold is loose on purpose — parking slope and road camber move "down" a few degrees on every drive.</p>
+
+<h3>Checking the result</h3>
+<ul>
+  <li><strong><code>GForceValidator</code></strong> runs at export: averages recorded <code>car.longG</code> over ~2 s GPS windows, searches 0–3 s of lag, and reports correlation, slope and implied misalignment. Verdict <em>verified</em> needs correlation ≥ 0.75 and slope in 0.8–1.25.</li>
+  <li><strong><code>GCalibrationView</code></strong> (Settings → Calibrate G-force) is a guided version for the driver: hold still, then three straight-line accelerate-and-brake pulls, with a live count of good seconds and which requirement is still missing.</li>
+</ul>
+
+<h2 id="laps">Laps</h2>
+<h3>Tracks</h3>
+<p>Each track is a bundled JSON file (<span class="path">raceApp/Tracks/*.json</span>) built from OpenStreetMap by <code>tools/build_tracks.py</code>: a centreline in driving order at ~4 m spacing, a start/finish gate, named corners. Bundled today: Laguna Seca, Big Willow, Streets of Willow. At session start the track is the demo's, or the nearest one to the current GPS fix.</p>
+
+<h3>The pipeline</h3>
+<p><code>SessionMetrics</code> pumps bus snapshots at 5 Hz through:</p>
+<div class="table-wrap"><table>
+<tr><th>Type</th><th>Input → output</th></tr>
+<tr><td><code>LapTimer</code></td><td>GPS fixes → crossings of the start/finish gate (direction-checked) → current, last and best lap.</td></tr>
+<tr><td><code>TrackProgress</code></td><td>A GPS fix → its distance along the lap, <code>s</code>, by projecting onto the nearest centreline segment in a window around the last match. Rejects fixes more than 30 m off the line (pit lane, off track).</td></tr>
+<tr><td><code>LapDelta</code></td><td><code>(s, elapsed)</code> → time ahead/behind the session's best lap at the same point. The lap is divided into 5 m bins; every bin crossed between two fixes is interpolated, so 1 Hz phone GPS still fills them all.</td></tr>
+<tr><td>Sectors</td><td>The lap split into equal thirds by distance; each completed sector holds its delta, the current one runs live.</td></tr>
+</table></div>
+<p>Demo mode drives laps at varying pace (<code>PacedLapSchedule</code>) — a deterministic simulator would make every lap identical and the delta would read 0.00 forever.</p>
+
+<h2 id="drag">Acceleration runs</h2>
+<p><code>DragMeter</code> watches speed (OBD speed when available, else GPS), arms itself at a standstill, and records 0–60 mph, 0–100 mph and the quarter mile with trap speed. It keeps the current run and the session best. The Acceleration widget shows whichever the driver picks.</p>
+
+<h2 id="gear">Gear and steering</h2>
+<ul>
+  <li><strong>Gear</strong> isn't on the bus — <code>GearEstimator</code> derives it from the speed/RPM ratio against the car's gearing table.</li>
+  <li><strong>Steering</strong> is recorded as the steering <em>wheel</em> angle (<code>can.steering</code>, about ±480° on the ND). The widget divides by the rack ratio (15:1, a documented constant to confirm) to show the road-wheel angle, about ±32°.</li>
+</ul>
+
+</main>
+</div>
+</body>
+</html>

@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Status &amp; known issues · raceApp Architecture</title>
+<link rel="stylesheet" href="assets/site.css">
+<script src="assets/site.js"></script>
+</head>
+<body>
+<header class="top">
+  <a href="index.html" class="brand">raceApp <span>architecture</span></a>
+  <span class="spacer"></span>
+  <span class="meta">Updated October 2026</span>
+  <button class="theme-toggle" id="theme-toggle">Auto</button>
+</header>
+<div class="layout">
+<nav id="nav" class="side"><a href="index.html">Overview</a></nav>
+<main>
+
+<h1>Status &amp; known issues</h1>
+<p class="lede">Where things actually stand. "Built" and "proven on a real car" are different claims, and a lot of recent work has only been proven in the Simulator or by replaying a recorded drive. Check here before assuming something works on track.</p>
+
+<h2 id="verified">Verification level by feature</h2>
+<div class="table-wrap"><table>
+<tr><th>Feature</th><th>Level</th><th>Notes</th></tr>
+<tr><td>OBD-II connection and polling (Veepeak, ND2)</td><td><span class="tag ok">real car</span></td><td>Connection flow, reconnect, ignition-off handling</td></tr>
+<tr><td>CAN steering, brake, accelerator, RPM decoders</td><td><span class="tag ok">real car</span></td><td>Verified from driveway captures and a full drive</td></tr>
+<tr><td>RaceBox Micro link, 25 Hz position into <code>gps.*</code></td><td><span class="tag ok">real car</span></td><td>2026-09-16 drive: 24.8 Hz, ±0.25 m median</td></tr>
+<tr><td>Recording, crash recovery, CSV/JSON export</td><td><span class="tag ok">real car</span></td><td></td></tr>
+<tr><td>RaceBox owns <code>gps.*</code>; phone fixes diverted to <code>phone.*</code></td><td><span class="tag warn">Simulator</span></td><td>Logic verified with recorded sessions in the Simulator</td></tr>
+<tr><td>Car-frame G from the RaceBox accelerometer</td><td><span class="tag warn">replayed drive</span></td><td>Real drive data replayed offline scored 0.996 "verified"; not yet run live in a car</td></tr>
+<tr><td>Phone stands down from G while a RaceBox streams</td><td><span class="tag warn">by construction</span></td><td>The Simulator has no CoreMotion, so this can only be checked on a device</td></tr>
+<tr><td>Frame persistence and guided calibration</td><td><span class="tag warn">Simulator</span></td><td>Against the simulated RaceBox</td></tr>
+<tr><td>RaceBox memory download and import</td><td><span class="tag warn">Simulator</span></td><td>Against the simulated device's synthetic dump — not yet a real Micro</td></tr>
+<tr><td>Lap timer, live delta, sectors</td><td><span class="tag warn">demo + tests</span></td><td>Demo drives on bundled tracks; not yet a real track day</td></tr>
+<tr><td>Widget dashboard, editor, gallery</td><td><span class="tag warn">Simulator</span></td><td>Landscape checks on device recommended — Simulator rotation is awkward</td></tr>
+</table></div>
+
+<h2 id="issues">Known issues</h2>
+<div class="table-wrap"><table>
+<tr><th>Issue</th><th>Impact</th><th>Notes</th></tr>
+<tr><td><strong>No OBD data while streaming CAN</strong></td><td><span class="tag bad">high</span></td><td>The once-a-minute OBD interlude fires but returns nothing, so coolant, fuel, voltage, load, temperatures are not recorded when "Record CAN signals" is on. Likely the raw request format under <code>ATCAF0</code>; the stream keeps no raw log, so the next step is to capture the interlude's ELM traffic.</td></tr>
+<tr><td>CAN round-robin coverage</td><td><span class="tag warn">medium</span></td><td>One frame ID at a time on a cheap ELM: RPM/accelerator captured ~44% of the time, steering and brake ~15%, gaps up to ~7 s.</td></tr>
+<tr><td>Wheel-speed frame <code>0x4B0</code> silent</td><td><span class="tag warn">medium</span></td><td>Decodes nothing on the ND2 yet still takes a slot in the rotation — removing it would raise the others' coverage.</td></tr>
+<tr><td>Steering centre unverified</td><td><span class="tag warn">medium</span></td><td>Logged range −216° to +478° is asymmetric. Check against a known straight-ahead before building anything (e.g. understeer) on it. The 15:1 ratio is also assumed.</td></tr>
+<tr><td>RaceBox heading never valid</td><td><span class="tag">low</span></td><td><code>headingValid</code> has never been set on the real device, so <code>gps.course</code> comes from the phone at 1 Hz.</td></tr>
+<tr><td>Motion-source label before a fix</td><td><span class="tag">low</span></td><td><code>motionSourceSegments</code> marks the RaceBox as the source as soon as it streams, not when it has a fix. A cold start took 135 s to fix, during which the phone actually supplied position.</td></tr>
+<tr><td>No battery level on a Micro behind a regulator</td><td><span class="tag">hardware</span></td><td>The Micro reports input voltage; a regulated 5 V supply reads a flat 5.1 V until it collapses. Only a sag warning is possible.</td></tr>
+<tr><td>Oil temperature unavailable</td><td><span class="tag">hardware</span></td><td>PID <code>0x5C</code> isn't supported by the ND2's ECU.</td></tr>
+<tr><td><code>RecordedSession.swift</code></td><td><span class="tag">cleanup</span></td><td>Early placeholder superseded by <code>SessionManifest</code>; safe to delete.</td></tr>
+</table></div>
+
+<h2 id="planned">Not built yet</h2>
+<div class="table-wrap"><table>
+<tr><th>Item</th><th>State</th></tr>
+<tr><td>Post-session coaching engine — the product's long-term core</td><td><span class="tag plan">designed</span> <span class="path">01-architecture.md</span>, <span class="path">02-coaching-engine.md</span></td></tr>
+<tr><td>Understeer / oversteer (measured yaw rate vs. what steering and speed imply)</td><td><span class="tag plan">inputs available</span> blocked on the steering-centre check</td></tr>
+<tr><td>Elevation gain / climb widget from the barometer</td><td><span class="tag plan">data available</span></td></tr>
+<tr><td>Recording status in the Dynamic Island while backgrounded</td><td><span class="tag plan">needs a Live Activity extension</span></td></tr>
+<tr><td>CAN signal maps for cars other than the ND MX-5</td><td><span class="tag plan">discovery tooling exists</span></td></tr>
+</table></div>
+
+</main>
+</div>
+</body>
+</html>
