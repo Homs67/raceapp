@@ -91,8 +91,52 @@ final class RaceBoxController {
         UserDefaults.standard.string(forKey: Keys.deviceId).flatMap(UUID.init(uuidString:))
     }
 
+    /// Last decoded data message (monotonic). A Micro streams at 25 Hz, so a
+    /// few seconds of silence while "connected" means the link is dead even
+    /// if CoreBluetooth hasn't said so yet.
+    private var lastMessageAt: TimeInterval?
+    /// Connected at the BLE level but nothing has arrived for `stallAfter`.
+    private(set) var dataStalled = false
+    private static let stallAfter: TimeInterval = 5
+    private var rescanDeadline: Task<Void, Never>?
+
     init() {
         transport = CoreBluetoothTransport(profile: .raceBox)
+        // Without this, a Micro that loses power (car off, cable pulled)
+        // stayed "Connected" in every screen until the app relaunched.
+        transport.onDisconnect = { [weak self] in
+            Task { @MainActor in self?.linkLost() }
+        }
+    }
+
+    /// The peripheral went away underneath a live link. Tear down, show
+    /// "Not connected", and watch for it briefly — a Micro comes back the
+    /// moment the car is started again.
+    private func linkLost() {
+        switch state {
+        case .connected, .connecting: break
+        default: return
+        }
+        liveTask?.cancel(); liveTask = nil
+        statsTask?.cancel(); statsTask = nil
+        if let session { Task { await session.shutdown() } }
+        session = nil
+        latest = nil
+        dataStalled = false
+        lastMessageAt = nil
+        publishesToBus = false
+        state = .idle
+        guard storedDeviceId != nil else { return }
+        scan()
+        rescanDeadline?.cancel()
+        rescanDeadline = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(60))
+            guard let self, !Task.isCancelled, case .scanning = self.state else { return }
+            self.scanTask?.cancel()
+            self.scanTask = nil
+            self.transport.stopScan()
+            self.state = .idle
+        }
     }
 
     var statusText: String {
@@ -100,7 +144,9 @@ final class RaceBoxController {
         case .idle: return storedDeviceName.map { "Not connected — \($0)" } ?? "Not connected"
         case .scanning: return "Scanning for RaceBox…"
         case .connecting(let name): return "Connecting to \(name)…"
-        case .connected: return deviceInfo?.displayName ?? "Connected"
+        case .connected:
+            let name = deviceInfo?.displayName ?? "Connected"
+            return dataStalled ? "\(name) — no data" : name
         case .failed(let reason): return "Failed — \(reason)"
         }
     }
@@ -209,6 +255,10 @@ final class RaceBoxController {
         publishesToBus = false
         state = .idle
         latest = nil
+        lastMessageAt = nil
+        dataStalled = false
+        rescanDeadline?.cancel()
+        rescanDeadline = nil
         recentMessages = []
     }
 
@@ -336,12 +386,17 @@ final class RaceBoxController {
                 try? await Task.sleep(for: .milliseconds(400))
                 guard let self, let session = self.session else { return }
                 self.stats = await session.stats
+                if let last = self.lastMessageAt, self.state == .connected {
+                    self.dataStalled = monotonicSeconds() - last > Self.stallAfter
+                }
             }
         }
     }
 
     private func ingest(_ message: RaceBoxDataMessage) {
         latest = message
+        lastMessageAt = monotonicSeconds()
+        dataStalled = false
         recentMessages.append(message)
         if recentMessages.count > 200 { recentMessages.removeFirst(100) }
         appendLog(message)
@@ -360,7 +415,7 @@ final class RaceBoxController {
 
     /// True while this device is streaming into the bus: the dashboard uses
     /// it to avoid falling back to phone axes for the car's G.
-    var ownsMotion: Bool { publishesToBus && state == .connected }
+    var ownsMotion: Bool { publishesToBus && state == .connected && !dataStalled }
 
     /// Car-frame G from the logger's own accelerometer. Separate from the
     /// phone's calibrator: different mount, different rate, its own levelling.

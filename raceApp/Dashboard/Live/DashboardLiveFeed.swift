@@ -113,7 +113,7 @@ final class DashboardLiveFeed {
         live.currentSector = model.metrics.currentSector
         live.currentSectorDelta = model.metrics.currentSectorDelta
 
-        if model.raceBox.state == .connected, let msg = model.raceBox.latest {
+        if model.raceBox.state == .connected, !model.raceBox.dataStalled, let msg = model.raceBox.latest {
             let power: LoggerPower
             switch msg.power(for: model.raceBox.deviceInfo?.model ?? .micro) {
             case .inputVoltage(let v): power = .from(inputVolts: v)
