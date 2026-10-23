@@ -74,7 +74,20 @@ struct RaceBoxMemoryView: View {
                 if let hours = estimatedDuration(status) {
                     LabeledContent("Approx. driving time") { Text(hours) }
                 }
-                LabeledContent("Recording now") { Text(status.isRecording ? "Yes" : "No") }
+                Toggle(isOn: Binding(
+                    get: { status.isRecording },
+                    set: { on in Task { await rb.setStandaloneRecording(on) } }
+                )) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Record on the device")
+                        Text(status.isRecording
+                             ? "Logging on its own at 25 Hz, phone or no phone."
+                             : "Off — the memory stays empty until this is on.")
+                            .font(.system(size: 11)).foregroundStyle(Color.muted)
+                    }
+                }
+                .tint(Color.accent)
+                .disabled(rb.memoryTask != .idle)
                 if status.securityEnabled && !status.memoryUnlocked {
                     Text("Memory is locked with a security code set in the RaceBox app. Unlock it there before downloading.")
                         .font(.system(size: 12)).foregroundStyle(Color.warnAmber)
