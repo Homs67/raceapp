@@ -36,7 +36,7 @@ struct GearWidget: View {
 
     var body: some View {
         let gear = context.live.gear
-        WidgetSecondaryValue(text: gear.map { $0 == 0 ? "N" : "\($0)" } ?? "—")
+        WidgetSecondaryValue(text: gear.map { $0 == 0 ? "N" : ($0 < 0 ? "R" : "\($0)") } ?? "—")
     }
 }
 

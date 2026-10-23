@@ -60,7 +60,6 @@ final class DashboardLiveFeed {
             live.speedMps = gpsMps
             live.speedDisplay = units.speed(fromMps: gpsMps)
         }
-        live.gear = gearTracker.update(rpm: live.rpm, speedMps: live.speedMps, at: now)
         live.obdHz = model.bus.obdHz(now: now)
         live.coolantC = snapshot.fresh(.obd(.coolantTemp), now: now, maxAge: 90)
         live.accelPedal = snapshot.fresh(.canAccelPedal, now: now, maxAge: canHold) ?? live.throttle
@@ -98,6 +97,11 @@ final class DashboardLiveFeed {
         }
         live.peakG = peakG
         live.gTrail = trail
+
+        // Gear after G: reverse is recognised from speed change vs car-frame
+        // longitudinal G, which only a calibrated frame can supply.
+        live.gear = gearTracker.update(rpm: live.rpm, speedMps: live.speedMps,
+                                       longG: live.gCalibrated ? live.longG : nil, at: now)
 
         live.altitude = snapshot.fresh(.gpsAltitude, now: now, maxAge: 10)
         live.heading = snapshot.fresh(.gpsCourse, now: now, maxAge: 10)

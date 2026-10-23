@@ -19,7 +19,7 @@ struct LiveSnapshot: Equatable {
     var speedDisplay: Double?      // in the user's units
     var speedMps: Double?
     var throttle: Double?
-    var gear: Int?
+    var gear: Int?                 // nil = no engine data, 0 = N, -1 = R
     var obdHz: Double = 0
     var coolantC: Double?
     /// CAN pedal channels when the stream is up; accel falls back to OBD throttle.

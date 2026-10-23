@@ -68,6 +68,51 @@ final class GearTrackerTests: XCTestCase {
         XCTAssertEqual(tracker.update(rpm: spinning, speedMps: 16, at: 3), 2, "no blank after the hold")
     }
 
+    func testReversingOutOfASpaceReadsR() {
+        var tracker = GearTracker()
+        // Sitting at idle, then speed climbs to 1.5 m/s over a second while
+        // the car-frame G points backwards: reversing.
+        XCTAssertEqual(tracker.update(rpm: 800, speedMps: 0, longG: 0, at: 0), 0)
+        var last: Int? = nil
+        for i in 0...25 {
+            let t = 1 + Double(i) * 0.04
+            last = tracker.update(rpm: 1100, speedMps: 0.4 + Double(i) * 0.05, longG: -0.1, at: t)
+        }
+        XCTAssertEqual(last, -1)
+        // Braking while reversing: speed falls, G points forward. Still R.
+        for i in 0...25 {
+            let t = 2.1 + Double(i) * 0.04
+            last = tracker.update(rpm: 900, speedMps: 1.6 - Double(i) * 0.05, longG: 0.1, at: t)
+        }
+        XCTAssertEqual(last, -1)
+        // Stop for 2 s, then launch forward: back to 1st.
+        for i in 0...50 { _ = tracker.update(rpm: 800, speedMps: 0, longG: 0, at: 3.2 + Double(i) * 0.04) }
+        XCTAssertEqual(tracker.update(rpm: 800, speedMps: 0, longG: 0, at: 5.3), 0)
+        for i in 0...25 {
+            last = tracker.update(rpm: 1800, speedMps: 0.4 + Double(i) * 0.06, longG: 0.15, at: 5.4 + Double(i) * 0.04)
+        }
+        XCTAssertEqual(last, 1)
+    }
+
+    func testForwardLaunchNeverReadsR() {
+        var tracker = GearTracker()
+        var seen = Set<Int?>()
+        for i in 0...50 {
+            seen.insert(tracker.update(rpm: 1500 + Double(i) * 40, speedMps: Double(i) * 0.1,
+                                       longG: 0.2, at: Double(i) * 0.04))
+        }
+        XCTAssertFalse(seen.contains(-1))
+    }
+
+    func testNoCarFrameGMeansNoReverse() {
+        var tracker = GearTracker()
+        var last: Int? = nil
+        for i in 0...25 {
+            last = tracker.update(rpm: 1100, speedMps: 0.4 + Double(i) * 0.05, longG: nil, at: Double(i) * 0.04)
+        }
+        XCTAssertNotEqual(last, -1)
+    }
+
     func testEngineOffResetsTheHold() {
         var tracker = GearTracker()
         XCTAssertEqual(tracker.update(rpm: rpm(speedMps: 20, gear: 3), speedMps: 20, at: 0), 3)
