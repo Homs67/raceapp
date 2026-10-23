@@ -192,9 +192,16 @@ public actor RaceBoxSession {
     }
 
     /// Erase all stored records. Progress arrives on `historyEvents` as
-    /// `.eraseProgress`; a full erase can take minutes.
+    /// `.eraseProgress` (subscribe BEFORE calling, as with downloads); the
+    /// device ACKs when done, which can take minutes on a full Micro. The
+    /// device NACKs while standalone recording is on or memory is locked —
+    /// callers stop/unlock first.
     public func eraseMemory() async throws {
-        try await execute(RaceBoxCommand.eraseMemory(), timeout: 180)
+        try await execute(RaceBoxCommand.eraseMemory(), timeout: 600)
+    }
+
+    public func cancelErase() async throws {
+        try await execute(RaceBoxCommand.cancelErase(), timeout: 10)
     }
 
     // MARK: - Ingest

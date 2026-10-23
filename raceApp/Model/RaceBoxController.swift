@@ -57,6 +57,7 @@ final class RaceBoxController {
         case downloading(received: Int, expected: Int, drives: Int)
         case erasing(percent: Int)
         case finished(drives: Int, records: Int)
+        case erased(records: Int)
         case failed(String)
     }
     private(set) var memoryTask: MemoryTask = .idle
@@ -329,16 +330,55 @@ final class RaceBoxController {
         }
     }
 
+    /// Erase the device's memory. Three things the first version got wrong:
+    /// it never listened for progress (the bar sat at 0% for minutes), it
+    /// sent the erase while the Micro was still recording — which the device
+    /// NACKs — and it reported the result as "Nothing to import".
     func eraseStoredData() {
         guard case .idle = memoryTask, let session else { return }
         memoryWork?.cancel()
         memoryWork = Task { [weak self] in
             guard let self else { return }
             self.memoryTask = .erasing(percent: 0)
+            // Subscribe before anything is sent, or the first progress
+            // notifications are routed to nobody.
+            let events = await session.historyEvents
+            let progress = Task { [weak self] in
+                for await event in events {
+                    if Task.isCancelled { return }
+                    if case .eraseProgress(let percent) = event {
+                        self?.memoryTask = .erasing(percent: percent)
+                    }
+                }
+            }
+            defer { progress.cancel() }
             do {
-                try await session.eraseMemory()
-                self.memoryTask = .finished(drives: 0, records: 0)
                 await self.refreshRecordingStatus()
+                guard let status = self.recordingStatus else {
+                    throw RaceBoxError.timeout
+                }
+                if status.securityEnabled, !status.memoryUnlocked {
+                    self.memoryTask = .failed("memory is locked — unlock it in the RaceBox app, then try again")
+                    return
+                }
+                let before = Int(status.storedMessages)
+                // The device refuses to erase while recording: pause it and
+                // put the same configuration back afterwards.
+                var resume: RaceBoxRecordingConfig?
+                if status.isRecording {
+                    resume = try? await session.recordingConfig()
+                    try await session.stopRecording()
+                }
+                try await session.eraseMemory()
+                if let resume {
+                    try? await session.setRecording(resume)
+                }
+                await self.refreshRecordingStatus()
+                if let left = self.recordingStatus?.storedMessages, left > 0 {
+                    self.memoryTask = .failed("device still reports \(left) records after erasing")
+                } else {
+                    self.memoryTask = .erased(records: before)
+                }
             } catch {
                 self.memoryTask = .failed(Self.describe(error))
             }
@@ -348,7 +388,13 @@ final class RaceBoxController {
     func cancelMemoryTask() {
         memoryWork?.cancel()
         memoryWork = nil
-        if let session { Task { try? await session.cancelDownload() } }
+        let erasing: Bool
+        if case .erasing = memoryTask { erasing = true } else { erasing = false }
+        if let session {
+            Task {
+                if erasing { try? await session.cancelErase() } else { try? await session.cancelDownload() }
+            }
+        }
         memoryTask = .idle
     }
 

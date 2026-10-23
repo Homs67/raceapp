@@ -117,8 +117,26 @@ struct RaceBoxMemoryView: View {
                     Text("Erasing… \(percent)%").font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(Color.textPrimary)
                     ProgressView(value: Double(percent), total: 100).tint(Color.accent)
+                    Text("A full memory takes a few minutes. Keep the RaceBox powered and in range.")
+                        .font(.system(size: 12)).foregroundStyle(Color.muted)
                 }
                 .padding(.vertical, 2)
+                Button("Stop") { rb.cancelMemoryTask() }
+                    .font(.system(size: 14)).foregroundStyle(Color.recordRed)
+            }
+            .listRowBackground(Color.cardBg)
+        case .erased(let recordCount):
+            Section {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Device memory erased")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(Color.textPrimary)
+                    Text(recordCount > 0 ? "\(records(UInt32(recordCount))) records removed." : "It was already empty.")
+                        .font(.system(size: 12)).foregroundStyle(Color.muted)
+                }
+                .padding(.vertical, 2)
+                Button("OK") { rb.clearMemoryResult() }
+                    .font(.system(size: 14, weight: .semibold)).foregroundStyle(Color.accent)
             }
             .listRowBackground(Color.cardBg)
         case .finished(let drives, let recordCount):

@@ -87,7 +87,7 @@ final class RaceBoxSessionTests: XCTestCase {
         defer { Task { await session.shutdown() } }
 
         let status = try await session.recordingStatus()
-        XCTAssertEqual(status.storedMessages, 67_173)
+        XCTAssertEqual(status.storedMessages, 600)   // 2 stored drives × 300 records
         XCTAssertEqual(status.memorySizeMessages, 196_608)
         XCTAssertFalse(status.isRecording)
     }
@@ -123,6 +123,47 @@ final class RaceBoxSessionTests: XCTestCase {
         } catch let error as RaceBoxError {
             XCTAssertEqual(error, .rejected(messageClass: 0xFF, messageID: 0x25))
         }
+    }
+
+    func testEraseIsRejectedWhileRecording() async throws {
+        let (session, _) = makeSession()
+        await session.start()
+        try await session.setRecording(.recommended)
+        do {
+            try await session.eraseMemory()
+            XCTFail("erase must be NACKed while recording")
+        } catch RaceBoxError.rejected(let cls, let id) {
+            XCTAssertEqual(cls, 0xFF)
+            XCTAssertEqual(id, 0x24)
+        }
+        await session.shutdown()
+    }
+
+    func testEraseReportsProgressThenEmptiesMemory() async throws {
+        let (session, _) = makeSession()
+        await session.start()
+        let events = await session.historyEvents      // subscribe before the command
+        let before = try await session.recordingStatus()
+        XCTAssertGreaterThan(before.storedMessages, 0)
+
+        let collector = Task { () -> [Int] in
+            var seen: [Int] = []
+            for await event in events {
+                if case .eraseProgress(let percent) = event {
+                    seen.append(percent)
+                    if percent >= 100 { break }
+                }
+            }
+            return seen
+        }
+        try await session.eraseMemory()
+        let progress = await collector.value
+        XCTAssertEqual(progress.first, 0)
+        XCTAssertEqual(progress.last, 100)
+
+        let after = try await session.recordingStatus()
+        XCTAssertEqual(after.storedMessages, 0)
+        await session.shutdown()
     }
 
     func testCommandTimesOutRatherThanHanging() async throws {

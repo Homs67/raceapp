@@ -196,7 +196,7 @@ public final class RaceBoxSimulatedTransport: BleTransport, @unchecked Sendable 
         switch packet.kind {
         case .recordingStatus where packet.payload.isEmpty:
             guard model.supportsStandaloneRecording else { return nack(packet) }
-            let stored: UInt32 = 67_173
+            let stored: UInt32 = UInt32(storedRecordsPerDrive * storedDriveCount)
             let size: UInt32 = 196_608
             var payload: [UInt8] = [recordingConfig.enabled ? 1 : 0,
                                     UInt8(stored * 100 / size), 0, 0]
@@ -233,9 +233,16 @@ public final class RaceBoxSimulatedTransport: BleTransport, @unchecked Sendable 
             downloadTask = nil
             ack(packet)
 
-        case .memoryErase:
-            guard model.supportsStandaloneRecording else { return nack(packet) }
+        case .memoryErase where packet.payload.isEmpty:
+            // Like the hardware: no erase while recording.
+            guard model.supportsStandaloneRecording, !recordingConfig.enabled else { return nack(packet) }
             beginErase()
+
+        case .memoryErase:
+            // Payload 0xFF = cancel.
+            downloadTask?.cancel()
+            downloadTask = nil
+            ack(packet)
 
         default:
             ack(packet)
@@ -301,6 +308,7 @@ public final class RaceBoxSimulatedTransport: BleTransport, @unchecked Sendable 
                                         payload: [UInt8(percent)]).encoded())
                 try? await Task.sleep(for: .milliseconds(80))
             }
+            self.storedDriveCount = 0
             self.emit(RaceBoxPacket(messageClass: 0xFF, messageID: 0x02,
                                     payload: [0xFF, 0x24]).encoded())
         }
