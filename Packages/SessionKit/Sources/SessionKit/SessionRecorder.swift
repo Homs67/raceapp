@@ -125,6 +125,15 @@ public actor SessionRecorder {
         manifest?.motionSourceSegments = segments
     }
 
+    /// Keep an adapter diagnostic with the session (see `SessionManifest.obdNotes`).
+    public func noteObd(_ text: String, at t: TimeInterval) {
+        guard manifest != nil else { return }
+        var notes = manifest?.obdNotes ?? []
+        notes.append(.init(t: t, text: text))
+        if notes.count > 400 { notes.removeFirst(notes.count - 400) }
+        manifest?.obdNotes = notes
+    }
+
     /// OBD link dropped (from the connection controller) — opens a gap record.
     public func obdLinkLost(at t: TimeInterval) {
         guard manifest != nil, obdSampleSeen, openObdGapStart == nil else { return }

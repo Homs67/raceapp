@@ -129,6 +129,12 @@ final class RecordingCoordinator {
         return true
     }
 
+    /// CAN stream diagnostics from the connection controller, kept in the manifest.
+    func noteCanStream(_ text: String, at t: TimeInterval) {
+        guard let recorder else { return }
+        Task { await recorder.noteObd(text, at: t) }
+    }
+
     /// The connection controller reports adapter loss so gaps get marked (R1.8).
     func noteObdLinkLost() {
         guard let recorder else { return }

@@ -44,6 +44,9 @@ final class AppModel {
         connection.onObdLinkLost = { [recording] in
             recording.noteObdLinkLost()
         }
+        connection.onCanStreamNote = { [recording] text, t in
+            recording.noteCanStream(text, at: t)
+        }
         sensors.onBackgroundLocationStatusChange = { [weak self] status in
             self?.backgroundLocationStatus = status
         }

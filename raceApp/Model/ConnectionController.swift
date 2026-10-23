@@ -41,6 +41,9 @@ final class ConnectionController {
     private(set) var activeTrack: Track?
     /// Recorder hook — set by AppModel so link drops mark gaps (R1.8).
     var onObdLinkLost: (@MainActor () -> Void)?
+    /// CAN stream diagnostics (probe verdicts, mode, 30 s tallies) for the
+    /// session manifest, stamped with monotonic time.
+    var onCanStreamNote: (@MainActor (String, TimeInterval) -> Void)?
     /// Set by AppModel: is a session being recorded right now? Used to resume
     /// CAN streaming after a mid-session reconnect.
     var isRecordingActive: (() -> Bool)?
@@ -272,6 +275,8 @@ final class ConnectionController {
                     bus.publish(.obd(channel), value, at: t)
                 case .mode(let text):
                     self?.canStreamMode = text
+                case .note(let text):
+                    self?.onCanStreamNote?(text, monotonicNow())
                 }
             }
         }

@@ -150,7 +150,7 @@ final class CanSignalTests: XCTestCase {
             switch reading {
             case .can(let key, _, _): keys.insert(key)
             case .mode(let text): modes.append(text)
-            case .obd: break
+            case .obd, .note: break
             }
             iterations += 1
             if keys.isSuperset(of: ["canRpm", "accelPedal", "steeringAngle", "brakePos"]) || iterations > 200 { break }
@@ -220,7 +220,7 @@ final class CanSignalTests: XCTestCase {
                 if key == "steeringAngle", abs(value) < 0.01 { sawSteering = true }
             case .obd(let channel, let value, _):
                 if channel == .coolantTemp, abs(value - 50) < 0.01 { sawCoolant = true }
-            case .mode:
+            case .mode, .note:
                 break
             }
             iterations += 1

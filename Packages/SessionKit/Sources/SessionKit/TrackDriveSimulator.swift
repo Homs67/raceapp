@@ -33,10 +33,16 @@ public struct TrackDriveSimulator: Sendable {
         public var topSpeedMps: Double
         public var maxAccelG: Double
         public var maxBrakeG: Double
+        /// Wheel power per kg of car (W/kg) — ND2 ≈ 98 kW at the wheels / 1,150 kg.
+        public var powerPerKg: Double
+        /// Aero + rolling drag as deceleration per (m/s)² — ½·ρ·CdA / m.
+        public var dragPerMeter: Double
         public init(pace: Double = 0.85, grip: Double = 1.0, topSpeedMps: Double = 62,
-                    maxAccelG: Double = 0.55, maxBrakeG: Double = 1.0) {
+                    maxAccelG: Double = 0.55, maxBrakeG: Double = 1.0,
+                    powerPerKg: Double = 85, dragPerMeter: Double = 0.00032) {
             self.pace = pace; self.grip = grip; self.topSpeedMps = topSpeedMps
             self.maxAccelG = maxAccelG; self.maxBrakeG = maxBrakeG
+            self.powerPerKg = powerPerKg; self.dragPerMeter = dragPerMeter
         }
     }
 
@@ -55,6 +61,7 @@ public struct TrackDriveSimulator: Sendable {
     private let v: [Double]        // speed profile at each point (m/s)
     private let tAt: [Double]      // cumulative time at each point (s)
     private let signedCurv: [Double] // 1/r with sign (+ right turn)
+    private let accelG: [Double]     // longitudinal g at each point, smoothed
     public let lapLengthMeters: Double
     public let lapTime: TimeInterval
 
@@ -94,6 +101,10 @@ public struct TrackDriveSimulator: Sendable {
             let k = denom < 1e-6 ? 0 : (2 * abs(cross)) / denom
             curv[i] = k * (cross >= 0 ? -1 : 1)             // + right turn
         }
+        // OSM centerlines wobble at the metre scale; a car's path doesn't. Average the
+        // curvature over ~±25 m so lateral g builds and fades like a real corner.
+        let spacing = s[n] / Double(n)
+        curv = Self.smoothed(curv, halfWindow: max(1, Int((25 / spacing).rounded())), passes: 2)
         self.signedCurv = curv
 
         // Speed profile: grip-limited cap, then braking (backward) & accel (forward) passes.
@@ -114,10 +125,23 @@ public struct TrackDriveSimulator: Sendable {
             for step in 0..<n {                             // forward: accel limit
                 let i = step % n, h = (i - 1 + n) % n
                 let seg = s[h + 1] - s[h]                    // distance from h to i
-                v[i] = min(v[i], (v[h] * v[h] + 2 * aA * seg).squareRoot())
+                // Traction-limited at low speed, power- and drag-limited at high speed,
+                // so long g fades toward zero down a straight instead of staying pinned.
+                let aPow = config.powerPerKg / max(v[h], 5) - config.dragPerMeter * v[h] * v[h]
+                let a = max(0, min(aA, aPow))
+                v[i] = min(v[i], (v[h] * v[h] + 2 * a * seg).squareRoot())
             }
         }
         self.v = v
+
+        // Longitudinal g per point from v·dv/ds, smoothed over ~±15 m: per-segment
+        // differences on a 4 m grid are spiky, a real car's pitch isn't.
+        var acc = [Double](repeating: 0, count: n)
+        for i in 0..<n {
+            let ds = s[i + 1] - s[i], j = (i + 1) % n
+            acc[i] = ds < 1e-6 ? 0 : (v[j] * v[j] - v[i] * v[i]) / (2 * ds) / Self.g
+        }
+        self.accelG = Self.smoothed(acc, halfWindow: max(1, Int((15 / spacing).rounded())), passes: 2)
 
         // Time parameterisation: dt = ds / average speed over each segment.
         var tAt = [Double](repeating: 0, count: n + 1)
@@ -143,14 +167,30 @@ public struct TrackDriveSimulator: Sendable {
         let f = segT < 1e-6 ? 0 : (tl - tAt[i]) / segT
         let a = pts[i], b = pts[(i + 1) % n]
         let pos = GeoPoint(lat: a.lat + (b.lat - a.lat) * f, lon: a.lon + (b.lon - a.lon) * f)
-        let speed = v[i] + (v[(i + 1) % n] - v[i]) * f
+        let j = (i + 1) % n
+        let speed = v[i] + (v[j] - v[i]) * f
         let ds = s[i + 1] - s[i]
-        let dv = v[(i + 1) % n] - v[i]
-        let longG = ds < 1e-6 ? 0 : (speed * dv / ds) / Self.g   // v·dv/ds = a
-        let latG = signedCurv[i] * speed * speed / Self.g
+        // Blend between points so g changes smoothly rather than stepping every 4 m.
+        let longG = accelG[i] + (accelG[j] - accelG[i]) * f
+        let latG = (signedCurv[i] + (signedCurv[j] - signedCurv[i]) * f) * speed * speed / Self.g
         return Sample(lap: lap, distance: s[i] + ds * f, position: pos,
                       headingDeg: Self.bearing(a, b), speedMps: max(0, speed),
                       lateralG: latG, longitudinalG: longG)
+    }
+
+    /// Circular moving average (the lap is a loop), applied `passes` times.
+    private static func smoothed(_ a: [Double], halfWindow w: Int, passes: Int) -> [Double] {
+        let n = a.count
+        var out = a
+        for _ in 0..<passes {
+            let src = out
+            for i in 0..<n {
+                var sum = 0.0
+                for d in -w...w { sum += src[(i + d + n) % n] }
+                out[i] = sum / Double(2 * w + 1)
+            }
+        }
+        return out
     }
 
     // MARK: - geo helpers

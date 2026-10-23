@@ -93,7 +93,7 @@ public struct DemoDrive {
 
     /// Derive coherent RPM/gear/throttle for a given road speed (m/s), using the
     /// full ND2 6-speed ratios. Used when a track simulator supplies the speed:
-    /// picks the highest gear that keeps RPM in a healthy band, and infers
+    /// picks the lowest gear that stays under ~6,500 rpm (how you drive on track), and infers
     /// throttle from longitudinal acceleration (on-power vs. braking vs. cruise).
     public static func derive(speedMps: Double, longitudinalG: Double) -> DemoSample {
         let ratios6 = [5.087, 2.991, 2.035, 1.594, 1.286, 1.000]
@@ -101,8 +101,8 @@ public struct DemoDrive {
         func rpm(gear g: Int) -> Double {
             speedKmh / (tireCircumference / 60 * 3.6) * ratios6[g] * finalDrive
         }
-        var gear = 0
-        for g in 1..<ratios6.count where rpm(gear: g) >= 2000 { gear = g }
+        var gear = ratios6.count - 1
+        for g in 0..<ratios6.count where rpm(gear: g) <= 6500 { gear = g; break }
         let r = min(6600, max(850, rpm(gear: gear)))
         let throttle: Double
         if longitudinalG > 0.03 { throttle = min(100, 45 + longitudinalG * 90) }

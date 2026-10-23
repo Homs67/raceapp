@@ -192,6 +192,9 @@ public actor CanMonitorSession {
         case can(key: String, value: Double, t: TimeInterval)
         case obd(channel: ObdChannel, value: Double, t: TimeInterval)
         case mode(String)
+        /// Diagnostics worth keeping with the session: probe verdicts, mode
+        /// changes, and a tally every 30 s of frames per ID and overflows.
+        case note(String)
     }
 
     /// One hardware filter setting: an `ATCM` mask / `ATCF` filter pair that
@@ -283,8 +286,11 @@ public actor CanMonitorSession {
         let ids = CanSignalMap.frameIDs(signals)
         let priority = Self.priorityFrameID(signals)
         var schedule = await planSchedule(ids: ids, priority: priority, combine: combineFilters,
-                                          probe: probe, minHz: minCombinedHz)
+                                          probe: probe, minHz: minCombinedHz,
+                                          continuation: continuation)
         continuation.yield(.mode(Self.describe(schedule, dwell: dwell)))
+        continuation.yield(.note("mode: " + Self.describe(schedule, dwell: dwell)))
+        var tally = StreamTally(since: monotonicNow())
 
         var lastInterlude = monotonicNow()
         var slot = 0
@@ -311,13 +317,15 @@ public actor CanMonitorSession {
                     var overflowed = false
                     for (t, line) in lines {
                         if let frame = CanFrameParser.parse(line, t: t) {
-                            emit(frame, signals: signals, continuation: continuation)
+                            emit(frame, signals: signals, tally: &tally, continuation: continuation)
                         } else if Self.isBufferFull(line) {
                             overflowed = true
                         }
                     }
                     let now = monotonicNow()
+                    if let report = tally.reportIfDue(now: now) { continuation.yield(.note(report)) }
                     if overflowed {
+                        tally.overflows += 1
                         overflows.append(now)
                         overflows.removeAll { now - $0 > 10 }
                         if overflows.count >= 3 { healthy = false; break }
@@ -341,16 +349,20 @@ public actor CanMonitorSession {
                     mark("# combined filter unhealthy → rotating")
                     schedule = Self.rotation(of: ids.map { FilterGroup(ids: [$0]) }, priority: priority)
                     continuation.yield(.mode(Self.describe(schedule, dwell: dwell)))
+                    continuation.yield(.note("combined filter unhealthy → " + Self.describe(schedule, dwell: dwell)))
                 }
                 continue
             }
 
             try? await Task.sleep(for: dwell)
             await stopMonitor()
+            tally.slots += 1
             for (t, line) in takeStamped() {
+                if Self.isBufferFull(line) { tally.overflows += 1; continue }
                 guard let frame = CanFrameParser.parse(line, t: t), group.ids.contains(frame.id) else { continue }
-                emit(frame, signals: signals, continuation: continuation)
+                emit(frame, signals: signals, tally: &tally, continuation: continuation)
             }
+            if let report = tally.reportIfDue(now: monotonicNow()) { continuation.yield(.note(report)) }
             if !interludePids.isEmpty, monotonicNow() - lastInterlude >= interludeEvery {
                 lastInterlude = monotonicNow()
                 await pollSlowPids(interludePids, into: continuation)
@@ -364,16 +376,17 @@ public actor CanMonitorSession {
     /// take it, else RPM's frame alone alternating with the rest combined,
     /// else plain single-ID rotation.
     private func planSchedule(ids: [UInt32], priority: UInt32?, combine: Bool,
-                              probe: Duration, minHz: Double) async -> [FilterGroup] {
+                              probe: Duration, minHz: Double,
+                              continuation: AsyncStream<CanStreamReading>.Continuation) async -> [FilterGroup] {
         let singles = ids.map { FilterGroup(ids: [$0]) }
         guard combine, ids.count > 1 else { return Self.rotation(of: singles, priority: priority) }
 
         let all = FilterGroup(ids: ids)
-        if await passes(all, probe: probe, minHz: minHz) { return [all] }
+        if await passes(all, probe: probe, minHz: minHz, continuation: continuation) { return [all] }
 
         if let priority, ids.count > 2 {
             let rest = FilterGroup(ids: ids.filter { $0 != priority })
-            if await passes(rest, probe: probe, minHz: minHz) {
+            if await passes(rest, probe: probe, minHz: minHz, continuation: continuation) {
                 return Self.rotation(of: [FilterGroup(ids: [priority]), rest], priority: priority)
             }
         }
@@ -382,7 +395,8 @@ public actor CanMonitorSession {
 
     /// Run the monitor briefly through `group`'s mask and judge it: no
     /// BUFFER FULL, and every wanted ID arriving at a usable rate.
-    private func passes(_ group: FilterGroup, probe: Duration, minHz: Double) async -> Bool {
+    private func passes(_ group: FilterGroup, probe: Duration, minHz: Double,
+                        continuation: AsyncStream<CanStreamReading>.Continuation) async -> Bool {
         var mask: UInt32? = nil
         await select(group, currentMask: &mask)
         clear()
@@ -402,10 +416,12 @@ public actor CanMonitorSession {
         let seconds = max(probe.seconds, 0.001)
         let rates = group.ids.map { Double(counts[$0] ?? 0) / seconds }
         let ok = !overflowed && rates.allSatisfy { $0 >= minHz }
-        mark("# probe \(group.label): \(ok ? "pass" : "fail")"
-             + (overflowed ? " (BUFFER FULL)" : "")
-             + " · " + zip(group.ids, rates).map { String(format: "0x%03X %.0f Hz", $0, $1) }.joined(separator: ", ")
-             + " · \(lines.count) lines")
+        let summary = "probe \(group.label): \(ok ? "pass" : "fail")"
+            + (overflowed ? " (BUFFER FULL)" : "")
+            + " · " + zip(group.ids, rates).map { String(format: "0x%03X %.0f Hz", $0, $1) }.joined(separator: ", ")
+            + " · \(lines.count) lines"
+        mark("# " + summary)
+        continuation.yield(.note(summary))
         return ok
     }
 
@@ -423,8 +439,30 @@ public actor CanMonitorSession {
         await sendRaw(" ", awaitingPromptFor: .milliseconds(250))
     }
 
+    /// Running counts for the periodic diagnostics note.
+    private struct StreamTally {
+        var since: TimeInterval
+        var frames: [UInt32: Int] = [:]
+        var overflows = 0
+        var slots = 0
+
+        mutating func reportIfDue(now: TimeInterval, every: TimeInterval = 30) -> String? {
+            guard now - since >= every else { return nil }
+            let secs = now - since
+            let perID = frames.keys.sorted().map { id in
+                String(format: "0x%03X %.0f Hz", id, Double(frames[id] ?? 0) / secs)
+            }.joined(separator: ", ")
+            let text = String(format: "%.0f s: %@%@ · BUFFER FULL ×%d · %d slots",
+                              secs, perID.isEmpty ? "no frames" : perID, "", overflows, slots)
+            self = StreamTally(since: now)
+            return text
+        }
+    }
+
     private func emit(_ frame: CanFrame, signals: [CanSignal],
+                      tally: inout StreamTally,
                       continuation: AsyncStream<CanStreamReading>.Continuation) {
+        tally.frames[frame.id, default: 0] += 1
         for signal in signals where signal.frameID == frame.id {
             if let value = signal.decode(frame.data) {
                 continuation.yield(.can(key: signal.key, value: value, t: frame.t))

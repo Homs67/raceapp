@@ -25,6 +25,11 @@ Schema: `Track` in `../Model/Track.swift` (v1). Loaded by `TrackDatabase.all`.
 - **Start/finish gate:** **approximate** (`startFinish.approximate == true`). Best-effort
   placement on the front straight. Must be confirmed against a real recorded lap before
   lap times can be trusted.
+- **Direction:** the centerline is stored in racing order, and `direction` is computed
+  from it. OSM doesn't guarantee way direction: Big Willow's way runs counter-clockwise,
+  so the build reverses it (`"reverse": True`). This matters: `LapTimer` ignores gate
+  crossings against `centerline[0] → centerline[1]`, and `TrackProgress` counts distance
+  in point order.
 - **Corner numbering:** **auto-derived** from centerline curvature, numbered in driving
   order — this is *not* guaranteed to match the circuit's official numbering (some
   official "turns" are gentle kinks below the curvature threshold; some single turns have
@@ -47,8 +52,13 @@ mind before treating a curated track set as proprietary.
 Everything here is reproducible from `../../tools/build_tracks.py`:
 
 ```
-python3 tools/build_tracks.py        # from repo root — fetches OSM, rebuilds all JSON
+python3 tools/build_tracks.py                # from repo root — fetches OSM, rebuilds all JSON
+python3 tools/build_tracks.py big-willow     # just one track
 ```
+
+If every Overpass mirror is down, the script falls back to the main OSM API for the
+specific way ids it uses. The loop is resampled all the way round, including the closing
+segment back to the first node (a closed OSM way can end with one long straight).
 
 To add a track: find its OSM raceway way id(s), add a `build({...})` call in `main()`
 with a bounding box, start/finish anchor, and per-track curvature threshold, then re-run.

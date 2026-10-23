@@ -175,6 +175,19 @@ public struct SessionManifest: Codable, Equatable, Sendable, Identifiable {
     }
     /// Effective OBD poll timing from recorded samples.
     public var obdTiming: ObdTiming?
+    /// What the adapter was doing while CAN streaming: filter probe verdicts,
+    /// the chosen mode, and a frames-per-ID tally every 30 s. This is how a
+    /// drive with blank gauges gets diagnosed from its export alone.
+    public var obdNotes: [ObdNote]?
+
+    public struct ObdNote: Codable, Equatable, Sendable {
+        public var t: TimeInterval
+        public var text: String
+        public init(t: TimeInterval, text: String) {
+            self.t = t
+            self.text = text
+        }
+    }
 
     public init(id: UUID = UUID(), startedAtUTC: Date, startUptime: TimeInterval,
                 status: Status = .recording, appVersion: String? = nil, units: String? = nil,
