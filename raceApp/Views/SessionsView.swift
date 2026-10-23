@@ -863,11 +863,14 @@ struct SessionDetailView: View {
         Task.detached {
             let output = FileManager.default.temporaryDirectory
                 .appendingPathComponent("export-\(manifest.id.uuidString)")
-            let files = try? SessionExporter.exportFiles(
+            // CSV + JSON sidecar only. The raw native-rate dump is ten times
+            // the size and nothing downstream needs it; it stays available
+            // from the debug tools for sample-timing audits.
+            let files = try? SessionExporter.exportLightFiles(
                 manifest: manifest, sessionDirectory: directory, to: output)
             await MainActor.run {
                 exporting = false
-                if let files { exportUrls = [files.csv, files.json, files.raw] }
+                if let files { exportUrls = [files.csv, files.json] }
             }
         }
     }
