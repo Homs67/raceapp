@@ -143,7 +143,7 @@
 <p><code>CloudDriveSync</code> (app) writes the CSV + JSON of every finished session into the app's iCloud container, visible in Files → iCloud Drive → raceApp → <em>Drives</em> and synced to any Mac on the same Apple ID. Settings → Experimental toggles it and shows the last outcome. It needs the iCloud Documents capability (<span class="path">raceApp/raceApp.entitlements</span>, container <code>iCloud.com.goodproductslab.raceApp</code>); Simulator builds sign ad hoc and get no container, so the status there reads "iCloud Drive unavailable".</p>
 
 <h2 id="import">Importing RaceBox memory</h2>
-<p>A Mini S or Micro can record on its own. Its memory is one continuous log, not files, so <span class="path">raceApp/Model/RaceBoxMemoryImporter.swift</span> reconstructs drives during download:</p>
+<p>A Mini S or Micro can record on its own. Its memory is one continuous log, not files, so <span class="path">raceApp/Model/RaceBoxMemoryImporter.swift</span> reconstructs drives during download. The download lands in a <strong>staging store</strong> (<span class="path">LiveData/racebox-staging</span>), the memory screen shows each recovered drive with a route thumbnail, time, duration, distance and top speed, and only the drives the user ticks are moved into Sessions; the rest are deleted and stay on the device until it is erased. Staging is wiped at launch and on cancel.</p>
 <ul>
   <li>A <strong>start/stop marker</strong> saved by the device closes the current drive.</li>
   <li>A <strong>gap of more than two minutes</strong> between records' own GPS timestamps also closes it — a logger unplugged mid-drive leaves no marker.</li>

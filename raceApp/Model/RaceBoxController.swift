@@ -56,10 +56,39 @@ final class RaceBoxController {
         case idle
         case downloading(received: Int, expected: Int, drives: Int)
         case erasing(percent: Int)
+        /// Downloaded and split into drives, waiting for the user to choose
+        /// which to keep. Nothing is in Sessions yet.
+        case preview([DrivePreview])
         case finished(drives: Int, records: Int)
         case erased(records: Int)
         case failed(String)
     }
+
+    /// One drive recovered from the device's log, as shown before import.
+    struct DrivePreview: Identifiable, Equatable {
+        struct Point: Equatable {
+            let lat: Double
+            let lon: Double
+        }
+        let id: UUID
+        let startedAt: Date
+        let durationSeconds: TimeInterval
+        let distanceMeters: Double
+        let maxSpeedMps: Double
+        let records: Int
+        /// Downsampled route for a thumbnail (empty when the receiver had no fix).
+        let trace: [Point]
+    }
+
+    /// Drives are downloaded into a side store first, so a preview can be
+    /// shown and unwanted drives thrown away without ever touching Sessions.
+    static var stagingStore: SessionStore {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        return SessionStore(rootDirectory: base.appendingPathComponent("LiveData/racebox-staging", isDirectory: true))
+    }
+
+    /// Fired after staged drives are moved into Sessions.
+    var onSessionsImported: (@MainActor () -> Void)?
     private(set) var memoryTask: MemoryTask = .idle
     private var memoryWork: Task<Void, Never>?
     private(set) var lastCommandResult: String?
@@ -316,18 +345,81 @@ final class RaceBoxController {
                     case .eraseProgress(let percent):
                         self.memoryTask = .erasing(percent: percent)
                     case .finished:
-                        let drives = await importer.finish()
-                        self.memoryTask = .finished(drives: drives, records: received)
+                        _ = await importer.finish()
+                        self.memoryTask = Self.previewTask(in: store, records: received)
                         return
                     }
                 }
-                let drives = await importer.finish()
-                self.memoryTask = .finished(drives: drives, records: received)
+                _ = await importer.finish()
+                self.memoryTask = Self.previewTask(in: store, records: received)
             } catch {
                 _ = await importer.finish()
                 self.memoryTask = .failed(Self.describe(error))
             }
         }
+    }
+
+    /// Describe what the download produced: a preview to choose from, or
+    /// "nothing" when the log held no drive worth keeping.
+    private static func previewTask(in staging: SessionStore, records: Int) -> MemoryTask {
+        let previews = staging.list().map { manifest -> DrivePreview in
+            let directory = staging.directory(for: manifest.id)
+            let lats = ChannelReader.samples(for: .gpsLatitude, inSessionDirectory: directory)
+            let lons = ChannelReader.samples(for: .gpsLongitude, inSessionDirectory: directory)
+            let n = min(lats.count, lons.count)
+            let stride = max(1, n / 300)
+            var trace: [DrivePreview.Point] = []
+            var i = 0
+            while i < n {
+                trace.append(.init(lat: lats[i].value, lon: lons[i].value))
+                i += stride
+            }
+            let h = manifest.highlights
+            return DrivePreview(id: manifest.id, startedAt: manifest.startedAtUTC,
+                                durationSeconds: h?.durationSeconds ?? 0,
+                                distanceMeters: h?.distanceMeters ?? 0,
+                                maxSpeedMps: h?.maxSpeedMps ?? 0,
+                                records: ChannelReader.sampleCount(for: .rbWallTime, inSessionDirectory: directory),
+                                trace: trace)
+        }
+        .sorted { $0.startedAt > $1.startedAt }
+        return previews.isEmpty ? .finished(drives: 0, records: records) : .preview(previews)
+    }
+
+    /// Move the chosen staged drives into Sessions and drop the rest.
+    func importStagedDrives(_ ids: Set<UUID>, into store: SessionStore) {
+        guard case .preview(let previews) = memoryTask else { return }
+        let staging = Self.stagingStore
+        var imported = 0
+        var records = 0
+        for preview in previews {
+            let from = staging.directory(for: preview.id)
+            if ids.contains(preview.id) {
+                let to = store.directory(for: preview.id)
+                try? FileManager.default.createDirectory(at: to.deletingLastPathComponent(),
+                                                         withIntermediateDirectories: true)
+                if (try? FileManager.default.moveItem(at: from, to: to)) != nil {
+                    imported += 1
+                    records += preview.records
+                    continue
+                }
+            }
+            try? staging.delete(preview.id)
+        }
+        Self.clearStaging()
+        memoryTask = .finished(drives: imported, records: records)
+        if imported > 0 { onSessionsImported?() }
+    }
+
+    func discardStagedDrives() {
+        Self.clearStaging()
+        memoryTask = .idle
+    }
+
+    /// Leftovers from a crash mid-download are worthless without the preview
+    /// that owned them.
+    static func clearStaging() {
+        try? FileManager.default.removeItem(at: stagingStore.rootDirectory)
     }
 
     /// Erase the device's memory. Three things the first version got wrong:
@@ -395,14 +487,15 @@ final class RaceBoxController {
                 if erasing { try? await session.cancelErase() } else { try? await session.cancelDownload() }
             }
         }
+        if !erasing { Self.clearStaging() }
         memoryTask = .idle
     }
 
     func clearMemoryResult() {
-        if case .idle = memoryTask { return }
-        if case .downloading = memoryTask { return }
-        if case .erasing = memoryTask { return }
-        memoryTask = .idle
+        switch memoryTask {
+        case .idle, .downloading, .erasing, .preview: return   // preview ends via import/discard
+        default: memoryTask = .idle
+        }
     }
 
     /// Ask the device what it is holding.

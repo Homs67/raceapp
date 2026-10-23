@@ -18,6 +18,8 @@ struct RaceBoxMemoryView: View {
     @Environment(AppModel.self) private var model
     @AppStorage("useMetricUnits") private var metric = false
     @State private var confirmErase = false
+    /// Drives ticked in the preview. Everything starts selected.
+    @State private var selectedDrives: Set<UUID> = []
 
     private var rb: RaceBoxController { model.raceBox }
     private var status: RaceBoxRecordingStatus? { rb.recordingStatus }
@@ -139,6 +141,35 @@ struct RaceBoxMemoryView: View {
                     .font(.system(size: 14, weight: .semibold)).foregroundStyle(Color.accent)
             }
             .listRowBackground(Color.cardBg)
+        case .preview(let drives):
+            Section {
+                ForEach(drives) { drive in
+                    DrivePreviewRow(drive: drive, metric: metric,
+                                    selected: selectedDrives.contains(drive.id)) {
+                        if selectedDrives.contains(drive.id) {
+                            selectedDrives.remove(drive.id)
+                        } else {
+                            selectedDrives.insert(drive.id)
+                        }
+                    }
+                }
+            } header: {
+                Text("\(drives.count) drive\(drives.count == 1 ? "" : "s") on the device")
+            } footer: {
+                Text("Nothing is in Sessions yet. Untick a drive to leave it out — it stays on the RaceBox until you erase the memory.")
+            }
+            .listRowBackground(Color.cardBg)
+            .onAppear { selectedDrives = Set(drives.map(\.id)) }
+            Section {
+                Button(selectedDrives.isEmpty ? "Import nothing" : "Import \(selectedDrives.count) drive\(selectedDrives.count == 1 ? "" : "s")") {
+                    model.importStagedRaceBoxDrives(selectedDrives)
+                }
+                .font(.system(size: 15, weight: .semibold)).foregroundStyle(Color.accent)
+                .disabled(selectedDrives.isEmpty)
+                Button("Discard download") { model.discardStagedRaceBoxDrives() }
+                    .font(.system(size: 14)).foregroundStyle(Color.recordRed)
+            }
+            .listRowBackground(Color.cardBg)
         case .finished(let drives, let recordCount):
             Section {
                 VStack(alignment: .leading, spacing: 6) {
@@ -171,7 +202,7 @@ struct RaceBoxMemoryView: View {
     private var actionsSection: some View {
         if case .idle = rb.memoryTask {
             Section {
-                Button("Download to Sessions") {
+                Button("Download and preview") {
                     model.importRaceBoxMemory()
                 }
                 .font(.system(size: 15, weight: .semibold))
@@ -203,5 +234,91 @@ struct RaceBoxMemoryView: View {
         let hours = Int(seconds) / 3600
         let minutes = (Int(seconds) % 3600) / 60
         return hours > 0 ? "\(hours) h \(minutes) min" : "\(minutes) min"
+    }
+}
+
+
+/// One recovered drive: route thumbnail, when, how long, how far, how fast.
+private struct DrivePreviewRow: View {
+    let drive: RaceBoxController.DrivePreview
+    let metric: Bool
+    let selected: Bool
+    let toggle: () -> Void
+
+    private static let when: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "EEE d MMM · HH:mm"
+        return f
+    }()
+
+    var body: some View {
+        Button(action: toggle) {
+            HStack(spacing: 14) {
+                Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 22))
+                    .foregroundStyle(selected ? Color.accent : Color.muted)
+                RouteTrace(points: drive.trace)
+                    .frame(width: 56, height: 56)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(Self.when.string(from: drive.startedAt))
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(Color.textPrimary)
+                    Text(summary)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Color.muted)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.vertical, 4)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var summary: String {
+        let units = UnitsFormatter(metric: metric)
+        let minutes = Int(drive.durationSeconds / 60)
+        let seconds = Int(drive.durationSeconds) % 60
+        let distance = units.distance(fromMeters: drive.distanceMeters)
+        let top = units.speed(fromMps: drive.maxSpeedMps)
+        var parts = [String(format: "%d:%02d", minutes, seconds)]
+        if distance >= 0.05 { parts.append(String(format: "%.1f %@", distance, units.distanceUnit)) }
+        if top >= 1 { parts.append(String(format: "top %.0f %@", top, units.speedUnit.lowercased())) }
+        if drive.trace.isEmpty { parts.append("no GPS fix") }
+        return parts.joined(separator: " · ")
+    }
+}
+
+/// Tiny route outline, scaled to fit, no map underneath.
+private struct RouteTrace: View {
+    let points: [RaceBoxController.DrivePreview.Point]
+
+    var body: some View {
+        Canvas { ctx, size in
+            guard points.count > 1 else {
+                let r: CGFloat = 4
+                ctx.fill(Path(ellipseIn: CGRect(x: size.width / 2 - r, y: size.height / 2 - r,
+                                                width: 2 * r, height: 2 * r)),
+                         with: .color(Color.muted))
+                return
+            }
+            let lats = points.map(\.lat), lons = points.map(\.lon)
+            let minLat = lats.min()!, maxLat = lats.max()!
+            let minLon = lons.min()!, maxLon = lons.max()!
+            let midLat = (minLat + maxLat) / 2
+            let lonScale = cos(midLat * .pi / 180)
+            let spanX = max((maxLon - minLon) * lonScale, 1e-6)
+            let spanY = max(maxLat - minLat, 1e-6)
+            let pad: CGFloat = 4
+            let scale = min((size.width - 2 * pad) / spanX, (size.height - 2 * pad) / spanY)
+            let w = spanX * scale, h = spanY * scale
+            let ox = (size.width - w) / 2, oy = (size.height - h) / 2
+            var path = Path()
+            for (i, p) in points.enumerated() {
+                let x = ox + ((p.lon - minLon) * lonScale) * scale
+                let y = oy + (maxLat - p.lat) * scale
+                if i == 0 { path.move(to: CGPoint(x: x, y: y)) } else { path.addLine(to: CGPoint(x: x, y: y)) }
+            }
+            ctx.stroke(path, with: .color(Color.accent), style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+        }
     }
 }

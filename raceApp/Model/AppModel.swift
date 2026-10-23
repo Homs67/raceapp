@@ -48,6 +48,8 @@ final class AppModel {
         connection.onCanStreamNote = { [recording] text, t in
             recording.noteCanStream(text, at: t)
         }
+        raceBox.onSessionsImported = { [recording] in recording.noteSessionsChanged() }
+        RaceBoxController.clearStaging()
         recording.onSessionFinalized = { [weak self] manifest in
             guard let self else { return }
             self.cloudSync.sync(manifest: manifest, sessionDirectory: self.store.directory(for: manifest.id))
@@ -189,10 +191,21 @@ final class AppModel {
     }
 
     /// Pull the logger's own recordings into Sessions.
+    /// Download the logger's memory into a staging area; the memory screen
+    /// then shows the recovered drives for the user to pick from.
     func importRaceBoxMemory() {
         let car = PreferredCar.load()?.asCarInfo ?? connection.carInfo
         let units = UserDefaults.standard.bool(forKey: "useMetricUnits") ? "metric" : "imperial"
-        raceBox.downloadStoredData(into: store, car: car, units: units)
+        RaceBoxController.clearStaging()
+        raceBox.downloadStoredData(into: RaceBoxController.stagingStore, car: car, units: units)
+    }
+
+    func importStagedRaceBoxDrives(_ ids: Set<UUID>) {
+        raceBox.importStagedDrives(ids, into: store)
+    }
+
+    func discardStagedRaceBoxDrives() {
+        raceBox.discardStagedDrives()
     }
 
     func applyRecordingIdlePolicy() {

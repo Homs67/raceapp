@@ -30,6 +30,9 @@ final class RecordingCoordinator {
     /// Bumped whenever the sessions list should refresh.
     private(set) var sessionsVersion = 0
 
+    /// Sessions were added or removed outside a recording (e.g. a RaceBox import).
+    func noteSessionsChanged() { sessionsVersion += 1 }
+
     let store: SessionStore
     private let bus: TelemetryBus
     private var recorder: SessionRecorder?
