@@ -170,7 +170,7 @@ struct RaceBoxMemoryView: View {
                     .font(.system(size: 14)).foregroundStyle(Color.recordRed)
             }
             .listRowBackground(Color.cardBg)
-        case .finished(let drives, let recordCount):
+        case .finished(let drives, let recordCount, let detail):
             Section {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(drives > 0
@@ -178,9 +178,13 @@ struct RaceBoxMemoryView: View {
                          : "Nothing to import")
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(Color.textPrimary)
-                    if recordCount > 0 {
+                    if drives > 0, recordCount > 0 {
                         Text("\(records(UInt32(recordCount))) records. They're in Sessions now, with laps, graphs and export.")
                             .font(.system(size: 12)).foregroundStyle(Color.muted)
+                    } else if let detail {
+                        Text(detail)
+                            .font(.system(size: 12)).foregroundStyle(Color.muted)
+                            .textSelection(.enabled)
                     }
                 }
                 .padding(.vertical, 2)

@@ -59,7 +59,7 @@ final class RaceBoxController {
         /// Downloaded and split into drives, waiting for the user to choose
         /// which to keep. Nothing is in Sessions yet.
         case preview([DrivePreview])
-        case finished(drives: Int, records: Int)
+        case finished(drives: Int, records: Int, detail: String? = nil)
         case erased(records: Int)
         case failed(String)
     }
@@ -327,9 +327,26 @@ final class RaceBoxController {
                 // between the reply and a late subscription is gone.
                 let events = await session.historyEvents
                 let expected = Int(try await session.startDownload())
+                let statsBefore = await session.stats
                 var received = 0
-                for await event in events {
+                var markers = 0
+                // The device's ACK is supposed to come last. If it ever comes
+                // early, keep draining until the records stop for 2 s rather
+                // than throwing away everything still in flight.
+                let (drained, relay) = AsyncStream.makeStream(of: RaceBoxHistoryEvent.self)
+                let forwarder = Task {
+                    for await event in events { relay.yield(event) }
+                    relay.finish()
+                }
+                defer { forwarder.cancel() }
+                var quietTimer: Task<Void, Never>?
+                var acked = false
+                for await event in drained {
                     if Task.isCancelled { try? await session.cancelDownload(); break }
+                    if acked {
+                        quietTimer?.cancel()
+                        quietTimer = Task { try? await Task.sleep(for: .seconds(2)); relay.finish() }
+                    }
                     switch event {
                     case .record(let message):
                         await importer.add(message)
@@ -341,17 +358,25 @@ final class RaceBoxController {
                     case .stateChange(let change):
                         // A marker closes the drive before it; `running` opens
                         // the next one.
+                        markers += 1
                         await importer.mark(running: change.state == .running)
                     case .eraseProgress(let percent):
                         self.memoryTask = .erasing(percent: percent)
                     case .finished:
-                        _ = await importer.finish()
-                        self.memoryTask = Self.previewTask(in: store, records: received)
-                        return
+                        acked = true
+                        if received >= expected { relay.finish() } else {
+                            quietTimer = Task { try? await Task.sleep(for: .seconds(2)); relay.finish() }
+                        }
                     }
                 }
+                quietTimer?.cancel()
                 _ = await importer.finish()
-                self.memoryTask = Self.previewTask(in: store, records: received)
+                let statsAfter = await session.stats
+                let detail = await Self.downloadAccounting(
+                    expected: expected, received: received, markers: markers, acked: acked,
+                    importer: importer, before: statsBefore, after: statsAfter)
+                self.lastCommandResult = "Download: " + detail
+                self.memoryTask = Self.previewTask(in: store, records: received, detail: detail)
             } catch {
                 _ = await importer.finish()
                 self.memoryTask = .failed(Self.describe(error))
@@ -359,9 +384,28 @@ final class RaceBoxController {
         }
     }
 
+    /// Everything needed to explain an empty download from the screen alone.
+    private static func downloadAccounting(expected: Int, received: Int, markers: Int, acked: Bool,
+                                           importer: RaceBoxMemoryImporter,
+                                           before: RaceBoxLinkStats, after: RaceBoxLinkStats) async -> String {
+        var parts = ["device announced \(expected) records", "\(received) history records arrived"]
+        if markers > 0 { parts.append("\(markers) start/stop markers") }
+        let live = after.dataMessages - before.dataMessages
+        if live > 0 { parts.append("\(live) live-data messages during the download") }
+        var others: [String] = []
+        for (key, count) in after.otherPackets {
+            let delta = count - (before.otherPackets[key] ?? 0)
+            if delta > 0 { others.append("\(key)×\(delta)") }
+        }
+        if !others.isEmpty { parts.append("other packets " + others.sorted().joined(separator: " ")) }
+        if !acked { parts.append("no completion ACK") }
+        parts.append(await importer.accounting)
+        return parts.joined(separator: " · ")
+    }
+
     /// Describe what the download produced: a preview to choose from, or
     /// "nothing" when the log held no drive worth keeping.
-    private static func previewTask(in staging: SessionStore, records: Int) -> MemoryTask {
+    private static func previewTask(in staging: SessionStore, records: Int, detail: String) -> MemoryTask {
         let previews = staging.list().map { manifest -> DrivePreview in
             let directory = staging.directory(for: manifest.id)
             let lats = ChannelReader.samples(for: .gpsLatitude, inSessionDirectory: directory)
@@ -383,7 +427,7 @@ final class RaceBoxController {
                                 trace: trace)
         }
         .sorted { $0.startedAt > $1.startedAt }
-        return previews.isEmpty ? .finished(drives: 0, records: records) : .preview(previews)
+        return previews.isEmpty ? .finished(drives: 0, records: records, detail: detail) : .preview(previews)
     }
 
     /// Move the chosen staged drives into Sessions and drop the rest.

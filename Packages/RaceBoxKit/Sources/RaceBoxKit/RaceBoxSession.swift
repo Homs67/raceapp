@@ -18,6 +18,11 @@ public struct RaceBoxLinkStats: Equatable, Sendable {
     public var largestNotification = 0
     /// Measured live-data rate over a trailing window.
     public var measuredHz: Double = 0
+    /// History (0xFF 0x21) records seen — what a memory download delivers.
+    public var historyMessages = 0
+    /// Packets by "FF xx" id that aren't live data, history or ACK/NACK:
+    /// how a download that delivers nothing gets diagnosed.
+    public var otherPackets: [String: Int] = [:]
     public init() {}
 }
 
@@ -224,6 +229,7 @@ public actor RaceBoxSession {
             for continuation in liveSubscribers.values { continuation.yield(message) }
 
         case .historyData:
+            stats.historyMessages += 1
             guard let message = RaceBoxDataMessage(payload: packet.payload) else { return }
             emitHistory(.record(message))
 
@@ -247,6 +253,7 @@ public actor RaceBoxSession {
             resumeWaiters(key: Self.key(ack.messageClass, ack.messageID), with: packet)
 
         default:
+            stats.otherPackets[String(format: "%02X %02X", packet.messageClass, packet.messageID), default: 0] += 1
             resumeWaiters(for: packet)
         }
     }

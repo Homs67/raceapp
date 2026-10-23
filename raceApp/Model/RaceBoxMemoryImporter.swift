@@ -36,6 +36,11 @@ actor RaceBoxMemoryImporter {
     private var lastDate: Date?
     private var recordsInDrive = 0
     private(set) var driveCount = 0
+    /// Why records didn't become drives, for the result screen.
+    private(set) var recordsWithoutTime = 0
+    private(set) var recordsBeforeStart = 0
+    private(set) var shortDrivesDropped = 0
+    private(set) var recordsAccepted = 0
 
     init(store: SessionStore, car: SessionManifest.CarInfo?, units: String?) {
         self.store = store
@@ -51,7 +56,7 @@ actor RaceBoxMemoryImporter {
     }
 
     func add(_ message: RaceBoxDataMessage) async {
-        guard let date = message.timestamp else { return }
+        guard let date = message.timestamp else { recordsWithoutTime += 1; return }
 
         if let last = lastDate, date.timeIntervalSince(last) > Self.driveGapSeconds {
             await closeDrive()
@@ -64,7 +69,8 @@ actor RaceBoxMemoryImporter {
         // Imported sessions get their own timeline starting at zero; the
         // manifest carries the real wall-clock start.
         let t = date.timeIntervalSince(driveStart)
-        guard t >= 0 else { return }
+        guard t >= 0 else { recordsBeforeStart += 1; return }
+        recordsAccepted += 1
 
         await recorder.ingest(channel: .rbSatellites, value: Double(message.satellites), at: t)
         await recorder.ingest(channel: .rbFixStatus, value: Double(message.fixStatus.rawValue), at: t)
@@ -102,6 +108,15 @@ actor RaceBoxMemoryImporter {
         return driveCount
     }
 
+    /// One line on where the records went.
+    var accounting: String {
+        var parts = ["\(recordsAccepted) written"]
+        if recordsWithoutTime > 0 { parts.append("\(recordsWithoutTime) without a date") }
+        if recordsBeforeStart > 0 { parts.append("\(recordsBeforeStart) out of order") }
+        if shortDrivesDropped > 0 { parts.append("\(shortDrivesDropped) stub\(shortDrivesDropped == 1 ? "" : "s") under \(Self.minimumRecords) records dropped") }
+        return parts.joined(separator: " · ")
+    }
+
     private func openDrive(at date: Date) async {
         let recorder = SessionRecorder(store: store)
         do {
@@ -124,6 +139,7 @@ actor RaceBoxMemoryImporter {
                 driveCount += 1
             } else {
                 // A few stray records either side of a marker aren't a drive.
+                shortDrivesDropped += 1
                 try? store.delete(manifest.id)
             }
         }
