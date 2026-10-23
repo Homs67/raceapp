@@ -113,6 +113,7 @@
 				FA8169432FFD901600F90252 /* Sources */,
 				FA8169442FFD901600F90252 /* Frameworks */,
 				FA8169452FFD901600F90252 /* Resources */,
+				FA81A0B12FFE000000C0FFEE /* Stamp build info */,
 			);
 			buildRules = (
 			);
@@ -251,6 +252,28 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		FA81A0B12FFE000000C0FFEE /* Stamp build info */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Stamp build info";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -e\nPLIST=\"${TARGET_BUILD_DIR}/${INFOPLIST_PATH}\"\nCOMMIT=$(cd \"${SRCROOT}\" && git rev-parse --short HEAD 2>/dev/null || echo unknown)\nif ! (cd \"${SRCROOT}\" && git diff --quiet HEAD -- . 2>/dev/null); then COMMIT=\"${COMMIT}+\"; fi\nDATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)\nfor KEY in RaceAppGitCommit RaceAppBuildDate; do /usr/libexec/PlistBuddy -c \"Delete :$KEY\" \"$PLIST\" 2>/dev/null || true; done\n/usr/libexec/PlistBuddy -c \"Add :RaceAppGitCommit string $COMMIT\" \"$PLIST\"\n/usr/libexec/PlistBuddy -c \"Add :RaceAppBuildDate string $DATE\" \"$PLIST\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		FA8169432FFD901600F90252 /* Sources */ = {
@@ -421,6 +444,8 @@
 				DEVELOPMENT_TEAM = JQCNP2TY2K;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				CODE_SIGN_ENTITLEMENTS = raceApp/raceApp.entitlements;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				INFOPLIST_FILE = Config/Info.plist;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -454,6 +479,8 @@
 				DEVELOPMENT_TEAM = JQCNP2TY2K;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				CODE_SIGN_ENTITLEMENTS = raceApp/raceApp.entitlements;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				INFOPLIST_FILE = Config/Info.plist;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;

@@ -560,10 +560,23 @@ struct SettingsView: View {
                 }
             }
             .tint(Color.accent)
+            Toggle(isOn: Binding(
+                get: { model.cloudSync.isEnabled },
+                set: { model.cloudSync.isEnabled = $0 }
+            )) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Save drives to iCloud Drive")
+                        .font(.system(size: 15))
+                    Text(model.cloudSync.status ?? "CSV + JSON of every session, in Files → iCloud Drive → raceApp → Drives")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Color.muted)
+                }
+            }
+            .tint(Color.accent)
         } header: {
             Text("Experimental")
         } footer: {
-            Text("Listens to the car's CAN bus for data OBD-II can't provide. Currently maps the Mazda MX-5 ND. Read-only. The app first tries to watch every signal through one filter; if the adapter can't keep up it rotates between them a few times a second, and the dashboard holds the last value (dimmed) in between. Slow OBD data (coolant, fuel, voltage) is polled once a minute.")
+            Text("Listens to the car's CAN bus for data OBD-II can't provide. Currently maps the Mazda MX-5 ND. Read-only. The app first tries to watch every signal through one filter; if the adapter can't keep up it rotates between them a few times a second, and the dashboard holds the last value (dimmed) in between. Slow OBD data (coolant, fuel, voltage) is polled once a minute.\n\nBuild \(BuildInfo.description)")
         }
         .listRowBackground(Color.cardBg)
         .textCase(nil)

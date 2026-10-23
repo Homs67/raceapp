@@ -45,11 +45,7 @@ struct DiagnosticsReport: Codable {
                           milOn: nil, dtcCount: nil, channels: [])
     }
 
-    static var appVersionString: String {
-        let short = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
-        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
-        return "\(short) (\(build))"
-    }
+    static var appVersionString: String { BuildInfo.description }
 
     func jsonData() -> Data {
         let encoder = JSONEncoder()

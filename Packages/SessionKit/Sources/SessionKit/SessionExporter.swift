@@ -166,18 +166,30 @@ public enum SessionExporter {
     /// Write CSV + enriched JSON sidecar + native raw dump; returns URLs for the share sheet.
     public static func exportFiles(manifest: SessionManifest, sessionDirectory: URL,
                                    to outputDirectory: URL) throws -> (csv: URL, json: URL, raw: URL) {
+        let light = try exportLightFiles(manifest: manifest, sessionDirectory: sessionDirectory, to: outputDirectory)
+        let rawUrl = outputDirectory.appendingPathComponent(baseName(for: manifest) + "-raw.json")
+        try rawSamplesJson(manifest: manifest, sessionDirectory: sessionDirectory)
+            .write(to: rawUrl, options: .atomic)
+        return (light.csv, light.json, rawUrl)
+    }
+
+    /// CSV + JSON sidecar only — everything an analysis needs, a few MB
+    /// instead of the raw dump's tens. This is what syncs to iCloud Drive.
+    public static func exportLightFiles(manifest: SessionManifest, sessionDirectory: URL,
+                                        to outputDirectory: URL) throws -> (csv: URL, json: URL) {
         try FileManager.default.createDirectory(at: outputDirectory, withIntermediateDirectories: true)
-        let baseName = "LiveData-" + isoDayStamp(manifest.startedAtUTC)
-        let csvUrl = outputDirectory.appendingPathComponent(baseName + ".csv")
-        let jsonUrl = outputDirectory.appendingPathComponent(baseName + ".json")
-        let rawUrl = outputDirectory.appendingPathComponent(baseName + "-raw.json")
+        let base = baseName(for: manifest)
+        let csvUrl = outputDirectory.appendingPathComponent(base + ".csv")
+        let jsonUrl = outputDirectory.appendingPathComponent(base + ".json")
         try csv(manifest: manifest, sessionDirectory: sessionDirectory)
             .data(using: .utf8)!.write(to: csvUrl, options: .atomic)
         try sidecarJson(manifest: manifest, sessionDirectory: sessionDirectory)
             .write(to: jsonUrl, options: .atomic)
-        try rawSamplesJson(manifest: manifest, sessionDirectory: sessionDirectory)
-            .write(to: rawUrl, options: .atomic)
-        return (csvUrl, jsonUrl, rawUrl)
+        return (csvUrl, jsonUrl)
+    }
+
+    public static func baseName(for manifest: SessionManifest) -> String {
+        "LiveData-" + isoDayStamp(manifest.startedAtUTC)
     }
 
     static func format(_ value: Double) -> String {

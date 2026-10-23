@@ -138,6 +138,9 @@
   <li><strong>JSON sidecar</strong> — the manifest enriched with measured rates per channel (<code>ChannelStats</code>), OBD timing, and the post-session G-force check (<code>GForceValidator</code>).</li>
   <li><strong>Raw JSON</strong> — every sample at its native rate, unresampled, for accuracy audits.</li>
 </ul>
+<p>The manifest's <code>appVersion</code> carries the full build stamp (version, build number, git commit, build time — see <a href="workflow.html#build">Workflow</a>), so any export can be matched to the code that recorded it. For a data question the CSV and the JSON sidecar are enough; the raw dump is only for sample-timing audits.</p>
+<h4>iCloud Drive mirror</h4>
+<p><code>CloudDriveSync</code> (app) writes the CSV + JSON of every finished session into the app's iCloud container, visible in Files → iCloud Drive → raceApp → <em>Drives</em> and synced to any Mac on the same Apple ID. Settings → Experimental toggles it and shows the last outcome. It needs the iCloud Documents capability (<span class="path">raceApp/raceApp.entitlements</span>, container <code>iCloud.com.goodproductslab.raceApp</code>); Simulator builds sign ad hoc and get no container, so the status there reads "iCloud Drive unavailable".</p>
 
 <h2 id="import">Importing RaceBox memory</h2>
 <p>A Mini S or Micro can record on its own. Its memory is one continuous log, not files, so <span class="path">raceApp/Model/RaceBoxMemoryImporter.swift</span> reconstructs drives during download:</p>

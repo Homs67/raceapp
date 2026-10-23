@@ -39,6 +39,9 @@ final class RecordingCoordinator {
     private var ingestContinuation: AsyncStream<(ChannelId, Double, TimeInterval)>.Continuation?
     private var didPostQuietWarning = false
     var onRecordingDidStop: (@MainActor () -> Void)?
+    /// The session is saved and final (location name included when it was
+    /// known at stop). Used to mirror the export to iCloud Drive.
+    var onSessionFinalized: (@MainActor (SessionManifest) -> Void)?
     /// Runs before telemetry finalize (e.g. stop camera writers and append clips).
     var beforeStop: (@MainActor () async -> Void)?
     /// Re-assert GPS / motion keep-alive when the scene backgrounds.
@@ -71,7 +74,7 @@ final class RecordingCoordinator {
             sessionId = try await recorder.start(
                 car: car,
                 units: metricUnits ? "metric" : "imperial",
-                appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String,
+                appVersion: BuildInfo.description,
                 supportedPids: supportedPids.isEmpty ? nil : supportedPids
             )
         } catch {
@@ -183,15 +186,16 @@ final class RecordingCoordinator {
             postAutoStopNotification(duration: manifest.highlights?.durationSeconds ?? 0)
         }
         if let manifest {
+            var final = manifest
             if let startedLocation, manifest.locationName == nil {
-                var updated = manifest
-                updated.locationName = startedLocation
-                try? store.save(updated)
+                final.locationName = startedLocation
+                try? store.save(final)
             } else if manifest.locationName == nil,
                       let lat = snapshot[.gpsLatitude]?.value,
                       let lon = snapshot[.gpsLongitude]?.value {
                 geocodeAndSave(manifest: manifest, latitude: lat, longitude: lon)
             }
+            onSessionFinalized?(final)
         }
     }
 

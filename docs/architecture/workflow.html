@@ -33,6 +33,8 @@ cd Packages/BleKit     &amp;&amp; swift test     # ~6</code></pre>
 
 xcodebuild test -project raceApp.xcodeproj -scheme raceApp \
   -destination 'platform=iOS Simulator,name=iPhone 17' -only-testing:raceAppTests</code></pre>
+<h4>Build stamp</h4>
+<p>A "Stamp build info" run-script phase writes <code>RaceAppGitCommit</code> (short hash, with a trailing <code>+</code> when the tree had uncommitted changes) and <code>RaceAppBuildDate</code> into the built Info.plist on every build. <code>BuildInfo.description</code> reads them back, and session manifests, diagnostics and the Settings footer all quote it — so "which build was that drive on?" is answered by the export itself. The phase needs <code>ENABLE_USER_SCRIPT_SANDBOXING = NO</code> on the app target.</p>
 <div class="callout note"><span class="label">Note</span>
 <p>The app target uses <strong>synchronized file groups</strong>: anything you add under <code>raceApp/</code> is compiled (or bundled) automatically — no project-file edits. Because resources are flattened, bundled JSON and fonts are loaded by bare file name.</p></div>
 

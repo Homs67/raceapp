@@ -17,6 +17,7 @@ final class AppModel {
     let store = SessionStore.standard()
     let connection: ConnectionController
     let recording: RecordingCoordinator
+    let cloudSync = CloudDriveSync()
     let camera = SessionCameraRecorder()
     let metrics: SessionMetrics
     /// RaceBox link — its own BLE central, so it can run alongside the OBD adapter.
@@ -46,6 +47,10 @@ final class AppModel {
         }
         connection.onCanStreamNote = { [recording] text, t in
             recording.noteCanStream(text, at: t)
+        }
+        recording.onSessionFinalized = { [weak self] manifest in
+            guard let self else { return }
+            self.cloudSync.sync(manifest: manifest, sessionDirectory: self.store.directory(for: manifest.id))
         }
         sensors.onBackgroundLocationStatusChange = { [weak self] status in
             self?.backgroundLocationStatus = status
