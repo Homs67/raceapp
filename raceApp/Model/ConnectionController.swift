@@ -289,6 +289,9 @@ final class ConnectionController {
 
     private func stopCanStream() {
         guard canStreamActive else { return }
+        #if DEBUG
+        if isReplay { return }
+        #endif
         canStreamActive = false
         canStreamMode = nil
         canStreamTask?.cancel()
@@ -316,6 +319,9 @@ final class ConnectionController {
     /// the reconnect handshake restarts from ATZ anyway.
     private func abortCanStreamAfterLinkLoss() {
         guard canStreamActive else { return }
+        #if DEBUG
+        if isReplay { return }
+        #endif
         canStreamActive = false
         canStreamMode = nil
         canStreamTask?.cancel()
@@ -578,6 +584,21 @@ final class ConnectionController {
         guard isDemo else { return }
         forget()
     }
+
+    #if DEBUG
+    /// A replayed drive owns the bus; this controller just has to look the
+    /// way it looked in the car — adapter live, CAN streaming — so the
+    /// dashboard applies the same freshness and hold rules.
+    private(set) var isReplay = false
+    func startReplay() {
+        teardownSession(dropLink: true)
+        isDemo = true
+        isReplay = true
+        state = .live
+        canStreamActive = true
+        canStreamMode = "replay of a recorded drive"
+    }
+    #endif
 
     // MARK: - Connect + handshake
 

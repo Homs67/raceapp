@@ -107,11 +107,37 @@ final class AppModel {
         backgroundLocationStatus = sensors.backgroundLocationStatus
     }
 
+    #if DEBUG
+    private(set) var replay: ReplayFeed?
+    #endif
+
     func onLaunch() {
         guard !launched else { return }
         launched = true
         SofiaFace.audit()
         recording.recoverAtLaunch()
+        #if DEBUG
+        // `-replay <path>`: a recorded drive owns the bus. The phone's own
+        // sensors and both links stay out of it, but look connected.
+        if let path = Self.argument(after: "-replay") {
+            let speed = Self.argument(after: "-replay-speed").flatMap(Double.init) ?? 1
+            let from = Self.argument(after: "-replay-from").flatMap(Double.init) ?? 0
+            connection.startReplay()
+            raceBox.startReplay()
+            raceBox.prepareFrameForSession()
+            let feed = ReplayFeed(bus: bus)
+            feed.onRaceBoxFrame = { [raceBox] message in raceBox.ingestReplay(message) }
+            replay = feed
+            feed.start(path: path, speed: speed, from: from)
+            if CommandLine.arguments.contains("-record") {
+                Task {
+                    try? await Task.sleep(for: .seconds(2))
+                    startRecording(metricUnits: false)
+                }
+            }
+            return
+        }
+        #endif
         sensors.requestPermissions()
         sensors.start { [bus] channel, value, t in
             bus.publish(channel, value, at: t)
@@ -202,6 +228,14 @@ final class AppModel {
     /// Pull the logger's own recordings into Sessions.
     /// Download the logger's memory into a staging area; the memory screen
     /// then shows the recovered drives for the user to pick from.
+    #if DEBUG
+    private static func argument(after flag: String) -> String? {
+        let args = CommandLine.arguments
+        guard let i = args.firstIndex(of: flag), i + 1 < args.count else { return nil }
+        return args[i + 1]
+    }
+    #endif
+
     func importRaceBoxMemory() {
         let car = PreferredCar.load()?.asCarInfo ?? connection.carInfo
         let units = UserDefaults.standard.bool(forKey: "useMetricUnits") ? "metric" : "imperial"

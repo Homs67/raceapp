@@ -900,6 +900,33 @@ final class RaceBoxController {
             await self.refreshRecordingStatus()
         }
     }
+
+    /// Replayed drive: present as a connected Micro and accept frames from
+    /// the replay feed so the links widget and motion ownership match the car.
+    func startReplay() {
+        disconnect()
+        deviceInfo = RaceBoxDeviceInfo(model: .micro, serialNumber: "replay",
+                                       firmware: RaceBoxFirmware("3.3"),
+                                       hardwareRevision: "1.0", manufacturer: "RaceBox")
+        state = .connected
+        publishesToBus = true
+        statsTask?.cancel()
+        statsTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(400))
+                guard let self else { return }
+                if let last = self.lastMessageAt, self.state == .connected {
+                    self.dataStalled = monotonicSeconds() - last > Self.stallAfter
+                }
+            }
+        }
+    }
+
+    func ingestReplay(_ message: RaceBoxDataMessage) {
+        latest = message
+        lastMessageAt = monotonicSeconds()
+        dataStalled = false
+    }
     #endif
 
     private static let logTime: DateFormatter = {

@@ -39,6 +39,7 @@ xcodebuild test -project raceApp.xcodeproj -scheme raceApp \
 <p>The app target uses <strong>synchronized file groups</strong>: anything you add under <code>raceApp/</code> is compiled (or bundled) automatically — no project-file edits. Because resources are flattened, bundled JSON and fonts are loaded by bare file name.</p></div>
 
 <h2 id="demo">Demo mode</h2>
+<p>Three ways to run the app without a car: <strong>demo mode</strong> (a synthetic drive on a real track), the <strong>simulated RaceBox</strong>, and <strong>replay</strong> of a recorded drive (<code>-replay</code>, below). Replay is the one to reach for when a dashboard, gear or calibration change needs real sensor noise: it reproduces exactly what the car delivered, including the adapter's rotation holes. It cannot answer adapter or radio questions.</p>
 <p>Every hardware source has a fake that drives the <em>real</em> pipeline — sessions, decoders, recorder, dashboard — so almost everything can be worked on in the Simulator.</p>
 <div class="table-wrap"><table>
 <tr><th>Fake</th><th>Stands in for</th><th>Where</th></tr>
@@ -59,6 +60,7 @@ xcrun simctl launch  "iPhone 17" com.goodproductslab.raceApp -demo -demo-track b
 <tr><td><code>-demo-track &lt;id&gt;</code></td><td>Drive a specific track: <code>laguna-seca</code> (default), <code>big-willow</code>, <code>streets-of-willow</code></td></tr>
 <tr><td><code>-record</code></td><td>Start a recording two seconds after launch (with <code>-demo</code> or <code>-racebox-demo</code>)</td></tr>
 <tr><td><code>-racebox-demo</code></td><td>Connect the simulated RaceBox</td></tr>
+<tr><td><code>-replay &lt;path&gt;</code></td><td>Play a recorded drive back through the bus as if live: a raw export (<code>LiveData-…-raw.json</code>) or a session directory. Both links present as connected; the phone's own sensors stay off. Add <code>-replay-speed 2</code>, <code>-replay-from 120</code> (seconds), and <code>-record</code> to re-record it as a new session. A 60 MB raw export takes ~15 s to load. Put the file somewhere the Simulator can read without a macOS folder prompt (not ~/Downloads): <code>/private/tmp</code> works.</td></tr>
 <tr><td><code>-shift-demo</code></td><td>Enable shift lights at 5,500 rpm</td></tr>
 <tr><td><code>-dashboard &lt;n&gt;</code></td><td>Open the recording dashboard on page <em>n</em></td></tr>
 <tr><td><code>-dashboard-toolbar</code></td><td>Keep the recording toolbar visible (for screenshots)</td></tr>
