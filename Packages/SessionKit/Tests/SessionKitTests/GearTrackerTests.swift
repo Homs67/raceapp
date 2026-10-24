@@ -10,10 +10,10 @@ final class GearTrackerTests: XCTestCase {
         return wheelRpm * gearing.ratios[gear - 1] * gearing.finalDrive
     }
 
-    func testNoEngineDataShowsNothing() {
+    func testNoEngineDataShowsNeutralNotBlank() {
         var tracker = GearTracker()
-        XCTAssertNil(tracker.update(rpm: nil, speedMps: 10, at: 0))
-        XCTAssertNil(tracker.update(rpm: 0, speedMps: 0, at: 1))
+        XCTAssertEqual(tracker.update(rpm: nil, speedMps: 10, at: 0), 0)
+        XCTAssertEqual(tracker.update(rpm: 0, speedMps: 0, at: 1), 0)
     }
 
     func testIdlingAtAStopIsNeutral() {
@@ -71,7 +71,7 @@ final class GearTrackerTests: XCTestCase {
     func testEngineOffResetsTheHold() {
         var tracker = GearTracker()
         XCTAssertEqual(tracker.update(rpm: rpm(speedMps: 20, gear: 3), speedMps: 20, at: 0), 3)
-        XCTAssertNil(tracker.update(rpm: nil, speedMps: 20, at: 0.5))
-        XCTAssertEqual(tracker.update(rpm: 2000, speedMps: 20, at: 1), nil, "no held gear after a reset")
+        XCTAssertEqual(tracker.update(rpm: nil, speedMps: 20, at: 0.5), 0)
+        XCTAssertEqual(tracker.update(rpm: 2000, speedMps: 20, at: 1), 0, "no held gear after a reset → N, not 3")
     }
 }

@@ -15,8 +15,9 @@ import Foundation
 /// tried on real drives (Oct 2026) and misread parking manoeuvres often
 /// enough to be worse than nothing.
 ///
-/// Result: `nil` = no engine data at all (show "—"); `0` = neutral;
-/// `1...` = gear.
+/// Result: `0` = neutral; `1...` = gear. Never nil: with no engine data at
+/// all (adapter off, engine off) the car isn't being driven in a gear, and
+/// a dash on the dashboard reads as a fault — so that is neutral too.
 public struct GearTracker: Sendable {
 
     public let estimator: GearEstimator
@@ -47,12 +48,12 @@ public struct GearTracker: Sendable {
         lastMatchT = -.infinity
     }
 
-    public mutating func update(rpm: Double?, speedMps: Double?, at t: TimeInterval) -> Int? {
+    public mutating func update(rpm: Double?, speedMps: Double?, at t: TimeInterval) -> Int {
         let speed = speedMps ?? 0
         guard let rpm, rpm > 300 else {
-            // Engine off or no OBD: nothing to say.
+            // Engine off or no OBD: show neutral rather than a blank.
             reset()
-            return nil
+            return 0
         }
 
         if speed < crawlSpeedMps {
@@ -87,6 +88,6 @@ public struct GearTracker: Sendable {
         // Engine up, moving, no ratio for a while (sustained wheelspin, or a
         // car whose gearing table is off): stay on the last gear rather than
         // flash a blank. The next clean match corrects it.
-        return lastGear
+        return lastGear ?? 0
     }
 }
