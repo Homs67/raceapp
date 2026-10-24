@@ -83,8 +83,8 @@ final class CanSignalTests: XCTestCase {
     func testFrameIDsDeduplicated() {
         // 0x202 appears in two signals (accel, rpm) → one filter ID
         let ids = CanSignalMap.frameIDs(CanSignalMap.mazdaND)
-        XCTAssertEqual(Set(ids), [0x086, 0x078, 0x202, 0x4B0])
-        XCTAssertEqual(ids.count, 4)
+        XCTAssertEqual(Set(ids), [0x086, 0x078, 0x202, 0x420, 0x4B0])
+        XCTAssertEqual(ids.count, 5)
     }
 
     // MARK: - Monitor session end-to-end (replay transport)
@@ -112,6 +112,19 @@ final class CanSignalTests: XCTestCase {
         let schedule = CanMonitorSession.rotationSchedule(for: CanSignalMap.mazdaND)
         // 0x202 (rpm/pedal) every other slot; every frame ID still present.
         XCTAssertEqual(schedule, [0x202, 0x086, 0x202, 0x078, 0x202, 0x4B0])
+    }
+
+    func testCoolantFromBodyFrame() {
+        let coolant = CanSignalMap.mazdaND.first { $0.key == "coolantTemp" }!
+        XCTAssertEqual(coolant.frameID, 0x420)
+        XCTAssertTrue(coolant.slow)
+        XCTAssertEqual(coolant.decode([0x7E, 0, 0, 0, 0, 0, 0, 0]), 86)   // 126 - 40
+        XCTAssertNil(coolant.decode([]))
+    }
+
+    func testSlowFramesStayOutOfTheFastRotation() {
+        XCTAssertEqual(CanSignalMap.slowFrameIDs(CanSignalMap.mazdaNDLive), [0x420])
+        XCTAssertFalse(CanMonitorSession.rotationSchedule(for: CanSignalMap.mazdaNDLive).contains(0x420))
     }
 
     func testLiveRotationSkipsTheUndecodedWheelFrame() {
@@ -168,7 +181,7 @@ final class CanSignalTests: XCTestCase {
             "ATZ": ["ELM327 v2.2"], "ATE0": ["OK"], "ATL0": ["OK"], "ATS1": ["OK"],
             "ATH1": ["OK"], "ATCAF0": ["OK"], "ATSP6": ["OK"],
             "ATCM 501": ["OK"], "ATCM 701": ["OK"], "ATCM 7FF": ["OK"],
-            "ATCF 000": ["OK"], "ATCF 202": ["OK"], "ATCF 086": ["OK"], "ATCF 078": ["OK"],
+            "ATCF 000": ["OK"], "ATCF 202": ["OK"], "ATCF 086": ["OK"], "ATCF 078": ["OK"], "ATCF 420": ["OK"],
             "ATMA": ["202 1F 40 00 00 0A 00 19 12\rBUFFER FULL",
                      "086 3E 80 00 00 00 00 00 00\rBUFFER FULL",
                      "202 1F 40 00 00 0A 00 19 12\r086 3E 80 00 00 00 00 00 00"],

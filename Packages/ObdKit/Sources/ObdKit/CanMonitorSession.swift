@@ -257,10 +257,16 @@ public actor CanMonitorSession {
     }
 
     /// RPM's frame in every other slot: `[202, 086, 202, 078, 202, 4B0]`.
+    /// Slow-only frames (coolant) are not in the rotation; they get one slot
+    /// every `slowEveryPasses` passes.
     static func rotationSchedule(for signals: [CanSignal]) -> [UInt32] {
-        rotation(of: CanSignalMap.frameIDs(signals).map { FilterGroup(ids: [$0]) },
+        rotation(of: CanSignalMap.fastFrameIDs(signals).map { FilterGroup(ids: [$0]) },
                  priority: priorityFrameID(signals)).map { $0.ids[0] }
     }
+
+    /// One slot for the slow frames after this many full passes of the fast
+    /// rotation — ~every 13 s at 250 ms dwell, plenty for a temperature.
+    static let slowEveryPasses = 10
 
     static func priorityFrameID(_ signals: [CanSignal]) -> UInt32? {
         signals.first(where: { $0.key == "canRpm" })?.frameID
@@ -283,7 +289,8 @@ public actor CanMonitorSession {
                            combineFilters: Bool, probe: Duration, minCombinedHz: Double,
                            continuation: AsyncStream<CanStreamReading>.Continuation) async {
         await configure()
-        let ids = CanSignalMap.frameIDs(signals)
+        let ids = CanSignalMap.fastFrameIDs(signals)
+        let slowGroups = CanSignalMap.slowFrameIDs(signals).map { FilterGroup(ids: [$0]) }
         let priority = Self.priorityFrameID(signals)
         var schedule = await planSchedule(ids: ids, priority: priority, combine: combineFilters,
                                           probe: probe, minHz: minCombinedHz,
@@ -294,8 +301,28 @@ public actor CanMonitorSession {
 
         var lastInterlude = monotonicNow()
         var slot = 0
+        var passes = 0
         var currentMask: UInt32? = nil
         while !Task.isCancelled {
+            // A pass is one trip through the fast schedule; every tenth one
+            // ends with a visit to each slow frame.
+            if !slowGroups.isEmpty, slot > 0, slot % schedule.count == 0 {
+                passes += 1
+                if passes % Self.slowEveryPasses == 0 {
+                    for group in slowGroups where !Task.isCancelled {
+                        await select(group, currentMask: &currentMask)
+                        clear()
+                        await send("ATMA")
+                        try? await Task.sleep(for: dwell)
+                        await stopMonitor()
+                        tally.slots += 1
+                        for (t, line) in takeStamped() {
+                            guard let frame = CanFrameParser.parse(line, t: t), group.ids.contains(frame.id) else { continue }
+                            emit(frame, signals: signals, tally: &tally, continuation: continuation)
+                        }
+                    }
+                }
+            }
             let group = schedule[slot % schedule.count]
             slot += 1
             await select(group, currentMask: &currentMask)
@@ -336,10 +363,21 @@ public actor CanMonitorSession {
                         silentSince = now
                         await send("ATMA")
                     }
-                    if !interludePids.isEmpty, now - lastInterlude >= interludeEvery {
+                    if (!interludePids.isEmpty || !slowGroups.isEmpty), now - lastInterlude >= interludeEvery {
                         lastInterlude = now
                         await stopMonitor()
-                        await pollSlowPids(interludePids, into: continuation)
+                        for group in slowGroups where !Task.isCancelled {
+                            await select(group, currentMask: &currentMask)
+                            clear()
+                            await send("ATMA")
+                            try? await Task.sleep(for: dwell)
+                            await stopMonitor()
+                            for (t, line) in takeStamped() {
+                                guard let frame = CanFrameParser.parse(line, t: t), group.ids.contains(frame.id) else { continue }
+                                emit(frame, signals: signals, tally: &tally, continuation: continuation)
+                            }
+                        }
+                        if !interludePids.isEmpty { await pollSlowPids(interludePids, into: continuation) }
                         currentMask = nil   // the interlude moved the filter
                         break
                     }

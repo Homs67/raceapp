@@ -267,12 +267,17 @@ final class ConnectionController {
                     case "accelPedal":
                         bus.publishLive(.obd(.acceleratorPedal), value, at: t)
                         bus.publishLive(.obd(.throttle), value, at: t)
+                    case "coolantTemp":
+                        // A community-sourced byte feeds the coolant gauge only
+                        // after the ECU's own answer has vouched for it.
+                        self?.corroborateCanCoolant(value, at: t)
                     default:
                         break
                     }
                 case .obd(let channel, let value, let t):
                     // Genuinely polled during the slow-PID interlude — recordable.
                     bus.publish(.obd(channel), value, at: t)
+                    if channel == .coolantTemp { self?.noteObdCoolant(value) }
                 case .mode(let text):
                     self?.canStreamMode = text
                 case .note(let text):
@@ -319,6 +324,35 @@ final class ConnectionController {
         canStreamSession = nil
     }
 
+    // MARK: CAN coolant corroboration
+
+    private var lastObdCoolant: Double?
+    private var canCoolantTrusted = false
+    private var canCoolantMismatchNoted = false
+    private static let coolantAgreementC = 4.0
+
+    private func noteObdCoolant(_ value: Double) {
+        lastObdCoolant = value
+    }
+
+    /// Mirror the CAN coolant onto the live coolant channel once it has
+    /// matched an OBD reading within a few degrees; until then it is recorded
+    /// as can.coolant only. One disagreement is reported into the session.
+    private func corroborateCanCoolant(_ value: Double, at t: TimeInterval) {
+        guard let obd = lastObdCoolant else { return }
+        if abs(value - obd) <= Self.coolantAgreementC {
+            if !canCoolantTrusted {
+                canCoolantTrusted = true
+                onCanStreamNote?(String(format: "CAN coolant verified: 0x420 reads %.0f °C, OBD %.0f °C", value, obd), t)
+            }
+            bus.publishLive(.obd(.coolantTemp), value, at: t)
+        } else if canCoolantTrusted || !canCoolantMismatchNoted {
+            canCoolantMismatchNoted = true
+            canCoolantTrusted = false
+            onCanStreamNote?(String(format: "CAN coolant disagrees: 0x420 reads %.0f °C, OBD %.0f °C — not shown", value, obd), t)
+        }
+    }
+
     private static func canChannel(forSignalKey key: String) -> ChannelId? {
         switch key {
         case "steeringAngle": return .canSteering
@@ -326,6 +360,7 @@ final class ConnectionController {
         case "accelPedal": return .canAccelPedal
         case "canRpm": return .canRpm
         case "wheelSpeed": return .canWheelSpeed
+        case "coolantTemp": return .canCoolant
         default: return nil
         }
     }

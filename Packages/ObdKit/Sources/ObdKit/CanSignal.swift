@@ -51,14 +51,19 @@ public struct CanSignal: Sendable {
     public let name: String    // display name
     public let unit: String
     public let frameID: UInt32
+    /// Changes over seconds, not milliseconds (temperatures, levels): the
+    /// stream gives its frame a filter slot only every few rotation passes,
+    /// so it costs the fast signals almost nothing.
+    public let slow: Bool
     public let decode: @Sendable ([UInt8]) -> Double?
 
-    public init(key: String, name: String, unit: String, frameID: UInt32,
+    public init(key: String, name: String, unit: String, frameID: UInt32, slow: Bool = false,
                 decode: @escaping @Sendable ([UInt8]) -> Double?) {
         self.key = key
         self.name = name
         self.unit = unit
         self.frameID = frameID
+        self.slow = slow
         self.decode = decode
     }
 }
@@ -88,6 +93,15 @@ public enum CanSignalMap {
             guard let u = CanBits.u16(data, 0) else { return nil }
             return Double(u) / 4
         },
+        // Engine coolant on the body-bus status frame: byte 0 is °C + 40
+        // (the RaceChrono community equation for the ND). The stream only
+        // trusts it once it agrees with the OBD-polled coolant — see
+        // ConnectionController — so a wrong byte can't paint a wrong gauge.
+        CanSignal(key: "coolantTemp", name: "Coolant (CAN)", unit: "°C", frameID: 0x420, slow: true) { data in
+            guard let raw = CanBits.byte(data, 0) else { return nil }
+            let c = Double(raw) - 40
+            return (-40...150).contains(c) ? c : nil
+        },
         // NOTE: 0x202 bytes 2-3 are NOT vehicle speed — driveway captures show
         // the word rising with a parked free-rev (≈1.31× rpm, r=0.87) and zero
         // at idle. Vehicle speed comes from the ABS wheel-speed frame instead.
@@ -107,6 +121,16 @@ public enum CanSignalMap {
     /// live on this car), so it stays out of the live rotation: every filter
     /// slot spent on it is a slot brake and steering go without.
     public static let mazdaNDLive: [CanSignal] = mazdaND.filter { $0.key != "wheelSpeed" }
+
+    /// Frame IDs of signals that need a filter slot every pass.
+    public static func fastFrameIDs(_ signals: [CanSignal]) -> [UInt32] {
+        frameIDs(signals.filter { !$0.slow })
+    }
+    /// Frame IDs carrying only slow signals — visited every few passes.
+    public static func slowFrameIDs(_ signals: [CanSignal]) -> [UInt32] {
+        let fast = Set(fastFrameIDs(signals))
+        return frameIDs(signals.filter { $0.slow }).filter { !fast.contains($0) }
+    }
 
     /// Distinct frame IDs referenced by a signal set (for CAN filters).
     public static func frameIDs(_ signals: [CanSignal]) -> [UInt32] {

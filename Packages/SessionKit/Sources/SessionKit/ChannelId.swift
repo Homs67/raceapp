@@ -77,6 +77,7 @@ public extension ChannelId {
     static let canAccelPedal = ChannelId("can.accelPedal")  // %
     static let canRpm = ChannelId("can.rpm")
     static let canWheelSpeed = ChannelId("can.wheelSpeed")  // km/h, 4-wheel avg
+    static let canCoolant = ChannelId("can.coolant")        // °C, from frame 0x420
 
     /// OBD channels reuse ObdKit's channel names: `obd.rpm`, `obd.speed`, …
     static func obd(_ channel: ObdChannel) -> ChannelId {

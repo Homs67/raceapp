@@ -61,6 +61,7 @@
 <tr><td>Brake pedal</td><td><code>0x078</code></td><td><span class="tag ok">verified on car</span></td></tr>
 <tr><td>Accelerator pedal, RPM</td><td><code>0x202</code></td><td><span class="tag ok">verified on car</span></td></tr>
 <tr><td>Wheel speed</td><td><code>0x4B0</code></td><td><span class="tag bad">decodes nothing on the ND2</span></td></tr>
+<tr><td>Coolant</td><td><code>0x420</code> byte 0 − 40</td><td>community equation; visited every 10th rotation pass, mirrored to the gauge only after it matches the OBD-polled coolant within 4 °C</td></tr>
 </table></div>
 <p>Per-car signal definitions live in <span class="path">Packages/ObdKit/…/CanSignal.swift</span> (<code>CanSignalMap.mazdaND</code>). <code>CanCorrelator</code> finds new signals by recording raw frames alongside OBD "ground truth" and correlating every byte against it — that's how the existing ones were discovered.</p>
 <div class="callout warn"><span class="label">Trade-offs you should know</span>
