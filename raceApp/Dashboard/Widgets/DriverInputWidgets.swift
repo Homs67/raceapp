@@ -18,12 +18,15 @@ import SessionKit
 struct SteeringWidget: View {
     let context: WidgetContext
 
-    /// ND MX-5: roughly 2.7 turns lock to lock (~±486° at the wheel) through
-    /// a ~15:1 rack, which puts full lock near ±32° at the road wheels.
-    /// Worth confirming against your own car — it only scales the reading.
-    static let steeringRatio: Double = 15.0
+    /// ND MX-5: 2.7 turns lock to lock (±488° measured at the wheel). The
+    /// ratio was measured on the car (Oct 23 2026 drive: RaceBox yaw rate and
+    /// speed against the CAN steering angle at 2–9 m/s) at 15.9:1 across the
+    /// range, close to Mazda's quoted 15.5:1, putting full lock near ±31° at
+    /// the road wheels. It only scales the reading; the recorded channel is
+    /// the raw steering-wheel angle.
+    static let steeringRatio: Double = 15.9
     /// End stops for the gauge. The number itself is never clamped.
-    static let maxWheelAngle: Double = 33
+    static let maxWheelAngle: Double = 31
 
     private var wheelAngle: Double? {
         context.live.steering.map { $0 / Self.steeringRatio }
