@@ -87,8 +87,8 @@ final class RaceBoxController {
         return SessionStore(rootDirectory: base.appendingPathComponent("LiveData/racebox-staging", isDirectory: true))
     }
 
-    /// Fired after staged drives are moved into Sessions.
-    var onSessionsImported: (@MainActor () -> Void)?
+    /// Fired after staged drives are moved into Sessions, with their ids.
+    var onSessionsImported: (@MainActor ([UUID]) -> Void)?
     private(set) var memoryTask: MemoryTask = .idle
     private var memoryWork: Task<Void, Never>?
     private(set) var lastCommandResult: String?
@@ -434,7 +434,7 @@ final class RaceBoxController {
     func importStagedDrives(_ ids: Set<UUID>, into store: SessionStore) {
         guard case .preview(let previews) = memoryTask else { return }
         let staging = Self.stagingStore
-        var imported = 0
+        var imported: [UUID] = []
         var records = 0
         for preview in previews {
             let from = staging.directory(for: preview.id)
@@ -443,7 +443,7 @@ final class RaceBoxController {
                 try? FileManager.default.createDirectory(at: to.deletingLastPathComponent(),
                                                          withIntermediateDirectories: true)
                 if (try? FileManager.default.moveItem(at: from, to: to)) != nil {
-                    imported += 1
+                    imported.append(preview.id)
                     records += preview.records
                     continue
                 }
@@ -451,8 +451,8 @@ final class RaceBoxController {
             try? staging.delete(preview.id)
         }
         Self.clearStaging()
-        memoryTask = .finished(drives: imported, records: records)
-        if imported > 0 { onSessionsImported?() }
+        memoryTask = .finished(drives: imported.count, records: records)
+        if !imported.isEmpty { onSessionsImported?(imported) }
     }
 
     func discardStagedDrives() {

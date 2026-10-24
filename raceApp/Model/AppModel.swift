@@ -48,7 +48,16 @@ final class AppModel {
         connection.onCanStreamNote = { [recording] text, t in
             recording.noteCanStream(text, at: t)
         }
-        raceBox.onSessionsImported = { [recording] in recording.noteSessionsChanged() }
+        raceBox.onSessionsImported = { [weak self] ids in
+            guard let self else { return }
+            self.recording.noteSessionsChanged()
+            // Imported drives are sessions too: mirror them like recorded ones.
+            for id in ids {
+                if let manifest = try? self.store.manifest(for: id) {
+                    self.cloudSync.sync(manifest: manifest, sessionDirectory: self.store.directory(for: id))
+                }
+            }
+        }
         RaceBoxController.clearStaging()
         recording.onSessionFinalized = { [weak self] manifest in
             guard let self else { return }
