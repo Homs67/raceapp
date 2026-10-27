@@ -4,8 +4,15 @@ import Foundation
 /// the car stationary for `threshold` (5 min). Pure logic, fed observations;
 /// the recorder asks `shouldAutoStop(now:)` periodically.
 ///
-/// Phone-only sessions (never saw OBD) don't auto-stop — there is no
-/// ignition-off signal to key on, and a parked photo stop shouldn't end a drive.
+/// Without OBD, a logger that was streaming and then went silent stands in:
+/// the Micro loses power with the car (or shuts itself down when parked), so
+/// its disappearance plus 5 min stationary is the same "forgotten stop". A
+/// logger that keeps reporting (permanent power) never triggers it, which is
+/// why its *presence* is not treated as the engine being on. On Oct 27 2026 a
+/// session with no adapter ran 80 min past the drive for want of this.
+///
+/// Phone-only sessions (no OBD, no logger) don't auto-stop — there is no
+/// signal to key on, and a parked photo stop shouldn't end a drive.
 public struct AutoStopMonitor: Sendable {
 
     public var threshold: TimeInterval
@@ -14,6 +21,8 @@ public struct AutoStopMonitor: Sendable {
 
     private var everSawObd = false
     private var lastObdSeen: TimeInterval = 0
+    private var everSawLogger = false
+    private var lastLoggerSeen: TimeInterval = 0
     private var lastMovement: TimeInterval?
 
     public init(threshold: TimeInterval = 300, stationarySpeed: Double = 1.0) {
@@ -26,6 +35,11 @@ public struct AutoStopMonitor: Sendable {
         lastObdSeen = t
     }
 
+    public mutating func noteLoggerAlive(at t: TimeInterval) {
+        everSawLogger = true
+        lastLoggerSeen = t
+    }
+
     public mutating func noteSpeed(_ metersPerSecond: Double, at t: TimeInterval) {
         if metersPerSecond >= stationarySpeed {
             lastMovement = t
@@ -35,8 +49,13 @@ public struct AutoStopMonitor: Sendable {
     }
 
     public func shouldAutoStop(now: TimeInterval) -> Bool {
-        guard everSawObd else { return false }
-        guard now - lastObdSeen >= threshold else { return false }
+        if everSawObd {
+            guard now - lastObdSeen >= threshold else { return false }
+        } else if everSawLogger {
+            guard now - lastLoggerSeen >= threshold else { return false }
+        } else {
+            return false
+        }
         guard let lastMovement else { return false } // no GPS at all — don't guess
         return now - lastMovement >= threshold
     }

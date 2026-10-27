@@ -39,4 +39,24 @@ final class AutoStopMonitorTests: XCTestCase {
         monitor.noteObdAlive(at: 0)
         XCTAssertFalse(monitor.shouldAutoStop(now: 100_000), "no movement signal — don't guess")
     }
+
+    func testLoggerGoingSilentWhileParkedStopsASessionWithoutOBD() {
+        var m = AutoStopMonitor()
+        for t in stride(from: 0.0, through: 470, by: 10) {
+            m.noteLoggerAlive(at: t)
+            m.noteSpeed(t < 400 ? 12 : 0, at: t)
+        }
+        XCTAssertFalse(m.shouldAutoStop(now: 600), "logger gone only 130 s")
+        m.noteSpeed(0, at: 700)
+        XCTAssertTrue(m.shouldAutoStop(now: 800), "logger gone and parked for 5 min")
+    }
+
+    func testLoggerStillReportingNeverStops() {
+        var m = AutoStopMonitor()
+        for t in stride(from: 0.0, through: 2000, by: 10) {
+            m.noteLoggerAlive(at: t)
+            m.noteSpeed(0, at: t)
+        }
+        XCTAssertFalse(m.shouldAutoStop(now: 2000), "permanent power: present logger is no ignition signal")
+    }
 }

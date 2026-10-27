@@ -332,31 +332,40 @@ final class ConnectionController {
 
     // MARK: CAN coolant corroboration
 
-    private var lastObdCoolant: Double?
+    private var lastObdCoolant: (value: Double, t: TimeInterval)?
     private var canCoolantTrusted = false
     private var canCoolantMismatchNoted = false
+    /// Agreement needed to start trusting the CAN byte, and the gap that
+    /// withdraws trust. Both are judged only against an OBD reading taken in
+    /// the last 15 s: OBD coolant is polled once a minute, and a warming
+    /// engine moves several degrees in that time (Oct 27: "verified" at
+    /// 84 vs 82 °C, then "disagrees" 13 s later at 88 vs a minute-old 82).
     private static let coolantAgreementC = 4.0
+    private static let coolantDisagreementC = 8.0
+    private static let coolantCompareWindow: TimeInterval = 15
 
     private func noteObdCoolant(_ value: Double) {
-        lastObdCoolant = value
+        lastObdCoolant = (value, monotonicNow())
     }
 
     /// Mirror the CAN coolant onto the live coolant channel once it has
-    /// matched an OBD reading within a few degrees; until then it is recorded
-    /// as can.coolant only. One disagreement is reported into the session.
+    /// matched a fresh OBD reading; until then it is recorded as can.coolant
+    /// only. A disagreement is reported into the session once.
     private func corroborateCanCoolant(_ value: Double, at t: TimeInterval) {
-        guard let obd = lastObdCoolant else { return }
-        if abs(value - obd) <= Self.coolantAgreementC {
-            if !canCoolantTrusted {
+        if let obd = lastObdCoolant, monotonicNow() - obd.t <= Self.coolantCompareWindow {
+            let gap = abs(value - obd.value)
+            if !canCoolantTrusted, gap <= Self.coolantAgreementC {
                 canCoolantTrusted = true
-                onCanStreamNote?(String(format: "CAN coolant verified: 0x420 reads %.0f °C, OBD %.0f °C", value, obd), t)
+                onCanStreamNote?(String(format: "CAN coolant verified: 0x420 reads %.0f °C, OBD %.0f °C", value, obd.value), t)
+            } else if canCoolantTrusted, gap > Self.coolantDisagreementC {
+                canCoolantTrusted = false
             }
-            bus.publishLive(.obd(.coolantTemp), value, at: t)
-        } else if canCoolantTrusted || !canCoolantMismatchNoted {
-            canCoolantMismatchNoted = true
-            canCoolantTrusted = false
-            onCanStreamNote?(String(format: "CAN coolant disagrees: 0x420 reads %.0f °C, OBD %.0f °C — not shown", value, obd), t)
+            if !canCoolantTrusted, gap > Self.coolantAgreementC, !canCoolantMismatchNoted {
+                canCoolantMismatchNoted = true
+                onCanStreamNote?(String(format: "CAN coolant disagrees: 0x420 reads %.0f °C, OBD %.0f °C — not shown", value, obd.value), t)
+            }
         }
+        if canCoolantTrusted { bus.publishLive(.obd(.coolantTemp), value, at: t) }
     }
 
     private static func canChannel(forSignalKey key: String) -> ChannelId? {

@@ -53,12 +53,15 @@ final class DashboardLiveFeed {
 
         live.rpm = snapshot.fresh(.obd(.rpm), now: now, maxAge: engineHold)
         live.throttle = snapshot.fresh(.obd(.throttle), now: now, maxAge: engineHold)
+        var speedAt: TimeInterval?
         if let obdKmh = snapshot.fresh(.obd(.speed), now: now, maxAge: 2) {
             live.speedMps = obdKmh / 3.6
             live.speedDisplay = units.speed(fromKmh: obdKmh)
+            speedAt = snapshot[.obd(.speed)]?.t
         } else if let gpsMps = snapshot.fresh(.gpsSpeed, now: now, maxAge: 3) {
             live.speedMps = gpsMps
             live.speedDisplay = units.speed(fromMps: gpsMps)
+            speedAt = snapshot[.gpsSpeed]?.t
         }
         live.obdHz = model.bus.obdHz(now: now)
         live.coolantC = snapshot.fresh(.obd(.coolantTemp), now: now, maxAge: 90)
@@ -98,7 +101,13 @@ final class DashboardLiveFeed {
         live.peakG = peakG
         live.gTrail = trail
 
-        live.gear = gearTracker.update(rpm: live.rpm, speedMps: live.speedMps, at: now)
+        // Reading times let the tracker pair each speed sample with an RPM
+        // read at the same moment; the brake keeps it from stepping up a gear
+        // while slowing down.
+        live.gear = gearTracker.update(rpm: live.rpm, rpmAt: snapshot[.obd(.rpm)]?.t,
+                                       speedMps: live.speedMps, speedAt: speedAt,
+                                       brakePercent: snapshot.fresh(.canBrake, now: now, maxAge: 1.5),
+                                       at: now)
 
         live.altitude = snapshot.fresh(.gpsAltitude, now: now, maxAge: 10)
         live.heading = snapshot.fresh(.gpsCourse, now: now, maxAge: 10)

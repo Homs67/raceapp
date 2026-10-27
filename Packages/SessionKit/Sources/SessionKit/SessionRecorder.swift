@@ -85,9 +85,10 @@ public actor SessionRecorder {
         if channel.rawValue.hasPrefix("rb.") {
             noteMotionSource(.raceBox, at: t)
             // External hardware was present, so this isn't a phone-only drive —
-            // but deliberately NOT `autoStop.noteObdAlive`. That rule keys on
-            // the engine being on, and a logger on USB or a permanent 12 V feed
-            // keeps reporting long after the ignition is off.
+            // but deliberately NOT `autoStop.noteObdAlive`: a logger on USB or a
+            // permanent 12 V feed keeps reporting long after the ignition is off.
+            // Only its going silent counts (see AutoStopMonitor).
+            autoStop.noteLoggerAlive(at: t)
             manifest?.phoneOnly = false
         } else if channel == .gpsSpeed, lastRaceBoxSampleT.map({ t - $0 > 3 }) ?? true {
             noteMotionSource(.phone, at: t)

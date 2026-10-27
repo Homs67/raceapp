@@ -39,7 +39,12 @@ public struct GearEstimator: Sendable {
     public func gear(rpm: Double, speedMps: Double) -> Int? {
         guard rpm > 500, speedMps > 2 else { return nil }
         let wheelRpm = speedMps * 60 / gearing.tireCircumferenceMeters
-        let observed = rpm / wheelRpm
+        return gear(overallRatio: rpm / wheelRpm)
+    }
+
+    /// Gear whose overall ratio (gearbox × final drive) is within tolerance
+    /// of the observed engine-rpm / wheel-rpm ratio.
+    public func gear(overallRatio observed: Double) -> Int? {
         for (index, ratio) in gearing.ratios.enumerated() {
             let nominal = ratio * gearing.finalDrive
             if abs(observed - nominal) / nominal <= tolerance {
