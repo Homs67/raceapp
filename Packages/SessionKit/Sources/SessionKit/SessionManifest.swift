@@ -175,6 +175,41 @@ public struct SessionManifest: Codable, Equatable, Sendable, Identifiable {
     }
     /// Effective OBD poll timing from recorded samples.
     public var obdTiming: ObdTiming?
+    /// The track this session was driven on, and its runs/laps as last timed
+    /// against that track's gates. Re-timed whenever the track is edited, so
+    /// this is a cache of the truth (the GPS channels + the track), not the
+    /// truth itself.
+    public var track: TrackRef?
+
+    public struct TrackRef: Codable, Equatable, Sendable {
+        public enum AssignedBy: String, Codable, Sendable { case auto, manual }
+        public var id: String
+        /// Name at assignment time — still shown if the track is deleted.
+        public var nameSnapshot: String
+        public var assignedBy: AssignedBy
+        /// Gates the runs below were timed against (exported with the session).
+        public var layout: CourseLayout?
+        /// The track's `updatedAt` when these runs were computed.
+        public var timedAgainst: Date?
+        public var runs: [TimedRun]
+
+        public init(id: String, nameSnapshot: String, assignedBy: AssignedBy,
+                    layout: CourseLayout?, timedAgainst: Date?, runs: [TimedRun]) {
+            self.id = id
+            self.nameSnapshot = nameSnapshot
+            self.assignedBy = assignedBy
+            self.layout = layout
+            self.timedAgainst = timedAgainst
+            self.runs = runs
+        }
+
+        public var best: TimeInterval? { CourseTiming.best(runs) }
+
+        /// Automatic matching may replace an automatic choice, never a manual one.
+        public static func autoMatchMayReplace(_ existing: TrackRef?) -> Bool {
+            existing?.assignedBy != .manual
+        }
+    }
     /// What the adapter was doing while CAN streaming: filter probe verdicts,
     /// the chosen mode, and a frames-per-ID tally every 30 s. This is how a
     /// drive with blank gauges gets diagnosed from its export alone.

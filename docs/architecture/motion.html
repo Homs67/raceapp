@@ -81,18 +81,27 @@
   <li><strong><code>GCalibrationView</code></strong> (Settings → Calibrate G-force) is a guided version for the driver: hold still, then three straight-line accelerate-and-brake pulls, with a live count of good seconds and which requirement is still missing.</li>
 </ul>
 
-<h2 id="laps">Laps</h2>
+<h2 id="laps">Laps and runs</h2>
 <h3>Tracks</h3>
-<p>Each track is a bundled JSON file (<span class="path">raceApp/Tracks/*.json</span>) built from OpenStreetMap by <code>tools/build_tracks.py</code>: a centreline in driving order at ~4 m spacing, a start/finish gate, named corners. Bundled today: Laguna Seca, Big Willow, Streets of Willow. At session start the track is the demo's, or the nearest one to the current GPS fix.</p>
+<p>The <strong>Tracks tab</strong> (<code>TrackStore</code>) holds two kinds of track:</p>
+<ul>
+  <li><strong>Bundled circuits</strong>: JSON files (<span class="path">raceApp/Tracks/*.json</span>) built from OpenStreetMap by <code>tools/build_tracks.py</code> — a centreline at ~4 m spacing, an approximate start/finish line, named corners. Laguna Seca, Big Willow, Streets of Willow.</li>
+  <li><strong>User tracks</strong>, made in the app (<span class="path">&lt;AppSupport&gt;/LiveData/tracks/</span>): a <em>circuit</em> with one line, or an <em>autocross</em> course with a separate start and finish. Lines are set in <code>TrackEditorView</code> either on site — walk to the line, point the phone the way cars will go, tap <em>Mark here</em>; the position is the RaceBox's when it is carried and has a fix, else the phone's, averaged over 3 s — or by tapping the satellite map. Editing a bundled circuit saves a user copy that shadows it.</li>
+</ul>
+<p>A line is a <code>TimingGate</code>: centre, direction of travel, width. A crossing counts only if the path between two fixes cuts it <strong>and</strong> the car is moving within ±60° of its direction, which rejects wrong-way passes and a first turn grazing the finish.</p>
+
+<h3>Timing and session matching</h3>
+<p><code>RunTimer</code> (SessionKit) is the one timing engine. On a loop it starts lap 1 at the first line crossing (never at the first GPS fix, so a car waiting at the line doesn't start a lap). On an autocross course a start crossing begins a run and a finish crossing ends it; a finish with no run in progress is ignored, a run shorter than 8 s is ignored, and one with no finish within 300 s is a DNF.</p>
+<p>Nobody picks a track before driving. While recording, the nearest track with lines (within 2 km) times live. When the session ends — or a RaceBox drive is imported — <code>CourseMatcher</code> times the session's GPS against every track with a line within 1 km and keeps the one with the most completed runs/laps (ties: the track created closest to the session's date, for several courses in one lot). The result lives in <code>SessionManifest.track</code>: track id, name snapshot, the gates used and the timed runs — a cache, re-timed by <code>SessionTrackTiming</code> whenever the track's lines change. Creating or editing a track also re-matches sessions near it, so a course built after an event still times that day's runs. A manual choice in session review (including "No track") is never overwritten by automatic matching.</p>
 
 <h3>The pipeline</h3>
 <p><code>SessionMetrics</code> pumps bus snapshots at 5 Hz through:</p>
 <div class="table-wrap"><table>
 <tr><th>Type</th><th>Input → output</th></tr>
-<tr><td><code>LapTimer</code></td><td>GPS fixes → crossings of the start/finish gate (direction-checked) → current, last and best lap.</td></tr>
+<tr><td><code>RunTimer</code></td><td>GPS fixes → direction-checked line crossings → laps or start→finish runs; shown through the same current/last/best state the lap widgets always read.</td></tr>
 <tr><td><code>TrackProgress</code></td><td>A GPS fix → its distance along the lap, <code>s</code>, by projecting onto the nearest centreline segment in a window around the last match. Rejects fixes more than 30 m off the line (pit lane, off track).</td></tr>
 <tr><td><code>LapDelta</code></td><td><code>(s, elapsed)</code> → time ahead/behind the session's best lap at the same point. The lap is divided into 5 m bins; every bin crossed between two fixes is interpolated, so 1 Hz phone GPS still fills them all.</td></tr>
-<tr><td>Sectors</td><td>The lap split into equal thirds by distance; each completed sector holds its delta, the current one runs live.</td></tr>
+<tr><td>Sectors</td><td>The lap split into equal thirds by distance; each completed sector holds its delta, the current one runs live. Delta and sectors need a centreline, so today they exist only on bundled circuits.</td></tr>
 </table></div>
 <p>Demo mode drives laps at varying pace (<code>PacedLapSchedule</code>) — a deterministic simulator would make every lap identical and the delta would read 0.00 forever.</p>
 

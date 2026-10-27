@@ -15,6 +15,7 @@
 
 import Foundation
 import CoreLocation
+import SessionKit
 
 struct Track: Codable, Identifiable {
     var schemaVersion: Int
@@ -35,6 +36,75 @@ struct Track: Codable, Identifiable {
     var centerline: [[Double]]
     var cornerNumbering: String?
     var notes: String?
+
+    // MARK: User tracks (absent from the bundled files, so all optional)
+
+    enum Kind: String, Codable, CaseIterable {
+        case circuit     // one line, laps
+        case autocross   // separate start and finish, runs
+    }
+    var kind: Kind?
+    /// True for tracks made in the app (and user edits of bundled ones).
+    var isUser: Bool?
+    var startGate: TimingGate?
+    var finishGate: TimingGate?
+    var createdAt: Date?
+    var updatedAt: Date?
+
+    var trackKind: Kind { kind ?? .circuit }
+    var isUserTrack: Bool { isUser ?? false }
+
+    /// What the timer runs on. Bundled circuits derive their gate from the
+    /// OSM start/finish line and the centerline's first segment. An autocross
+    /// course with no finish yet has no layout: half a course can't be timed.
+    var layout: CourseLayout? {
+        if let startGate {
+            if trackKind == .autocross {
+                guard let finishGate else { return nil }
+                return CourseLayout(start: startGate, finish: finishGate)
+            }
+            return CourseLayout(start: startGate)
+        }
+        guard centerline.count >= 2, startFinish.a.count == 2, startFinish.b.count == 2 else { return nil }
+        let heading = Self.bearing(centerline[0], centerline[1])
+        return CourseLayout(start: .from(a: GeoPoint(lat: startFinish.a[0], lon: startFinish.a[1]),
+                                         b: GeoPoint(lat: startFinish.b[0], lon: startFinish.b[1]),
+                                         headingDegrees: heading))
+    }
+
+    /// Somewhere representative, for "is this track near me".
+    var anchor: CLLocationCoordinate2D? {
+        if let g = startGate { return CLLocationCoordinate2D(latitude: g.lat, longitude: g.lon) }
+        if let c = centerline.first, c.count == 2 { return CLLocationCoordinate2D(latitude: c[0], longitude: c[1]) }
+        return nil
+    }
+
+    /// A new, empty user track. Gates are added in the editor.
+    static func newUserTrack(name: String, kind: Kind) -> Track {
+        let now = Date()
+        return Track(schemaVersion: 1, id: UUID().uuidString, name: name, location: "", country: "",
+                     configuration: kind == .autocross ? "Autocross" : "Circuit",
+                     direction: "clockwise", source: "user", lengthMeters: 0, lengthMiles: 0,
+                     turnCount: 0, startFinish: Gate(a: [], b: [], approximate: false), corners: [],
+                     centerline: [], cornerNumbering: nil, notes: nil,
+                     kind: kind, isUser: true, startGate: nil, finishGate: nil,
+                     createdAt: now, updatedAt: now)
+    }
+
+    /// Keep the legacy two-point gate in step with `startGate`, so views that
+    /// draw `startFinish` (the track-map widget) show the edited line.
+    mutating func syncLegacyGate() {
+        guard let g = startGate else { return }
+        let e = g.endpoints
+        startFinish = Gate(a: [e.a.lat, e.a.lon], b: [e.b.lat, e.b.lon], approximate: false)
+    }
+
+    static func bearing(_ p: [Double], _ q: [Double]) -> Double {
+        let la1 = p[0] * .pi / 180, la2 = q[0] * .pi / 180, dLon = (q[1] - p[1]) * .pi / 180
+        let y = sin(dLon) * cos(la2)
+        let x = cos(la1) * sin(la2) - sin(la1) * cos(la2) * cos(dLon)
+        return (atan2(y, x) * 180 / .pi + 360).truncatingRemainder(dividingBy: 360)
+    }
 
     struct Gate: Codable {
         var a: [Double]   // [lat, lon] — one end of the timing line

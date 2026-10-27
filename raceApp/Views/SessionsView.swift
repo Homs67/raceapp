@@ -374,6 +374,15 @@ private struct SessionRow: View {
                 Text(session.startedAtUTC.formatted(date: .abbreviated, time: .shortened))
                     .font(.system(size: 11))
                     .foregroundStyle(Color.muted)
+                if let ref = session.track, !ref.id.isEmpty {
+                    HStack(spacing: 4) {
+                        Image(systemName: "flag.checkered").font(.system(size: 9))
+                        Text(ref.nameSnapshot)
+                        if let best = ref.best { Text("· best \(RunFormat.time(best))").monospacedDigit() }
+                    }
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Color.accent)
+                }
             }
             Spacer()
             VStack(alignment: .trailing, spacing: 3) {
@@ -438,7 +447,8 @@ struct SessionDetailView: View {
             if let manifest {
                 VStack(alignment: .leading, spacing: 16) {
                     header(manifest)
-                    if !trace.isEmpty { mapCard }
+                    SessionTrackCard(sessionId: sessionId, manifest: manifest, trace: trace)
+                    if !trace.isEmpty, manifest.track?.id.isEmpty ?? true { mapCard }
                     highlightsGrid(manifest)
                     videoSection(manifest)
                     if let gValidation { GCalibrationCard(validation: gValidation) }
@@ -464,6 +474,9 @@ struct SessionDetailView: View {
             }
         }
         .task { load() }
+        .onChange(of: model.recording.sessionsVersion) {
+            manifest = try? model.store.manifest(for: sessionId)
+        }
         .sheet(isPresented: Binding(get: { exportUrls != nil }, set: { if !$0 { exportUrls = nil } })) {
             if let urls = exportUrls {
                 ActivityView(items: urls)
@@ -679,6 +692,7 @@ struct SessionDetailView: View {
     private func load() {
         let loaded = try? model.store.manifest(for: sessionId)
         manifest = loaded
+        if let loaded { model.retimeIfStale(loaded) }
         note = loaded?.note ?? ""
         if LaunchArgs.openLatestVideo, loaded?.videos?.isEmpty == false, !showVideoPlayer {
             showVideoPlayer = true
@@ -1226,5 +1240,121 @@ private struct FullGraphView: View {
     private func timeLabel(_ seconds: Double) -> String {
         let total = Int(max(0, seconds))
         return String(format: "%d:%02d", total / 60, total % 60)
+    }
+}
+
+
+// MARK: - Track & runs
+
+/// Which track this session was on, its lines over the driven trace, and the
+/// runs or laps timed through them. Times follow the track: edit its lines
+/// and this card re-times.
+private struct SessionTrackCard: View {
+    @Environment(AppModel.self) private var model
+    let sessionId: UUID
+    let manifest: SessionManifest
+    let trace: [CLLocationCoordinate2D]
+
+    private var ref: SessionManifest.TrackRef? {
+        guard let r = manifest.track, !r.id.isEmpty else { return nil }
+        return r
+    }
+    private var track: Track? { ref.flatMap { model.tracks.track(id: $0.id) } }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("TRACK").font(.microLabel(9)).kerning(1).foregroundStyle(Color.muted)
+                    Text(ref.map { track?.name ?? "\($0.nameSnapshot) (deleted)" } ?? "No track")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(Color.textPrimary)
+                }
+                Spacer()
+                trackMenu
+            }
+            if let ref {
+                TrackGatesMap(track: track, trace: trace, layout: ref.layout)
+                    .frame(height: 200)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                runList(ref)
+                if let track {
+                    NavigationLink {
+                        TrackEditorView(track: track)
+                    } label: {
+                        Label("Edit lines", systemImage: "line.diagonal")
+                            .font(.system(size: 14, weight: .medium))
+                    }
+                }
+            } else {
+                Text("Not matched to a track. Pick one, or create a track in the Tracks tab — sessions near it are matched automatically.")
+                    .font(.system(size: 12)).foregroundStyle(Color.muted)
+            }
+        }
+        .padding(16)
+        .background(Color.cardBg, in: RoundedRectangle(cornerRadius: 14))
+        .tint(Color.accent)
+    }
+
+    @ViewBuilder
+    private func runList(_ ref: SessionManifest.TrackRef) -> some View {
+        let isLoop = ref.layout?.isLoop ?? true
+        let noun = isLoop ? "Lap" : "Run"
+        if ref.runs.isEmpty {
+            Text(ref.layout == nil
+                 ? "This track has no lines yet."
+                 : "No complete \(noun.lowercased())s through these lines.")
+                .font(.system(size: 12)).foregroundStyle(Color.muted)
+        } else {
+            let best = ref.best
+            VStack(spacing: 0) {
+                ForEach(ref.runs) { run in
+                    HStack {
+                        Text("\(noun) \(run.index)").foregroundStyle(Color.muted)
+                        Spacer()
+                        if let d = run.duration {
+                            Text(RunFormat.time(d))
+                                .font(.numeral(16, weight: d == best ? .bold : .medium))
+                                .foregroundStyle(d == best ? Color.accent : Color.textPrimary)
+                            if d == best {
+                                Text("BEST").font(.microLabel(8)).kerning(0.8).foregroundStyle(Color.accent)
+                            }
+                        } else {
+                            Text("DNF").font(.system(size: 13, weight: .semibold)).foregroundStyle(Color.mutedWeak)
+                        }
+                    }
+                    .font(.system(size: 14))
+                    .padding(.vertical, 7)
+                    if run.index < ref.runs.count { Divider().overlay(Color.cardBorder) }
+                }
+            }
+        }
+    }
+
+    private var trackMenu: some View {
+        Menu {
+            ForEach(nearbyTracks) { t in
+                Button(t.name) { model.setTrack(t, for: sessionId) }
+            }
+            Divider()
+            Button("Detect automatically", systemImage: "wand.and.stars") { model.autoDetectTrack(for: sessionId) }
+            Button("No track", systemImage: "xmark") { model.setTrack(nil, for: sessionId) }
+        } label: {
+            Text(ref == nil ? "Assign" : "Change")
+                .font(.system(size: 13, weight: .semibold))
+        }
+    }
+
+    /// Tracks nearest the start of the drive first.
+    private var nearbyTracks: [Track] {
+        let all = model.tracks.all.filter { $0.layout != nil || $0.isUserTrack }
+        guard let p = trace.first else { return all }
+        let mLon = 111_320.0 * cos(p.latitude * .pi / 180)
+        func d(_ t: Track) -> Double {
+            guard let a = t.anchor else { return .infinity }
+            let dx = (a.longitude - p.longitude) * mLon, dy = (a.latitude - p.latitude) * 110_540
+            return dx * dx + dy * dy
+        }
+        return Array(all.sorted { d($0) < d($1) }.prefix(12))
     }
 }

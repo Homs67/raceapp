@@ -15,6 +15,7 @@ final class AppModel {
 
     let bus = TelemetryBus()
     let store = SessionStore.standard()
+    let tracks = TrackStore()
     let connection: ConnectionController
     let recording: RecordingCoordinator
     let cloudSync = CloudDriveSync()
@@ -51,17 +52,20 @@ final class AppModel {
         raceBox.onSessionsImported = { [weak self] ids in
             guard let self else { return }
             self.recording.noteSessionsChanged()
-            // Imported drives are sessions too: mirror them like recorded ones.
-            for id in ids {
-                if let manifest = try? self.store.manifest(for: id) {
-                    self.cloudSync.sync(manifest: manifest, sessionDirectory: self.store.directory(for: id))
-                }
+            // Imported drives are sessions too: find their track, then mirror
+            // them like recorded ones.
+            self.assignTrack(to: ids) { [weak self] manifest in
+                guard let self else { return }
+                self.cloudSync.sync(manifest: manifest, sessionDirectory: self.store.directory(for: manifest.id))
             }
         }
         RaceBoxController.clearStaging()
         recording.onSessionFinalized = { [weak self] manifest in
             guard let self else { return }
-            self.cloudSync.sync(manifest: manifest, sessionDirectory: self.store.directory(for: manifest.id))
+            self.assignTrack(to: [manifest.id]) { [weak self] final in
+                guard let self else { return }
+                self.cloudSync.sync(manifest: final, sessionDirectory: self.store.directory(for: final.id))
+            }
         }
         sensors.onBackgroundLocationStatusChange = { [weak self] status in
             self?.backgroundLocationStatus = status
@@ -202,7 +206,7 @@ final class AppModel {
         if track == nil {
             let snap = bus.snapshot()
             if let lat = snap[.gpsLatitude]?.value, let lon = snap[.gpsLongitude]?.value {
-                track = TrackDatabase.nearest(lat: lat, lon: lon)
+                track = tracks.nearest(lat: lat, lon: lon)
             }
         }
         metrics.start(track: track)

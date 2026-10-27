@@ -15,7 +15,7 @@ import ObdKit
 final class SessionMetrics {
 
     private let bus: TelemetryBus
-    private var lap: LapTimer?
+    private var lap: RunTimer?
     private var progress: TrackProgress?
     private var lapDelta: LapDelta?
     private let drag = DragMeter()
@@ -45,11 +45,15 @@ final class SessionMetrics {
     func start(track: Track?) {
         stop()
         self.track = track
-        if let track, track.centerline.count >= 2 {
-            let a = track.centerline[0], b = track.centerline[1]
+        // Circuits and autocross courses both time through RunTimer: laps on
+        // a loop, start→finish runs on a course, and never a "lap" that began
+        // with the car sitting at the line.
+        if let layout = track?.layout {
+            lap = RunTimer(layout: layout)
+        }
+        // Delta and sectors need a centerline (bundled circuits only).
+        if let track, track.layout?.isLoop == true, track.centerline.count >= 3 {
             let sf = track.startFinish
-            lap = LapTimer(gateA: (sf.a[0], sf.a[1]), gateB: (sf.b[0], sf.b[1]),
-                           forwardHeading: Self.bearing(a[0], a[1], b[0], b[1]))
             let line = track.centerline.map { GeoPoint(lat: $0[0], lon: $0[1]) }
             var tp = TrackProgress(centerline: line,
                                    gate: (GeoPoint(lat: sf.a[0], lon: sf.a[1]), GeoPoint(lat: sf.b[0], lon: sf.b[1])))
@@ -81,11 +85,11 @@ final class SessionMetrics {
 
         if let lap, let latR = snap[.gpsLatitude], let lonR = snap[.gpsLongitude], latR.t != lastGpsT {
             lastGpsT = latR.t
-            let completed = lap.add(lat: latR.value, lon: lonR.value, t: latR.t)
+            let completed = lap.add(lat: latR.value, lon: lonR.value, t: latR.t) != nil
             // `add` re-arms the lap clock on the crossing fix, so this state
             // already belongs to the new lap.
-            let st = lap.state(now: latR.t)
-            if completed, let last = st.lastLapTime {
+            let st = Self.state(lap, now: latR.t)
+            if completed, lap.layout.isLoop, let last = st.lastLapTime {
                 lapDelta?.lapCompleted(lapTime: last, isNewBest: st.bestLapTime == last)
                 sectorDeltas = [nil, nil, nil]
                 currentSector = 0
@@ -114,7 +118,7 @@ final class SessionMetrics {
                 }
             }
         }
-        if let lap { lapState = lap.state(now: now) }
+        if let lap { lapState = Self.state(lap, now: now) }
 
         // Drag prefers OBD speed (km/h) and falls back to GPS (m/s).
         if let sp = snap[.obd(.speed)], sp.t != lastSpeedT {
@@ -126,6 +130,17 @@ final class SessionMetrics {
         }
         dragRun = drag.current
         dragBest = drag.best
+    }
+
+    /// The dashboard's lap widgets read `LapTimer.State`; runs fill it the
+    /// same way (completed runs/laps, the one in progress, last and best).
+    private static func state(_ timer: RunTimer, now: TimeInterval) -> LapTimer.State {
+        let done = timer.completed.filter { $0.kind != .dnf }.compactMap(\.duration)
+        return LapTimer.State(completedLaps: done.count,
+                              currentLapTime: timer.elapsed(now: now),
+                              lastLapTime: done.last,
+                              bestLapTime: done.min(),
+                              lapTimes: done)
     }
 
     private static func bearing(_ lat1: Double, _ lon1: Double, _ lat2: Double, _ lon2: Double) -> Double {

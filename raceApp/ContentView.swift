@@ -42,7 +42,12 @@ struct ContentView: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        SessionsView()
+        TabView {
+            SessionsView()
+                .tabItem { Label("Sessions", systemImage: "flag.checkered") }
+            TracksView()
+                .tabItem { Label("Tracks", systemImage: "map") }
+        }
             .tint(Color.accent)
             // The live dashboard is up for exactly as long as a session records;
             // the only way out is STOP.

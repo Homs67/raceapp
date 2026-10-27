@@ -24,7 +24,7 @@
 <ol class="steps">
   <li><span class="path">raceAppApp.swift</span> creates a single <code>AppModel</code>, puts it in the SwiftUI environment, forces dark mode, and calls <code>model.onLaunch()</code>.</li>
   <li><code>onLaunch()</code> recovers interrupted sessions, requests sensor permissions, starts phone sensors publishing to the bus, starts OBD discovery, and auto-connects a remembered RaceBox. In DEBUG it also honours <a href="workflow.html#launch-args">launch arguments</a> such as <code>-demo</code>.</li>
-  <li><span class="path">ContentView.swift</span> shows <code>SessionsView</code> as the root. While a session records, the dashboard (<code>DashboardPagerView</code>) covers everything as a full-screen cover; Settings and Debug are sheets.</li>
+  <li><span class="path">ContentView.swift</span> is a tab bar: <strong>Sessions</strong> (<code>SessionsView</code>) and <strong>Tracks</strong> (<code>TracksView</code>). While a session records, the dashboard (<code>DashboardPagerView</code>) covers everything as a full-screen cover; Settings and Debug are sheets.</li>
   <li>Scene-phase changes go to <code>AppModel.scenePhaseChanged</code>, which re-checks permissions, reconnects devices on foreground, and switches sensors into background recording mode.</li>
 </ol>
 
@@ -105,14 +105,14 @@ recording.onRecordingDidStop = { [weak self] in … }</code></pre>
 <h2 id="screens">Screens</h2>
 <div class="table-wrap"><table>
 <tr><th>Screen</th><th>File</th><th>What it shows</th></tr>
-<tr><td>Sessions</td><td><code>SessionsView</code></td><td>Root screen: Start button, link status bar, sessions list; session detail with highlights, map trace, laps, graphs, export, delete</td></tr>
+<tr><td>Sessions</td><td><code>SessionsView</code></td><td>First tab: Start button, link status bar, sessions list (with track and best time); session detail with the track card (lines over the trace, runs/laps, change track, edit lines), highlights, graphs, export, delete</td></tr>
 <tr><td>Live dashboard</td><td><code>DashboardPagerView</code> (+ <code>Dashboard/</code>)</td><td>Full-screen while recording. See <a href="dashboard.html">Dashboard system</a>.</td></tr>
 <tr><td>Video review</td><td><code>SessionVideoView</code>, <code>DualCameraSwapView</code></td><td>Stitched session video over the graphs with a synced playhead</td></tr>
 <tr><td>Settings</td><td><code>SettingsView</code></td><td>OBD adapter, RaceBox, car, shift lights, dashboards, units, G-force calibration, experimental tools</td></tr>
 <tr><td>G-force calibration</td><td><code>GCalibrationView</code></td><td>Half-height sheet, one step at a time</td></tr>
 <tr><td>RaceBox memory</td><td><code>RaceBoxMemoryView</code></td><td>What the device recorded on its own; download to Sessions; erase</td></tr>
 <tr><td>Health</td><td><code>HealthView</code></td><td>Slow OBD channels, device health, trouble-code badge</td></tr>
-<tr><td>Tracks</td><td><code>TracksView</code></td><td>The bundled track database on a map</td></tr>
+<tr><td>Tracks</td><td><code>TracksView</code>, <code>TrackEditorView</code></td><td>Second tab: the track library (user tracks and bundled circuits), new track, track detail with its sessions, and the line editor — mark on site or tap the satellite map</td></tr>
 <tr><td>Debug tools</td><td><code>DebugView</code>, <code>DiagnosticsView</code>, <code>CanMonitorView</code>, <code>RaceBoxDebugView</code></td><td>OBD capability report, raw CAN monitor and discovery, every RaceBox signal with a self-test</td></tr>
 </table></div>
 <p>Reusable drawing lives in <span class="path">raceApp/Views/Gauges/</span> (G-meter, shift lights, track map, 3D chase-cam track view) and design tokens in <span class="path">raceApp/Theme/Theme.swift</span>.</p>
