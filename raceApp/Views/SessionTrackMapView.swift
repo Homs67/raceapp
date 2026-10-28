@@ -4,8 +4,8 @@
 //
 //  Full-screen track map for one session. Two separate controls: the map
 //  menu picks what the line shows (speed, braking, or delta to the best lap),
-//  and "+ Channels" picks which charts sit in the bottom panel. Laps, play and
-//  scrub are pinned at the bottom whatever is selected.
+//  and "+ Channels" picks which charts sit in the bottom panel. Lap step (or
+//  ±10 s on a drive), play and scrub are pinned at the bottom whatever is selected.
 //
 
 import SwiftUI
@@ -155,7 +155,7 @@ struct SessionTrackMapView: View {
             Spacer()
             circleButton("globe", on: satellite) { satellite.toggle() }
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, 20)
         .padding(.top, 6)
     }
 
@@ -186,18 +186,20 @@ struct SessionTrackMapView: View {
     // MARK: - Bottom panel
 
     private var panel: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 0) {
             Capsule().fill(Color.white.opacity(0.3)).frame(width: 36, height: 5)
             panelHeader
+                .padding(.horizontal, 20).padding(.top, 10).padding(.bottom, 12)
+            divider
             charts
-            VStack(spacing: 12) {
-                lapStrip
-                playBar
+                .padding(.horizontal, 20).padding(.top, 10).padding(.bottom, 12)
+            divider
+            VStack(spacing: 14) {
+                transport
+                timeline
             }
-            .padding(.top, 12)
-            .overlay(alignment: .top) { Rectangle().fill(Color.white.opacity(0.1)).frame(height: 0.5) }
+            .padding(.horizontal, 20).padding(.top, 16)
         }
-        .padding(.horizontal, 16)
         .padding(.top, 8)
         .padding(.bottom, 8)
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { panelHeight = $0 }
@@ -210,14 +212,31 @@ struct SessionTrackMapView: View {
         }
     }
 
+    private var divider: some View {
+        Rectangle().fill(Color.white.opacity(0.1)).frame(height: 0.5)
+    }
+
+    private var isDrive: Bool { lap.kind == .drive }
+
+    private func title(_ l: SessionAnalysis.Lap) -> String {
+        switch l.kind {
+        case .timed, .dnf: return "Lap \(l.number)"
+        case .outLap: return "Out lap"
+        case .inLap: return "In lap"
+        case .drive: return "Drive"
+        }
+    }
+
     private var panelHeader: some View {
         HStack(spacing: 8) {
-            let isBest = lap.id == analysis.bestLapId
-            Text(isBest ? "★ \(lap.label)" : lap.kind == .drive ? "Drive" : lap.label)
-                .font(.system(size: 17, weight: .bold))
-                .foregroundStyle(isBest ? Color.accent : .white)
-            Text(lapSubtitle).font(.system(size: 15, weight: .semibold)).foregroundStyle(Color.muted)
-            Spacer()
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(title(lap)).font(.system(size: 20, weight: .semibold)).foregroundStyle(.white)
+                Text(RunFormat.time(lap.duration))
+                    .font(.system(size: 20, weight: .regular)).monospacedDigit()
+                    .foregroundStyle(Color.muted)
+            }
+            .lineLimit(1)
+            Spacer(minLength: 8)
             Menu {
                 ForEach(analysis.available) { ch in
                     Toggle(ch.title, isOn: Binding(
@@ -230,23 +249,15 @@ struct SessionTrackMapView: View {
             } label: {
                 HStack(spacing: 4) {
                     Image(systemName: "plus").font(.system(size: 13, weight: .bold))
-                    Text(channels.count > 1 ? "Channels · \(channels.count)" : "Channels").font(.system(size: 13, weight: .semibold))
+                    Text(channels.count > 1 ? "Channels · \(channels.count)" : "Channels").font(.system(size: 15, weight: .semibold))
                 }
                 .foregroundStyle(.white)
-                .padding(.horizontal, 12).padding(.vertical, 7)
+                .padding(.horizontal, 12).frame(height: 32)
                 .background(Color.white.opacity(0.1), in: Capsule())
             }
             .menuActionDismissBehavior(.disabled)
             .menuOrder(.fixed)
         }
-    }
-
-    private var lapSubtitle: String {
-        var s = RunFormat.time(lap.duration)
-        if lap.kind == .timed, let best = analysis.bestLap, best.id != lap.id {
-            s += String(format: " · %+.2f", lap.duration - best.duration)
-        }
-        return s
     }
 
     @ViewBuilder private var charts: some View {
@@ -255,7 +266,7 @@ struct SessionTrackMapView: View {
             ForEach(shown) { ch in channelChart(ch) }
         }
         if shown.count > 3 {
-            ScrollView { stack }.frame(maxHeight: 250)
+            ScrollView { stack }.frame(maxHeight: 300)
         } else {
             stack
         }
@@ -265,9 +276,10 @@ struct SessionTrackMapView: View {
         let values = overlay.series[ch] ?? []
         let v = analysis.value(ch, at: cursorIndex, lap: lap)
         let frac = range.count > 1 ? cursor / Double(range.count - 1) : 0
-        return VStack(alignment: .leading, spacing: 3) {
+        return VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline, spacing: 4) {
-                Text(ch.title.uppercased()).font(.system(size: 12, weight: .semibold)).foregroundStyle(Color.muted)
+                Text(ch.title.uppercased()).font(.system(size: 12, weight: .semibold)).tracking(0.5)
+                    .foregroundStyle(Color.muted)
                 Spacer()
                 Text(v.map { ch.format($0, units) } ?? "–")
                     .font(.system(size: 15, weight: .semibold)).monospacedDigit()
@@ -277,67 +289,122 @@ struct SessionTrackMapView: View {
             }
             ChannelLine(values: values, color: ch.color, symmetric: ch.symmetric)
                 .equatable()
-                .frame(height: ch == .gear ? 26 : 40)
+                .frame(height: ch == .gear ? 40 : 54)
                 .overlay(alignment: .leading) {
                     GeometryReader { geo in
-                        Rectangle().fill(Color.accent).frame(width: 1.5)
-                            .offset(x: geo.size.width * frac)
+                        Rectangle().fill(Color.white).frame(width: 3)
+                            .offset(x: geo.size.width * frac - 1.5)
                     }
                 }
         }
     }
 
-    private var lapStrip: some View {
-        ScrollViewReader { proxy in
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(laps) { l in
-                        let on = l.id == lapId
-                        Button {
-                            lapId = l.id
-                            cursor = 0
-                        } label: {
-                            Text(l.id == analysis.bestLapId ? "★ \(l.label)" : l.label)
-                                .font(.system(size: 14, weight: .bold))
-                                .foregroundStyle(on ? Color.black : Color.white.opacity(l.isTimed ? 0.85 : 0.5))
-                                .frame(width: 64, height: 32)
-                                .background(on ? AnyShapeStyle(Color.accent) : AnyShapeStyle(Color.white.opacity(0.08)), in: Capsule())
-                        }
-                        .buttonStyle(.plain)
-                        .id(l.id)
-                    }
-                }
-                .padding(.horizontal, 28)
+    // MARK: - Transport
+
+    /// Lap step on either side of play; a drive has no laps, so ±10 s instead.
+    @ViewBuilder private var transport: some View {
+        if isDrive {
+            HStack(spacing: 32) {
+                skipButton(-10)
+                playButton
+                skipButton(10)
             }
-            .mask(HStack(spacing: 0) {
-                LinearGradient(colors: [.clear, .black], startPoint: .leading, endPoint: .trailing).frame(width: 36)
-                Rectangle()
-                LinearGradient(colors: [.black, .clear], startPoint: .leading, endPoint: .trailing).frame(width: 36)
-            })
-            .padding(.horizontal, -16)
-            .onAppear { proxy.scrollTo(lapId, anchor: .center) }
-            .onChange(of: lapId) { withAnimation { proxy.scrollTo(lapId, anchor: .center) } }
+            .frame(maxWidth: .infinity)
+        } else {
+            HStack {
+                lapButton(offset: -1)
+                Spacer(minLength: 8)
+                playButton
+                Spacer(minLength: 8)
+                lapButton(offset: 1)
+            }
         }
-        .frame(height: 32)
     }
 
-    private var playBar: some View {
-        HStack(spacing: 12) {
-            Button { playing.toggle() } label: {
-                Image(systemName: playing ? "pause.fill" : "play.fill")
-                    .font(.system(size: 16, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 40, height: 40)
-                    .background(Color.white.opacity(0.12), in: Circle())
+    private var playButton: some View {
+        Button { playing.toggle() } label: {
+            Image(systemName: playing ? "pause.fill" : "play.fill")
+                .font(.system(size: 22, weight: .bold))
+                .foregroundStyle(.black)
+                .offset(x: playing ? 0 : 2)
+                .frame(width: 56, height: 56)
+                .background(Color.white, in: Circle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// Round ±10 s button, the same size as play. The trianglehead rewind
+    /// symbols are iOS 18+; iOS 17 falls back to the older gobackward.10 pair.
+    private func skipButton(_ seconds: Double) -> some View {
+        let back = seconds < 0
+        let symbol: String
+        if #available(iOS 18, *) {
+            symbol = back ? "10.arrow.trianglehead.counterclockwise" : "10.arrow.trianglehead.clockwise"
+        } else {
+            symbol = back ? "gobackward.10" : "goforward.10"
+        }
+        return Button { skip(seconds) } label: {
+            Image(systemName: symbol)
+                .font(.system(size: 26, weight: .medium))
+                .foregroundStyle(.white)
+                .frame(width: 56, height: 56)
+                .background(Color.white.opacity(0.1), in: Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(back ? "Back 10 seconds" : "Forward 10 seconds")
+    }
+
+    @ViewBuilder private func lapButton(offset: Int) -> some View {
+        let i = laps.firstIndex { $0.id == lapId } ?? 0
+        let target = laps.indices.contains(i + offset) ? laps[i + offset] : nil
+        stepButton(symbol: offset < 0 ? "chevron.left" : "chevron.right",
+                   label: target.map(title) ?? (offset < 0 ? "Previous" : "Next"),
+                   leading: offset < 0) {
+            guard let target else { return }
+            lapId = target.id
+            cursor = 0
+        }
+        .disabled(target == nil)
+        .opacity(target == nil ? 0.35 : 1)
+    }
+
+    private func stepButton(symbol: String, label: String, leading: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                if leading { Image(systemName: symbol).font(.system(size: 14, weight: .bold)) }
+                Text(label).font(.system(size: 15, weight: .semibold)).lineLimit(1)
+                if !leading { Image(systemName: symbol).font(.system(size: 14, weight: .bold)) }
             }
-            .buttonStyle(.plain)
+            .foregroundStyle(.white)
+            .frame(maxWidth: .infinity, alignment: leading ? .leading : .trailing)
+            .padding(.leading, leading ? 14 : 18).padding(.trailing, leading ? 18 : 14)
+            .frame(width: 112, height: 40)
+            .background(Color.white.opacity(0.1), in: Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func skip(_ seconds: Double) {
+        cursor = max(0, min(Double(range.count - 1), cursor + seconds * SessionAnalysis.hz))
+    }
+
+    private var timeline: some View {
+        VStack(spacing: 4) {
+            HStack {
+                Text(RunFormat.time(cursor / SessionAnalysis.hz))
+                    .font(.system(size: 13, weight: .semibold)).foregroundStyle(.white)
+                Spacer()
+                Text(RunFormat.time(lap.duration))
+                    .font(.system(size: 13, weight: .medium)).foregroundStyle(Color.muted)
+            }
+            .monospacedDigit()
             GeometryReader { geo in
                 let frac = range.count > 1 ? cursor / Double(range.count - 1) : 0
                 ZStack(alignment: .leading) {
                     Capsule().fill(Color.white.opacity(0.18)).frame(height: 4)
                     Capsule().fill(Color.accent).frame(width: geo.size.width * frac, height: 4)
                     Circle().fill(Color.white).frame(width: 18, height: 18)
-                        .overlay(Circle().stroke(Color.accent, lineWidth: 3))
+                        .shadow(color: .black.opacity(0.4), radius: 2, y: 1)
                         .offset(x: geo.size.width * frac - 9)
                 }
                 .frame(maxHeight: .infinity)
@@ -349,10 +416,7 @@ struct SessionTrackMapView: View {
                     cursor = f * Double(range.count - 1)
                 })
             }
-            .frame(height: 40)
-            Text(RunFormat.time(cursor / SessionAnalysis.hz))
-                .font(.numeral(17)).foregroundStyle(.white)
-                .frame(width: 64, alignment: .trailing)
+            .frame(height: 24)
         }
     }
 
