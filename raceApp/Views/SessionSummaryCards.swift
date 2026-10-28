@@ -9,6 +9,7 @@
 import SwiftUI
 import CoreLocation
 import SessionKit
+import WeatherKit
 
 // MARK: - Hero map
 
@@ -17,6 +18,7 @@ import SessionKit
 struct SessionHeroMap: View {
     let analysis: SessionAnalysis
     let track: Track?
+    var weather: SessionManifest.WeatherSnapshot? = nil
     @AppStorage("useMetricUnits") private var metric = false
 
     private var units: UnitsFormatter { UnitsFormatter(metric: metric) }
@@ -26,7 +28,8 @@ struct SessionHeroMap: View {
             LinearGradient(colors: [Color(white: 0.09), Color(white: 0.045)], startPoint: .top, endPoint: .bottom)
             grid
             Canvas { ctx, size in draw(ctx, size) }
-                .padding(.vertical, 26).padding(.horizontal, 20)
+                // Clear of the chip on top and the legend below.
+                .padding(.top, 50).padding(.bottom, 34).padding(.horizontal, 20)
             overlays
         }
         .frame(height: 236)
@@ -47,15 +50,15 @@ struct SessionHeroMap: View {
     private var overlays: some View {
         VStack {
             HStack {
-                if let c = analysis.ambientC {
-                    HStack(spacing: 6) {
-                        Image(systemName: "thermometer.medium").font(.system(size: 12, weight: .semibold))
-                        Text("Air \(Int(units.temp(fromC: c).rounded()))°").font(.system(size: 12, weight: .semibold))
-                    }
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 10).padding(.vertical, 6)
-                    .background(Color(white: 0.11).opacity(0.75), in: Capsule())
-                    .overlay(Capsule().stroke(Color.white.opacity(0.1), lineWidth: 1))
+                if let w = weather {
+                    conditionsChip(symbol: w.symbolName, text: [
+                        "\(Int(units.temp(fromC: w.temperatureC).rounded()))°",
+                        "\(Int((w.humidity * 100).rounded()))%",
+                        "\(Int(units.speed(fromMps: w.windMps).rounded())) \(units.speedUnit.lowercased()) \(w.windCompass)",
+                    ].joined(separator: "  ·  "))
+                } else if let c = analysis.ambientC {
+                    // No weather report: the car's own outside-air sensor.
+                    conditionsChip(symbol: "thermometer.medium", text: "Air \(Int(units.temp(fromC: c).rounded()))° (car)")
                 }
                 Spacer()
                 Image(systemName: "arrow.up.left.and.arrow.down.right")
@@ -76,6 +79,18 @@ struct SessionHeroMap: View {
             }
         }
         .padding(12)
+    }
+
+    private func conditionsChip(symbol: String, text: String) -> some View {
+        HStack(spacing: 6) {
+            // Outline weather symbols have no multicolor layers; their .fill twins do.
+            let filled = UIImage(systemName: symbol + ".fill") != nil ? symbol + ".fill" : symbol
+            Image(systemName: filled).symbolRenderingMode(.multicolor).font(.system(size: 12, weight: .semibold))
+            Text(text).font(.system(size: 12, weight: .semibold)).foregroundStyle(.white)
+        }
+        .padding(.horizontal, 10).padding(.vertical, 6)
+        .background(Color(white: 0.11).opacity(0.75), in: Capsule())
+        .overlay(Capsule().stroke(Color.white.opacity(0.1), lineWidth: 1))
     }
 
     private func draw(_ ctx: GraphicsContext, _ size: CGSize) {
@@ -334,5 +349,31 @@ struct DragCard: View {
 
     private func trap(_ units: UnitsFormatter) -> String? {
         drag.quarterTrapMps.map { "@ \(Int(units.speed(fromMps: $0).rounded())) \(units.speedUnit.lowercased())" }
+    }
+}
+
+// MARK: - Weather attribution
+
+/// Apple Weather mark and legal link, required wherever its data is shown.
+struct WeatherAttributionRow: View {
+    @State private var attribution: WeatherAttribution?
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Spacer()
+            if let attribution {
+                AsyncImage(url: attribution.combinedMarkDarkURL) { image in
+                    image.resizable().scaledToFit()
+                } placeholder: {
+                    Text(" Weather").font(.system(size: 11, weight: .semibold)).foregroundStyle(Color.muted)
+                }
+                .frame(height: 11)
+                Link("Legal", destination: attribution.legalPageURL)
+                    .font(.system(size: 11)).foregroundStyle(Color.muted).underline()
+            }
+        }
+        .frame(height: 14)
+        .padding(.horizontal, 4)
+        .task { attribution = await SessionWeather.attribution() }
     }
 }

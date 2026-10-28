@@ -180,6 +180,43 @@ public struct SessionManifest: Codable, Equatable, Sendable, Identifiable {
     /// this is a cache of the truth (the GPS channels + the track), not the
     /// truth itself.
     public var track: TrackRef?
+    /// Conditions at the session's place and time (Apple Weather, fetched
+    /// after the drive). Stored so the session shows it offline and exports it.
+    public var weather: WeatherSnapshot?
+
+    public struct WeatherSnapshot: Codable, Equatable, Sendable {
+        public var temperatureC: Double
+        /// 0…1
+        public var humidity: Double
+        public var windMps: Double
+        /// Meteorological: the direction the wind blows from, degrees true.
+        public var windFromDegrees: Double
+        /// SF Symbol for the condition, as the weather source names it.
+        public var symbolName: String
+        public var condition: String
+        /// The hour the values describe.
+        public var observedAt: Date
+        public var source: String
+
+        public init(temperatureC: Double, humidity: Double, windMps: Double, windFromDegrees: Double,
+                    symbolName: String, condition: String, observedAt: Date, source: String) {
+            self.temperatureC = temperatureC
+            self.humidity = humidity
+            self.windMps = windMps
+            self.windFromDegrees = windFromDegrees
+            self.symbolName = symbolName
+            self.condition = condition
+            self.observedAt = observedAt
+            self.source = source
+        }
+
+        /// 8-point compass name of where the wind comes from ("W", "NE"…).
+        public var windCompass: String {
+            let names = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
+            let d = (windFromDegrees.truncatingRemainder(dividingBy: 360) + 360).truncatingRemainder(dividingBy: 360)
+            return names[Int((d + 22.5) / 45) % 8]
+        }
+    }
 
     public struct TrackRef: Codable, Equatable, Sendable {
         public enum AssignedBy: String, Codable, Sendable { case auto, manual }

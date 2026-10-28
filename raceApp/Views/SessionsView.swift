@@ -457,8 +457,9 @@ struct SessionDetailView: View {
                     header(manifest)
                     if let analysis {
                         if !analysis.t.isEmpty {
-                            SessionHeroMap(analysis: analysis, track: track)
+                            SessionHeroMap(analysis: analysis, track: track, weather: manifest.weather)
                                 .onTapGesture { openMap(analysis.bestLap) }
+                            if manifest.weather != nil { WeatherAttributionRow() }
                         }
                         BestLapCard(analysis: analysis, manifest: manifest, previousBest: previousBest)
                         if !analysis.laps.isEmpty {
@@ -764,9 +765,31 @@ struct SessionDetailView: View {
             await MainActor.run {
                 built.corners = corners.map { (name: $0.0, coordinate: $0.1) }
                 analysis = built
+                fetchWeatherIfNeeded(built)
                 if LaunchArgs.openLatestGraph, mapRoute == nil, !built.t.isEmpty {
                     mapRoute = MapRoute(lapId: built.bestLapId ?? built.navigableLaps.first?.id ?? 0)
                 }
+            }
+        }
+    }
+
+    /// One Apple Weather request per session, saved into the manifest.
+    private func fetchWeatherIfNeeded(_ built: SessionAnalysis) {
+        guard manifest?.weather == nil, !built.t.isEmpty, !SessionWeather.attempted.contains(sessionId) else { return }
+        SessionWeather.attempted.insert(sessionId)
+        guard let snapshot = manifest else { return }
+        // Where the car actually was: the best lap's start, else mid-drive. The first
+        // fix can predate a good GPS lock (or, in demo replays, the replay itself).
+        let start = built.coordinate(built.bestLap.map { built.indices($0).lowerBound } ?? built.t.count / 2)
+        Task {
+            do {
+                guard let weather = try await SessionWeather.fetch(for: snapshot, at: start),
+                      var fresh = try? model.store.manifest(for: sessionId) else { return }
+                fresh.weather = weather
+                try? model.store.save(fresh)
+                manifest = fresh
+            } catch {
+                NSLog("[weather] %@ at %.5f,%.5f", String(describing: error), start.latitude, start.longitude)
             }
         }
     }

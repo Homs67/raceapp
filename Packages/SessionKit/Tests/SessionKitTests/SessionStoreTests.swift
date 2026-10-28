@@ -42,6 +42,23 @@ final class SessionStoreTests: XCTestCase {
         XCTAssertEqual(loaded, manifest)
     }
 
+    func testWeatherRoundtripsAndOlderManifestsDecodeWithout() throws {
+        var manifest = makeManifest()
+        manifest.weather = .init(temperatureC: 17.8, humidity: 0.71, windMps: 4.0, windFromDegrees: 268,
+                                 symbolName: "sun.max", condition: "Clear",
+                                 observedAt: Date(timeIntervalSince1970: 1_800_000_000), source: "Apple Weather")
+        try store.create(manifest)
+        XCTAssertEqual(try store.manifest(for: manifest.id).weather, manifest.weather)
+        XCTAssertEqual(manifest.weather?.windCompass, "W")
+
+        // A manifest written before weather existed has no "weather" key.
+        var plain = makeManifest()
+        plain.weather = nil
+        let data = try JSONEncoder().encode(plain)
+        XCTAssertFalse(String(decoding: data, as: UTF8.self).contains("weather"))
+        XCTAssertNil(try JSONDecoder().decode(SessionManifest.self, from: data).weather)
+    }
+
     func testRecoveryFinalizesInterruptedSession() async throws {
         // Simulate a crash: session created, samples written, never stopped
         var manifest = makeManifest()

@@ -200,10 +200,14 @@ struct SessionTrackMapView: View {
         .padding(.horizontal, 16)
         .padding(.top, 8)
         .padding(.bottom, 8)
-        .background(Color(white: 0.11).opacity(0.97),
-                    in: UnevenRoundedRectangle(topLeadingRadius: 28, topTrailingRadius: 28))
-        .shadow(color: .black.opacity(0.5), radius: 20, y: -6)
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { panelHeight = $0 }
+        // The panel runs to the screen edge; its controls stay above the home indicator.
+        .background {
+            UnevenRoundedRectangle(topLeadingRadius: 28, topTrailingRadius: 28)
+                .fill(Color(white: 0.11).opacity(0.97))
+                .shadow(color: .black.opacity(0.5), radius: 20, y: -6)
+                .ignoresSafeArea(edges: .bottom)
+        }
     }
 
     private var panelHeader: some View {
