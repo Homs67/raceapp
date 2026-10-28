@@ -45,4 +45,20 @@ struct DragMeterTests {
         #expect(meter.current.zeroToSixty == nil)
         #expect(meter.current.launching == false)
     }
+
+    /// A recording that ends mid-pull still counts its splits once finished.
+    @Test func finishMergesRunInProgress() {
+        let a = 4.0
+        let meter = DragMeter()
+        meter.add(speedMps: 0, t: 0)
+        var t = 0.05
+        while t < 12 { meter.add(speedMps: a * t, t: t); t += 0.05 }   // tops out at 48 m/s
+        #expect(meter.best.zeroTo100Kmh == nil)
+        meter.finish()
+        let expected = (27.7778 - 1.0) / a
+        #expect(abs((meter.best.zeroTo100Kmh ?? 0) - expected) < 0.2)
+        #expect(meter.best.zeroToSixty != nil)
+        #expect(meter.best.zeroTo200Kmh == nil)       // 55.6 m/s not reached
+        #expect(meter.current.launching == false)
+    }
 }

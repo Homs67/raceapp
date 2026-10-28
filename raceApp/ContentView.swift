@@ -9,8 +9,14 @@ enum LaunchArgs {
     #if DEBUG
     static var openLatestSession: Bool {
         CommandLine.arguments.contains("-open-latest-session") || openLatestGraph || openLatestVideo
+            || openSessionPrefix != nil
     }
     static var openLatestGraph: Bool { CommandLine.arguments.contains("-open-latest-graph") }
+    /// `-open-session <uuid prefix>` opens that session's detail instead of the latest.
+    static var openSessionPrefix: String? {
+        guard let i = CommandLine.arguments.firstIndex(of: "-open-session"), i + 1 < CommandLine.arguments.count else { return nil }
+        return CommandLine.arguments[i + 1].uppercased()
+    }
     static var openLatestVideo: Bool { CommandLine.arguments.contains("-open-latest-video") }
     /// Opens Settings or Debug sheet after launch.
     static var openSettings: Bool {
@@ -31,6 +37,7 @@ enum LaunchArgs {
     #else
     static var openLatestSession: Bool { false }
     static var openLatestGraph: Bool { false }
+    static var openSessionPrefix: String? { nil }
     static var openLatestVideo: Bool { false }
     static var openSettings: Bool { false }
     static var openDebug: Bool { false }

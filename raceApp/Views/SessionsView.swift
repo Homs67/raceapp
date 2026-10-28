@@ -204,7 +204,8 @@ struct SessionsView: View {
 
     private func reload() {
         sessions = model.store.list()
-        if LaunchArgs.openLatestSession, !didAutoOpen, let latest = sessions.first {
+        if LaunchArgs.openLatestSession, !didAutoOpen,
+           let latest = LaunchArgs.openSessionPrefix.flatMap({ p in sessions.first { $0.id.uuidString.hasPrefix(p) } }) ?? sessions.first {
             didAutoOpen = true
             path = [latest.id]
         }
@@ -427,11 +428,11 @@ struct SessionDetailView: View {
     @AppStorage("useMetricUnits") private var metric = false
 
     @State private var manifest: SessionManifest?
-    @State private var trace: [CLLocationCoordinate2D] = []
+    @State private var analysis: SessionAnalysis?
     @State private var gValidation: GForceValidation?
-    @State private var graphs: [MetricSeries] = []
-    @State private var loadingGraphs = true
-    @State private var expandedSeries: MetricSeries?
+    @State private var previousBest: TimeInterval?
+    @State private var mapRoute: MapRoute?
+    @State private var detailsExpanded = true
     @State private var note = ""
     @State private var exportUrls: [URL]?
     @State private var exporting = false
@@ -442,34 +443,57 @@ struct SessionDetailView: View {
     @State private var importingVideos = false
     @State private var showVideoPlayer = false
 
+    private struct MapRoute: Identifiable { let lapId: Int; var id: Int { lapId } }
+
+    private var track: Track? {
+        guard let id = manifest?.track?.id, !id.isEmpty else { return nil }
+        return model.tracks.track(id: id)
+    }
+
     var body: some View {
         ScrollView {
             if let manifest {
-                VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 12) {
                     header(manifest)
-                    SessionTrackCard(sessionId: sessionId, manifest: manifest, trace: trace)
-                    if !trace.isEmpty, manifest.track?.id.isEmpty ?? true { mapCard }
-                    highlightsGrid(manifest)
+                    if let analysis {
+                        if !analysis.t.isEmpty {
+                            SessionHeroMap(analysis: analysis, track: track)
+                                .onTapGesture { openMap(analysis.bestLap) }
+                        }
+                        BestLapCard(analysis: analysis, manifest: manifest, previousBest: previousBest)
+                        if !analysis.laps.isEmpty {
+                            LapBarsCard(analysis: analysis) { openMap($0) }
+                        }
+                        if !analysis.drag.isEmpty {
+                            DragCard(drag: analysis.drag, raceBox: !analysis.phoneGpsOnly)
+                        }
+                    } else {
+                        HStack { Spacer(); ProgressView().tint(.gray); Spacer() }.frame(height: 236)
+                    }
                     videoSection(manifest)
-                    if let gValidation { GCalibrationCard(validation: gValidation) }
-                    graphsSection
-                    noteField(manifest)
-                    exportButton
+                    detailsSection(manifest)
                 }
-                .padding(22)
+                .padding(.horizontal, 16)
+                .padding(.bottom, 24)
             }
         }
         .background(Color.bgScreen)
-        .navigationTitle(manifest?.locationName ?? "Session")
+        .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button { export() } label: {
+                    if exporting { ProgressView() } else { Label("Export", systemImage: "square.and.arrow.up").labelStyle(.titleAndIcon) }
+                }
+                .disabled(exporting)
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
                     Button("Delete Session", systemImage: "trash", role: .destructive) {
                         confirmingDelete = true
                     }
                 } label: {
-                    Image(systemName: "ellipsis.circle")
+                    Image(systemName: "ellipsis")
                 }
             }
         }
@@ -477,6 +501,7 @@ struct SessionDetailView: View {
         .onChange(of: model.recording.sessionsVersion) {
             manifest = try? model.store.manifest(for: sessionId)
         }
+        .onChange(of: manifest?.track) { buildAnalysis() }
         .sheet(isPresented: Binding(get: { exportUrls != nil }, set: { if !$0 { exportUrls = nil } })) {
             if let urls = exportUrls {
                 ActivityView(items: urls)
@@ -493,6 +518,11 @@ struct SessionDetailView: View {
         .fullScreenCover(isPresented: $showVideoPlayer) {
             SessionVideoView(sessionId: sessionId)
         }
+        .fullScreenCover(item: $mapRoute) { route in
+            if let analysis {
+                SessionTrackMapView(analysis: analysis, track: track, layout: manifest?.track?.layout, lapId: route.lapId)
+            }
+        }
         .photosPicker(isPresented: $showPhotosPicker, selection: $photoItems, matching: .videos)
         .onChange(of: photoItems) { importPickedPhotos() }
         .fileImporter(isPresented: $showFileImporter,
@@ -502,6 +532,10 @@ struct SessionDetailView: View {
         }
     }
 
+    private func openMap(_ lap: SessionAnalysis.Lap?) {
+        guard let analysis, !analysis.t.isEmpty else { return }
+        mapRoute = MapRoute(lapId: lap?.id ?? analysis.navigableLaps.first?.id ?? 0)
+    }
     // MARK: - Video section
 
     @ViewBuilder
@@ -510,7 +544,7 @@ struct SessionDetailView: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text("VIDEO")
-                    .font(.microLabel(9)).kerning(1.2)
+                    .font(.microLabel(12)).kerning(1.2)
                     .foregroundStyle(Color.muted)
                 Spacer()
                 if importingVideos {
@@ -532,7 +566,7 @@ struct SessionDetailView: View {
                                 .font(.system(size: 14, weight: .semibold))
                                 .foregroundStyle(Color.textPrimary)
                             Text(coverageText(videos, manifest: manifest))
-                                .font(.system(size: 11))
+                                .font(.system(size: 12))
                                 .foregroundStyle(Color.muted)
                         }
                         Spacer()
@@ -542,13 +576,23 @@ struct SessionDetailView: View {
                     }
                 }
                 .buttonStyle(.plain)
-                ForEach(videos) { asset in
-                    videoRow(asset, manifest: manifest)
+                if videos.contains(where: { $0.hasEmbeddedDate == false }) {
+                    Label("A clip has no clock — check Sync in the player", systemImage: "exclamationmark.triangle.fill")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(Color.recordRed)
                 }
+                DisclosureGroup("Clips (\(videos.count))") {
+                    ForEach(videos) { asset in
+                        videoRow(asset, manifest: manifest)
+                    }
+                }
+                .font(.system(size: 13, weight: .medium))
+                .tint(Color.mutedStrong)
             }
         }
-        .padding(14)
-        .background(Color.cardGray, in: RoundedRectangle(cornerRadius: 16))
+        .padding(16)
+        .background(Color.cardBg, in: RoundedRectangle(cornerRadius: 22))
+        .overlay(RoundedRectangle(cornerRadius: 22).stroke(Color.cardBorder, lineWidth: 1))
     }
 
     private func addVideoMenu(compact: Bool) -> some View {
@@ -573,27 +617,27 @@ struct SessionDetailView: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(videoRoleLabel(asset.role))
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(Color.accent)
                     Text(asset.fileName)
-                        .font(.system(size: 11, design: .monospaced))
+                        .font(.system(size: 12, design: .monospaced))
                         .foregroundStyle(Color.mutedStrong)
                         .lineLimit(1)
                 }
                 // Diagnosis line: the clock we read from the file (or the lack of one)
                 if asset.hasEmbeddedDate == false {
                     Text("no clock in file — placed at session start, use Sync")
-                        .font(.system(size: 9))
+                        .font(.system(size: 12))
                         .foregroundStyle(Color.recordRed)
                 } else {
                     Text("phone clock: \(asset.wallClockStart.formatted(date: .omitted, time: .standard))")
-                        .font(.system(size: 9))
+                        .font(.system(size: 12))
                         .foregroundStyle(Color.muted)
                 }
             }
             Spacer()
             Text(placementText(asset, manifest: manifest))
-                .font(.system(size: 10))
+                .font(.system(size: 12))
                 .foregroundStyle(placementText(asset, manifest: manifest) == "outside session"
                                  ? Color.recordRed : Color.muted)
             Button {
@@ -698,142 +742,129 @@ struct SessionDetailView: View {
             showVideoPlayer = true
         }
         let directory = model.store.directory(for: sessionId)
-        let metric = self.metric
         Task.detached {
-            let lats = ChannelReader.samples(for: .gpsLatitude, inSessionDirectory: directory)
-            let lons = ChannelReader.samples(for: .gpsLongitude, inSessionDirectory: directory)
-            let count = min(lats.count, lons.count)
-            var coords: [CLLocationCoordinate2D] = []
-            if count > 1 {
-                let stride = Swift.max(1, count / 1500)
-                var index = 0
-                while index < count {
-                    coords.append(.init(latitude: lats[index].value, longitude: lons[index].value))
-                    index += stride
-                }
-            }
-            let series = loaded.map { MetricSeries.build(directory: directory, manifest: $0, metric: metric) } ?? []
             let validation = GForceValidation.validate(sessionDirectory: directory)
-            let finalCoords = coords
-            await MainActor.run {
-                trace = finalCoords
-                graphs = series
-                gValidation = validation
-                loadingGraphs = false
-                if LaunchArgs.openLatestGraph, expandedSeries == nil {
-                    expandedSeries = series.first
-                }
-            }
+            await MainActor.run { gValidation = validation }
         }
+        buildAnalysis()
     }
 
-    @ViewBuilder private var graphsSection: some View {
-        if !graphs.isEmpty {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("GRAPHS")
-                    .font(.microLabel(9)).kerning(1.2)
-                    .foregroundStyle(Color.muted)
-                ForEach(graphs) { series in
-                    Button { expandedSeries = series } label: {
-                        MetricChart(series: series)
-                    }
-                    .buttonStyle(.plain)
+    /// Laps, speed colours, brake zones and drag splits — rebuilt whenever the
+    /// session is re-timed against its track.
+    private func buildAnalysis() {
+        guard let manifest else { return }
+        let directory = model.store.directory(for: sessionId)
+        let trackId = manifest.track?.id
+        previousBest = trackId.flatMap { id in
+            model.store.list().filter { $0.id != sessionId && $0.track?.id == id }.compactMap { $0.track?.best }.min()
+        }
+        let corners = track?.corners.map { ($0.name, $0.coordinate) } ?? []
+        Task.detached {
+            var built = SessionAnalysis.build(directory: directory, manifest: manifest, track: nil)
+            await MainActor.run {
+                built.corners = corners.map { (name: $0.0, coordinate: $0.1) }
+                analysis = built
+                if LaunchArgs.openLatestGraph, mapRoute == nil, !built.t.isEmpty {
+                    mapRoute = MapRoute(lapId: built.bestLapId ?? built.navigableLaps.first?.id ?? 0)
                 }
             }
-            .sheet(item: $expandedSeries) { series in
-                FullGraphView(series: series)
-            }
-        } else if loadingGraphs {
-            HStack { Spacer(); ProgressView().tint(.gray); Spacer() }
-                .frame(height: 80)
         }
     }
 
     private func header(_ manifest: SessionManifest) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
-                Text(manifest.startedAtUTC.formatted(date: .long, time: .shortened))
-                    .font(.system(size: 12))
-                    .foregroundStyle(Color.mutedStrong)
+                Text(manifest.locationName ?? track?.name ?? "Session")
+                    .font(.system(size: 30, weight: .bold))
+                    .foregroundStyle(Color.textPrimary)
+                    .lineLimit(2)
                 if manifest.status == .recovered {
                     Text("RECOVERED")
-                        .font(.microLabel(8)).kerning(0.8)
+                        .font(.microLabel(12)).kerning(0.8)
                         .foregroundStyle(Color.warnAmber)
                         .padding(.horizontal, 5).padding(.vertical, 2)
                         .background(Color.warnAmber.opacity(0.12), in: RoundedRectangle(cornerRadius: 4))
                 }
             }
-            if let car = manifest.car, let make = car.make {
-                Text("\(make) \(car.model ?? "") · \(car.vin ?? "")")
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(Color.muted)
+            Text(subtitle(manifest))
+                .font(.system(size: 15))
+                .foregroundStyle(Color.mutedStrong)
+        }
+        .padding(.top, 4)
+    }
+
+    private func subtitle(_ manifest: SessionManifest) -> String {
+        var parts = [manifest.startedAtUTC.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day()),
+                     manifest.startedAtUTC.formatted(date: .omitted, time: .shortened)]
+        if let car = manifest.car, let make = car.make { parts.append("\(make) \(car.model ?? "")".trimmingCharacters(in: .whitespaces)) }
+        return parts.joined(separator: " · ")
+    }
+
+    // MARK: - Details
+
+    private func detailsSection(_ manifest: SessionManifest) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("DETAILS").font(.microLabel(11)).foregroundStyle(Color.muted)
+                Spacer()
+                Button(detailsExpanded ? "Hide" : "Show") { withAnimation { detailsExpanded.toggle() } }
+                    .font(.system(size: 13, weight: .medium))
+                    .tint(Color.accent)
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+            if detailsExpanded {
+                VStack(spacing: 0) {
+                    TrackDetailRow(sessionId: sessionId, manifest: manifest,
+                                   start: analysis.flatMap { $0.t.isEmpty ? nil : $0.coordinate(0) })
+                    divider
+                    if let car = manifest.car, let make = car.make {
+                        detailRow("Car", "\(make) \(car.model ?? "")\(car.vin.map { " · \($0)" } ?? "")", Color.muted)
+                        divider
+                    }
+                    if let gValidation {
+                        let v = gVerdict(gValidation)
+                        detailRow("G calibration", v.0, v.1)
+                        divider
+                    }
+                    let gaps = manifest.obdGaps.count + (manifest.sensorGaps?.count ?? 0)
+                    detailRow("Sensor gaps", gaps == 0 ? "None" : "\(gaps)", Color.muted)
+                    divider
+                    TextField("Add a note — tires, pressures, conditions…", text: $note, axis: .vertical)
+                        .font(.system(size: 16))
+                        .padding(.vertical, 13)
+                        .padding(.trailing, 16)
+                        .onSubmit { saveNote() }
+                        .onChange(of: note) { saveNoteDebounced() }
+                }
+                .padding(.leading, 16)
+                .background(Color.cardBg, in: RoundedRectangle(cornerRadius: 22))
+                .overlay(RoundedRectangle(cornerRadius: 22).stroke(Color.cardBorder, lineWidth: 1))
+                .tint(Color.accent)
             }
         }
     }
 
-    private var mapCard: some View {
-        Map {
-            MapPolyline(coordinates: trace)
-                .stroke(Color.accentCyan, lineWidth: 2.5)
-            if let first = trace.first {
-                Annotation("", coordinate: first) {
-                    Circle().fill(Color.okGreen).frame(width: 9, height: 9)
-                }
-            }
-            if let last = trace.last {
-                Annotation("", coordinate: last) {
-                    Rectangle().fill(Color.recordRed).frame(width: 8, height: 8)
-                }
-            }
+    private var divider: some View { Rectangle().fill(Color.white.opacity(0.1)).frame(height: 0.5) }
+
+    private func detailRow(_ title: String, _ value: String, _ color: Color) -> some View {
+        HStack(spacing: 8) {
+            Text(title).font(.system(size: 16)).foregroundStyle(Color.textPrimary)
+            Spacer()
+            Text(value).font(.system(size: 15)).foregroundStyle(color).lineLimit(1)
         }
-        .mapStyle(.standard(pointsOfInterest: .excludingAll))
-        .frame(height: 180)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.cardBorder, lineWidth: 1))
-        .allowsHitTesting(false)
+        .padding(.vertical, 13)
+        .padding(.trailing, 16)
     }
 
-    private func highlightsGrid(_ manifest: SessionManifest) -> some View {
-        let units = UnitsFormatter(metric: metric)
-        let h = manifest.highlights ?? .init()
-        let tiles: [(String, String, Color)] = [
-            ("DURATION", formatDuration(h.durationSeconds), .textPrimary),
-            ("DISTANCE", String(format: "%.1f %@", units.distance(fromMeters: h.distanceMeters), units.distanceUnit), .textPrimary),
-            ("MAX SPEED", String(format: "%.0f %@", units.speed(fromMps: h.maxSpeedMps), units.speedUnit.lowercased()), .textPrimary),
-            ("AVG SPEED", String(format: "%.0f %@", units.speed(fromMps: h.avgSpeedMps), units.speedUnit.lowercased()), .textPrimary),
-            ("MAX RPM", String(Int(h.maxRpm)), .textPrimary),
-            ("PEAK LAT G", String(format: "%.2f g", h.peakLatG), .warnAmber),
-            ("PEAK LONG G", String(format: "%.2f g", h.peakLongG), .warnAmber),
-            ("ELEV GAIN", String(format: "%.0f %@", units.shortDistance(fromMeters: h.elevationGainMeters), units.shortDistanceUnit), .accentCyan),
-            ("COOLANT", coolantRange(h, units: units), .textPrimary),
-        ]
-        return LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 3), spacing: 8) {
-            ForEach(tiles, id: \.0) { tile in
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(tile.0)
-                        .font(.microLabel(8.5)).kerning(1)
-                        .foregroundStyle(Color.muted)
-                    Text(tile.1)
-                        .font(.numeral(18, weight: .medium))
-                        .foregroundStyle(tile.2)
-                        .lineLimit(1).minimumScaleFactor(0.6)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(10)
-                .background(Color.cardBg, in: RoundedRectangle(cornerRadius: 10))
-                .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.cardBorder, lineWidth: 1))
-            }
+    private func gVerdict(_ v: GForceValidation) -> (String, Color) {
+        switch v.verdict {
+        case .verified: return ("Verified", Color(hex: 0x30D158))
+        case .marginal: return ("Marginal", .mutedStrong)
+        case .failed: return ("Inconsistent with GPS", .recordRed)
+        case .noCalibratedData: return ("Not calibrated", .muted)
+        case .insufficientData: return ("Not enough data", .muted)
         }
-    }
-
-    private func noteField(_ manifest: SessionManifest) -> some View {
-        TextField("Add a note — tires, pressures, conditions…", text: $note, axis: .vertical)
-            .font(.system(size: 13))
-            .padding(12)
-            .background(Color.cardBg, in: RoundedRectangle(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.cardBorder, lineWidth: 1))
-            .onSubmit { saveNote() }
-            .onChange(of: note) { saveNoteDebounced() }
     }
 
     @State private var noteSaveTask: Task<Void, Never>?
@@ -850,24 +881,6 @@ struct SessionDetailView: View {
         manifest.note = note.isEmpty ? nil : note
         try? model.store.save(manifest)
         self.manifest = manifest
-    }
-
-    private var exportButton: some View {
-        Button {
-            export()
-        } label: {
-            HStack {
-                if exporting { ProgressView().tint(.black) }
-                Text("Export — CSV + JSON")
-                    .font(.system(size: 15, weight: .semibold))
-            }
-            .foregroundStyle(.black)
-            .frame(maxWidth: .infinity)
-            .frame(height: 50)
-            .background(Color.accentCyan, in: RoundedRectangle(cornerRadius: 13))
-        }
-        .buttonStyle(.plain)
-        .disabled(exporting)
     }
 
     private func export() {
@@ -888,16 +901,6 @@ struct SessionDetailView: View {
             }
         }
     }
-
-    private func formatDuration(_ seconds: TimeInterval) -> String {
-        let total = Int(seconds)
-        return String(format: "%d:%02d", total / 60, total % 60)
-    }
-
-    private func coolantRange(_ h: SessionManifest.Highlights, units: UnitsFormatter) -> String {
-        guard let min = h.coolantMinC, let max = h.coolantMaxC else { return "—" }
-        return "\(Int(units.temp(fromC: min)))–\(Int(units.temp(fromC: max)))\(units.tempUnit)"
-    }
 }
 
 /// Native share sheet wrapper.
@@ -909,81 +912,6 @@ struct ActivityView: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
-}
-
-// MARK: - G calibration verdict
-
-/// Physics cross-check card: was the calibrated G data consistent with GPS?
-private struct GCalibrationCard: View {
-    let validation: GForceValidation
-
-    private var title: String {
-        switch validation.verdict {
-        case .verified: return "Verified against GPS"
-        case .marginal: return "Marginal — partially consistent"
-        case .failed: return "Failed — inconsistent with GPS"
-        case .noCalibratedData: return "No calibrated data"
-        case .insufficientData: return "Not enough speed variation to verify"
-        }
-    }
-
-    private var color: Color {
-        switch validation.verdict {
-        case .verified: return .accent
-        case .marginal, .insufficientData, .noCalibratedData: return .mutedStrong
-        case .failed: return .recordRed
-        }
-    }
-
-    private var detail: String? {
-        switch validation.verdict {
-        case .noCalibratedData:
-            return "Recorded before mount calibration completed — G values are raw phone-frame."
-        case .insufficientData:
-            return "Verification needs some acceleration and braking during the session."
-        default:
-            var parts: [String] = []
-            if let r = validation.longCorrelation, let s = validation.longScale {
-                parts.append(String(format: "Longitudinal vs GPS: r %.2f · scale %.2f · %d windows",
-                                    r, s, validation.pairCount))
-            }
-            if let latR = validation.latCorrelation {
-                parts.append(String(format: "Cornering vs GPS course-rate: r %.2f", latR))
-            }
-            if let lag = validation.gpsLagSeconds, lag > 0 {
-                parts.append(String(format: "GPS lag compensation: %.1f s", lag))
-            }
-            return parts.isEmpty ? nil : parts.joined(separator: "\n")
-        }
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                Text("G CALIBRATION")
-                    .font(.microLabel(9)).kerning(1.2)
-                    .foregroundStyle(Color.muted)
-                Spacer()
-            }
-            HStack(spacing: 7) {
-                Image(systemName: validation.verdict == .verified ? "checkmark.seal.fill"
-                      : validation.verdict == .failed ? "xmark.seal.fill" : "questionmark.circle")
-                    .font(.system(size: 13))
-                    .foregroundStyle(color)
-                Text(title)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Color.textPrimary)
-            }
-            if let detail {
-                Text(detail)
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(Color.mutedStrong)
-            }
-        }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.cardGray, in: RoundedRectangle(cornerRadius: 16))
-    }
 }
 
 // MARK: - Session graphs
@@ -1101,159 +1029,15 @@ struct MetricSeries: Identifiable {
     }
 }
 
-private struct MetricChart: View {
-    let series: MetricSeries
+// MARK: - Track
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(series.title)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(Color.textPrimary)
-                Spacer()
-                Text(series.unit)
-                    .font(.system(size: 11))
-                    .foregroundStyle(Color.muted)
-                Image(systemName: "arrow.up.left.and.arrow.down.right")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(Color.muted)
-            }
-
-            Chart {
-                if series.symmetricZero {
-                    RuleMark(y: .value("zero", 0))
-                        .foregroundStyle(Color.white.opacity(0.12))
-                        .lineStyle(StrokeStyle(lineWidth: 1))
-                }
-                ForEach(series.points) { point in
-                    LineMark(x: .value("t", point.x), y: .value("v", point.y))
-                        .foregroundStyle(series.color)
-                        .lineStyle(StrokeStyle(lineWidth: 1.6))
-                        .interpolationMethod(.catmullRom)
-                }
-            }
-            .chartXAxis {
-                AxisMarks(values: .automatic(desiredCount: 4)) { value in
-                    AxisGridLine().foregroundStyle(Color.white.opacity(0.06))
-                    AxisValueLabel {
-                        if let seconds = value.as(Double.self) {
-                            Text(timeLabel(seconds))
-                                .font(.system(size: 9))
-                                .foregroundStyle(Color.muted)
-                        }
-                    }
-                }
-            }
-            .chartYAxis {
-                AxisMarks(position: .leading, values: .automatic(desiredCount: 3)) { _ in
-                    AxisGridLine().foregroundStyle(Color.white.opacity(0.06))
-                    AxisValueLabel()
-                        .font(.system(size: 9))
-                        .foregroundStyle(Color.muted)
-                }
-            }
-            .frame(height: 110)
-        }
-        .padding(14)
-        .background(Color.cardGray, in: RoundedRectangle(cornerRadius: 16))
-    }
-
-    private func timeLabel(_ seconds: Double) -> String {
-        let total = Int(max(0, seconds))
-        return String(format: "%d:%02d", total / 60, total % 60)
-    }
-}
-
-/// Full-screen graph with a horizontally scrollable time axis for detail.
-private struct FullGraphView: View {
-    let series: MetricSeries
-    @Environment(\.dismiss) private var dismiss
-
-    /// Show a window of the session at a time so scrolling reveals detail.
-    private var window: Double {
-        let total = series.points.last?.x ?? 0
-        guard total > 0 else { return 1 }
-        return min(total, max(15, total * 0.3))
-    }
-
-    var body: some View {
-        NavigationStack {
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Scroll left and right to explore. Values in \(series.unit).")
-                    .font(.system(size: 12))
-                    .foregroundStyle(Color.muted)
-                    .padding(.horizontal)
-
-                Chart {
-                    if series.symmetricZero {
-                        RuleMark(y: .value("zero", 0))
-                            .foregroundStyle(Color.white.opacity(0.15))
-                            .lineStyle(StrokeStyle(lineWidth: 1))
-                    }
-                    ForEach(series.points) { point in
-                        LineMark(x: .value("t", point.x), y: .value("v", point.y))
-                            .foregroundStyle(series.color)
-                            .lineStyle(StrokeStyle(lineWidth: 1.8))
-                            .interpolationMethod(.catmullRom)
-                    }
-                }
-                .chartScrollableAxes(.horizontal)
-                .chartXVisibleDomain(length: window)
-                .chartXAxis {
-                    AxisMarks(values: .automatic(desiredCount: 6)) { value in
-                        AxisGridLine().foregroundStyle(Color.white.opacity(0.06))
-                        AxisValueLabel {
-                            if let seconds = value.as(Double.self) {
-                                Text(timeLabel(seconds))
-                                    .font(.system(size: 10))
-                                    .foregroundStyle(Color.muted)
-                            }
-                        }
-                    }
-                }
-                .chartYAxis {
-                    AxisMarks(position: .leading, values: .automatic(desiredCount: 5)) { _ in
-                        AxisGridLine().foregroundStyle(Color.white.opacity(0.06))
-                        AxisValueLabel()
-                            .font(.system(size: 10))
-                            .foregroundStyle(Color.muted)
-                    }
-                }
-                .frame(maxHeight: .infinity)
-                .padding(.horizontal)
-            }
-            .padding(.vertical)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color.black)
-            .navigationTitle(series.title)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") { dismiss() }
-                        .tint(Color.accent)
-                }
-            }
-        }
-        .preferredColorScheme(.dark)
-    }
-
-    private func timeLabel(_ seconds: Double) -> String {
-        let total = Int(max(0, seconds))
-        return String(format: "%d:%02d", total / 60, total % 60)
-    }
-}
-
-
-// MARK: - Track & runs
-
-/// Which track this session was on, its lines over the driven trace, and the
-/// runs or laps timed through them. Times follow the track: edit its lines
-/// and this card re-times.
-private struct SessionTrackCard: View {
+/// Which track the session was on, with Change and Edit lines. Times follow
+/// the track: edit its lines and the laps re-time.
+private struct TrackDetailRow: View {
     @Environment(AppModel.self) private var model
     let sessionId: UUID
     let manifest: SessionManifest
-    let trace: [CLLocationCoordinate2D]
+    let start: CLLocationCoordinate2D?
 
     private var ref: SessionManifest.TrackRef? {
         guard let r = manifest.track, !r.id.isEmpty else { return nil }
@@ -1262,73 +1046,23 @@ private struct SessionTrackCard: View {
     private var track: Track? { ref.flatMap { model.tracks.track(id: $0.id) } }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("TRACK").font(.microLabel(9)).kerning(1).foregroundStyle(Color.muted)
-                    Text(ref.map { track?.name ?? "\($0.nameSnapshot) (deleted)" } ?? "No track")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(Color.textPrimary)
+        HStack(spacing: 8) {
+            Text("Track").font(.system(size: 16)).foregroundStyle(Color.textPrimary)
+            Spacer()
+            Text(ref.map { track?.name ?? "\($0.nameSnapshot) (deleted)" } ?? "None")
+                .font(.system(size: 15)).foregroundStyle(Color.muted).lineLimit(1)
+            if let track {
+                NavigationLink {
+                    TrackEditorView(track: track)
+                } label: {
+                    Image(systemName: "line.diagonal").font(.system(size: 14, weight: .semibold))
                 }
-                Spacer()
-                trackMenu
+                .accessibilityLabel("Edit lines")
             }
-            if let ref {
-                TrackGatesMap(track: track, trace: trace, layout: ref.layout)
-                    .frame(height: 200)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
-                runList(ref)
-                if let track {
-                    NavigationLink {
-                        TrackEditorView(track: track)
-                    } label: {
-                        Label("Edit lines", systemImage: "line.diagonal")
-                            .font(.system(size: 14, weight: .medium))
-                    }
-                }
-            } else {
-                Text("Not matched to a track. Pick one, or create a track in the Tracks tab — sessions near it are matched automatically.")
-                    .font(.system(size: 12)).foregroundStyle(Color.muted)
-            }
+            trackMenu
         }
-        .padding(16)
-        .background(Color.cardBg, in: RoundedRectangle(cornerRadius: 14))
-        .tint(Color.accent)
-    }
-
-    @ViewBuilder
-    private func runList(_ ref: SessionManifest.TrackRef) -> some View {
-        let isLoop = ref.layout?.isLoop ?? true
-        let noun = isLoop ? "Lap" : "Run"
-        if ref.runs.isEmpty {
-            Text(ref.layout == nil
-                 ? "This track has no lines yet."
-                 : "No complete \(noun.lowercased())s through these lines.")
-                .font(.system(size: 12)).foregroundStyle(Color.muted)
-        } else {
-            let best = ref.best
-            VStack(spacing: 0) {
-                ForEach(ref.runs) { run in
-                    HStack {
-                        Text("\(noun) \(run.index)").foregroundStyle(Color.muted)
-                        Spacer()
-                        if let d = run.duration {
-                            Text(RunFormat.time(d))
-                                .font(.numeral(16, weight: d == best ? .bold : .medium))
-                                .foregroundStyle(d == best ? Color.accent : Color.textPrimary)
-                            if d == best {
-                                Text("BEST").font(.microLabel(8)).kerning(0.8).foregroundStyle(Color.accent)
-                            }
-                        } else {
-                            Text("DNF").font(.system(size: 13, weight: .semibold)).foregroundStyle(Color.mutedWeak)
-                        }
-                    }
-                    .font(.system(size: 14))
-                    .padding(.vertical, 7)
-                    if run.index < ref.runs.count { Divider().overlay(Color.cardBorder) }
-                }
-            }
-        }
+        .padding(.vertical, 11)
+        .padding(.trailing, 16)
     }
 
     private var trackMenu: some View {
@@ -1341,14 +1075,14 @@ private struct SessionTrackCard: View {
             Button("No track", systemImage: "xmark") { model.setTrack(nil, for: sessionId) }
         } label: {
             Text(ref == nil ? "Assign" : "Change")
-                .font(.system(size: 13, weight: .semibold))
+                .font(.system(size: 15, weight: .semibold))
         }
     }
 
     /// Tracks nearest the start of the drive first.
     private var nearbyTracks: [Track] {
         let all = model.tracks.all.filter { $0.layout != nil || $0.isUserTrack }
-        guard let p = trace.first else { return all }
+        guard let p = start else { return all }
         let mLon = 111_320.0 * cos(p.latitude * .pi / 180)
         func d(_ t: Track) -> Double {
             guard let a = t.anchor else { return .infinity }
