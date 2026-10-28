@@ -521,7 +521,7 @@ struct SessionDetailView: View {
         }
         .fullScreenCover(item: $mapRoute) { route in
             if let analysis {
-                SessionTrackMapView(analysis: analysis, track: track, layout: manifest?.track?.layout, lapId: route.lapId)
+                SessionTrackMapView(sessionId: sessionId, analysis: analysis, track: track, layout: manifest?.track?.layout, lapId: route.lapId)
             }
         }
         .photosPicker(isPresented: $showPhotosPicker, selection: $photoItems, matching: .videos)

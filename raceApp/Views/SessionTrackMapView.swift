@@ -2,14 +2,16 @@
 //  SessionTrackMapView.swift
 //  raceApp
 //
-//  Full-screen track map for one session. Two separate controls: the map
-//  menu picks what the line shows (speed, braking, or delta to the best lap),
-//  and "+ Channels" picks which charts sit in the bottom panel. Lap step (or
-//  ±10 s on a drive), play and scrub are pinned at the bottom whatever is selected.
+//  Full-screen review of one session. The top area is the Map or the Camera
+//  (session footage); the layers menu picks what the line shows (speed,
+//  braking, or delta to the best lap) and the base map, and "+ Channels" picks
+//  which charts sit in the bottom panel. Lap step (or ±10 s on a drive), play
+//  and scrub are pinned at the bottom whatever is selected.
 //
 
 import SwiftUI
 import MapKit
+import AVFoundation
 import SessionKit
 
 enum TrackMapMode: String, CaseIterable, Identifiable {
@@ -31,12 +33,17 @@ enum TrackMapMode: String, CaseIterable, Identifiable {
     }
 }
 
+enum SessionTopView { case map, camera }
+
 struct SessionTrackMapView: View {
+    let sessionId: UUID
     let analysis: SessionAnalysis
     let track: Track?
     let layout: CourseLayout?
     @State var lapId: Int
+    @State var topView: SessionTopView = .map
 
+    @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     @AppStorage("useMetricUnits") private var metric = false
     @State private var mode: TrackMapMode = .speed
@@ -47,20 +54,41 @@ struct SessionTrackMapView: View {
     @State private var camera: MapCameraPosition = .automatic
     @State private var overlay = MapOverlay()
     @State private var panelHeight: CGFloat = 300
+    @State private var manifest: SessionManifest?
+    @State private var playback = SessionVideoPlayback()
+    @State private var mainCamera: CameraSlot = .front
 
     private var units: UnitsFormatter { UnitsFormatter(metric: metric) }
     private var laps: [SessionAnalysis.Lap] { analysis.navigableLaps }
     private var lap: SessionAnalysis.Lap { laps.first { $0.id == lapId } ?? laps[0] }
     private var range: ClosedRange<Int> { analysis.indices(lap) }
     private var cursorIndex: Int { min(range.upperBound, range.lowerBound + Int(cursor)) }
+    private var hasClips: Bool { !(manifest?.videos ?? []).isEmpty }
+
+    /// Seconds since the session started at the cursor — the clock video uses.
+    private var sessionT: TimeInterval {
+        guard let manifest, analysis.t.indices.contains(range.lowerBound) else { return 0 }
+        return analysis.t[range.lowerBound] + cursor / SessionAnalysis.hz - manifest.startUptime
+    }
 
     var body: some View {
         ZStack {
-            // Frame the lap in the part of the map the controls don't cover.
-            map.safeAreaPadding(.top, 60).safeAreaPadding(.bottom, panelHeight + 40).ignoresSafeArea()
+            if topView == .map {
+                // Frame the lap in the part of the map the controls don't cover;
+                // the extra bottom inset lifts the Maps logo clear of the legend.
+                map.safeAreaPadding(.top, 60).safeAreaPadding(.bottom, panelHeight + 76).ignoresSafeArea()
+            }
             VStack(spacing: 0) {
                 topBar
-                Spacer(minLength: 0)
+                if topView == .camera {
+                    SessionCameraStage(playback: playback, sessionT: sessionT, main: $mainCamera) { jump(toSession: $0) }
+                        .frame(maxHeight: .infinity)
+                } else {
+                    Spacer(minLength: 0)
+                    legend
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 20).padding(.bottom, 16)
+                }
                 panel
             }
         }
@@ -68,6 +96,32 @@ struct SessionTrackMapView: View {
         .preferredColorScheme(.dark)
         .task(id: "\(lapId)-\(mode.rawValue)") { rebuildOverlay(refit: true) }
         .task(id: playing) { await play() }
+        .task { await loadVideo() }
+        .onChange(of: cursor) { if !playing, topView == .camera { playback.seek(to: sessionT) } }
+        .onChange(of: topView) {
+            if topView == .camera { playback.seek(to: sessionT, precise: true) } else { playback.pause() }
+        }
+        .onChange(of: playing) { if !playing { playback.pause(); playback.seek(to: sessionT, precise: true) } }
+    }
+
+    private func loadVideo() async {
+        manifest = try? model.store.manifest(for: sessionId)
+        guard let manifest, hasClips else { topView = .map; return }
+        await playback.load(manifest: manifest, directory: model.store.directory(for: sessionId))
+        if !playback.feed(.front).hasFootage { mainCamera = .rear }
+        playback.seek(to: sessionT, precise: true)
+    }
+
+    /// Jump to a session time (e.g. the next clip from the gap card), moving
+    /// to whichever lap contains it.
+    private func jump(toSession t: TimeInterval) {
+        guard let manifest else { return }
+        let uptime = t + manifest.startUptime
+        guard let target = laps.first(where: { uptime >= $0.start && uptime <= $0.end }) else { return }
+        lapId = target.id
+        let r = analysis.indices(target)
+        cursor = max(0, min(Double(r.count - 1), (uptime - analysis.t[r.lowerBound]) * SessionAnalysis.hz))
+        playback.seek(to: t, precise: true)
     }
 
     // MARK: - Map
@@ -132,8 +186,47 @@ struct SessionTrackMapView: View {
         HStack {
             circleButton("xmark") { dismiss() }
             Spacer()
-            Menu {
-                Picker("Map", selection: $mode) {
+            viewSwitcher
+            Spacer()
+            if topView == .map { mapStyleMenu } else { cameraMenu }
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 6)
+    }
+
+    /// Map | Camera, equal widths. Without footage the second tab is a muted "+ Camera".
+    private var viewSwitcher: some View {
+        EqualWidthHStack(spacing: 2) {
+            switcherTab("Map", symbol: "map", on: topView == .map) { topView = .map }
+            switcherTab("Camera", symbol: hasClips ? "video.fill" : "plus", on: topView == .camera, muted: !hasClips) {
+                if hasClips { topView = .camera }
+            }
+        }
+        .padding(3)
+        .background(.ultraThinMaterial, in: Capsule())
+        .overlay(Capsule().stroke(Color.white.opacity(0.12), lineWidth: 1))
+    }
+
+    private func switcherTab(_ label: String, symbol: String, on: Bool, muted: Bool = false, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: symbol).font(.system(size: 13, weight: .semibold))
+                Text(label).font(.system(size: 15, weight: .semibold))
+            }
+            .foregroundStyle(on ? Color.black : muted ? Color.mutedStrong : Color.white)
+            .padding(.horizontal, 14).frame(height: 38)
+            .frame(maxWidth: .infinity)
+            .background(on ? Color.white : Color.clear, in: Capsule())
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// One menu for what the line shows and the base map.
+    private var mapStyleMenu: some View {
+        Menu {
+            Section("Line shows") {
+                Picker("Line shows", selection: $mode) {
                     ForEach(TrackMapMode.allCases) { m in
                         if m != .delta || analysis.bestLapId != nil {
                             Text(m.title).tag(m)
@@ -141,53 +234,72 @@ struct SessionTrackMapView: View {
                     }
                 }
                 .pickerStyle(.inline)
-            } label: {
-                HStack(spacing: 8) {
-                    modeSwatch(mode)
-                    Text(mode.title).font(.system(size: 15, weight: .semibold))
-                    Image(systemName: "chevron.down").font(.system(size: 11, weight: .bold)).foregroundStyle(Color.mutedStrong)
+            }
+            Section("Map") {
+                Picker("Map", selection: $satellite) {
+                    Label("Standard", systemImage: "map").tag(false)
+                    Label("Satellite", systemImage: "globe.americas").tag(true)
                 }
-                .foregroundStyle(.white)
-                .padding(.horizontal, 14).frame(height: 44)
-                .background(.ultraThinMaterial, in: Capsule())
-                .overlay(Capsule().stroke(Color.white.opacity(0.12), lineWidth: 1))
+                .pickerStyle(.inline)
             }
-            Spacer()
-            circleButton("globe", on: satellite) { satellite.toggle() }
-        }
-        .padding(.horizontal, 20)
-        .padding(.top, 6)
-    }
-
-    @ViewBuilder private func modeSwatch(_ m: TrackMapMode) -> some View {
-        switch m {
-        case .speed: Circle().fill(SpeedColor.gradient).frame(width: 14, height: 14)
-        case .braking: Circle().fill(Color.recordRed).frame(width: 14, height: 14)
-        case .delta:
-            HStack(spacing: -4) {
-                Circle().fill(Color(hex: 0x30D158)).frame(width: 12, height: 12)
-                Circle().fill(Color.recordRed).frame(width: 12, height: 12)
-            }
+        } label: {
+            circleLabel("square.3.layers.3d")
         }
     }
 
-    private func circleButton(_ symbol: String, on: Bool = false, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: symbol)
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(.white)
-                .frame(width: 44, height: 44)
-                .background(on ? AnyShapeStyle(Color.accent) : AnyShapeStyle(.ultraThinMaterial), in: Circle())
-                .overlay(Circle().stroke(Color.white.opacity(on ? 0 : 0.12), lineWidth: 1))
+    private var cameraMenu: some View {
+        Menu {
+            Button("Swap cameras", systemImage: "arrow.left.arrow.right") { mainCamera = mainCamera.other }
+                .disabled(!(playback.feed(.front).hasFootage && playback.feed(.rear).hasFootage))
+        } label: {
+            circleLabel("ellipsis")
         }
-        .buttonStyle(.plain)
+    }
+
+    /// Read-only key for the line on the map, bottom-left above the panel.
+    @ViewBuilder private var legend: some View {
+        HStack(spacing: 6) {
+            switch mode {
+            case .speed:
+                let r = analysis.speedRange
+                Text("\(Int(units.speed(fromMps: r.lowerBound)))")
+                Capsule().fill(SpeedColor.gradient).frame(width: 56, height: 5)
+                Text("\(Int(units.speed(fromMps: r.upperBound))) \(units.speedUnit.lowercased())")
+            case .braking:
+                Capsule().fill(Color.recordRed).frame(width: 20, height: 5)
+                Text("Brake zones · entry → min")
+            case .delta:
+                Circle().fill(Color(hex: 0x30D158)).frame(width: 8, height: 8)
+                Text("Faster")
+                Circle().fill(Color.recordRed).frame(width: 8, height: 8)
+                Text("Slower than ★")
+            }
+        }
+        .font(.system(size: 12, weight: .semibold)).monospacedDigit()
+        .foregroundStyle(Color.mutedStrong)
+        .padding(.horizontal, 10).frame(height: 28)
+        .background(.ultraThinMaterial, in: Capsule())
+        .overlay(Capsule().stroke(Color.white.opacity(0.12), lineWidth: 1))
+    }
+
+    private func circleButton(_ symbol: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) { circleLabel(symbol) }
+            .buttonStyle(.plain)
+    }
+
+    private func circleLabel(_ symbol: String) -> some View {
+        Image(systemName: symbol)
+            .font(.system(size: 17, weight: .semibold))
+            .foregroundStyle(.white)
+            .frame(width: 44, height: 44)
+            .background(.ultraThinMaterial, in: Circle())
+            .overlay(Circle().stroke(Color.white.opacity(0.12), lineWidth: 1))
     }
 
     // MARK: - Bottom panel
 
     private var panel: some View {
         VStack(spacing: 0) {
-            Capsule().fill(Color.white.opacity(0.3)).frame(width: 36, height: 5)
             panelHeader
                 .padding(.horizontal, 20).padding(.top, 10).padding(.bottom, 12)
             divider
@@ -200,7 +312,7 @@ struct SessionTrackMapView: View {
             }
             .padding(.horizontal, 20).padding(.top, 16)
         }
-        .padding(.top, 8)
+        .padding(.top, 6)
         .padding(.bottom, 8)
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { panelHeight = $0 }
         // The panel runs to the screen edge; its controls stay above the home indicator.
@@ -311,13 +423,12 @@ struct SessionTrackMapView: View {
             }
             .frame(maxWidth: .infinity)
         } else {
-            HStack {
+            HStack(spacing: 20) {
                 lapButton(offset: -1)
-                Spacer(minLength: 8)
                 playButton
-                Spacer(minLength: 8)
                 lapButton(offset: 1)
             }
+            .frame(maxWidth: .infinity)
         }
     }
 
@@ -327,8 +438,8 @@ struct SessionTrackMapView: View {
                 .font(.system(size: 22, weight: .bold))
                 .foregroundStyle(.black)
                 .offset(x: playing ? 0 : 2)
-                .frame(width: 56, height: 56)
-                .background(Color.white, in: Circle())
+                .frame(width: 88, height: 56)
+                .background(Color.white, in: Capsule())
         }
         .buttonStyle(.plain)
     }
@@ -376,9 +487,8 @@ struct SessionTrackMapView: View {
                 if !leading { Image(systemName: symbol).font(.system(size: 14, weight: .bold)) }
             }
             .foregroundStyle(.white)
-            .frame(maxWidth: .infinity, alignment: leading ? .leading : .trailing)
             .padding(.leading, leading ? 14 : 18).padding(.trailing, leading ? 18 : 14)
-            .frame(width: 112, height: 40)
+            .frame(height: 40)
             .background(Color.white.opacity(0.1), in: Capsule())
         }
         .buttonStyle(.plain)
@@ -427,7 +537,16 @@ struct SessionTrackMapView: View {
         if Int(cursor) >= range.count - 1 { cursor = 0 }
         while playing, !Task.isCancelled {
             try? await Task.sleep(for: .milliseconds(33))
-            cursor += SessionAnalysis.hz / 30
+            let footage = playback.feed(mainCamera)
+            if topView == .camera, let manifest, footage.player.rate > 0,
+               footage.compTime(at: sessionT) != nil {
+                // Footage plays: it is the clock, the cursor follows it.
+                let uptime = footage.sessionTime + manifest.startUptime
+                cursor = (uptime - analysis.t[range.lowerBound]) * SessionAnalysis.hz
+            } else {
+                cursor += SessionAnalysis.hz / 30
+            }
+            if topView == .camera { playback.follow(sessionT: sessionT, playing: true, audible: mainCamera) }
             if Int(cursor) >= range.count - 1 {
                 // Roll into the next lap; stop after the last one.
                 if let i = laps.firstIndex(where: { $0.id == lapId }), i + 1 < laps.count {
@@ -560,6 +679,28 @@ struct ChannelLine: View, Equatable {
                 if pen { p.addLine(to: pt) } else { p.move(to: pt); pen = true }
             }
             ctx.stroke(p, with: .color(color), style: StrokeStyle(lineWidth: 1.6, lineJoin: .round))
+        }
+    }
+}
+
+/// Lays children out in a row, all as wide as the widest one (the Map | Camera tabs).
+struct EqualWidthHStack: Layout {
+    var spacing: CGFloat = 0
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard !subviews.isEmpty else { return .zero }
+        let sizes = subviews.map { $0.sizeThatFits(.unspecified) }
+        let w = sizes.map(\.width).max() ?? 0
+        let h = sizes.map(\.height).max() ?? 0
+        return CGSize(width: w * CGFloat(subviews.count) + spacing * CGFloat(subviews.count - 1), height: h)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard !subviews.isEmpty else { return }
+        let w = (bounds.width - spacing * CGFloat(subviews.count - 1)) / CGFloat(subviews.count)
+        for (i, view) in subviews.enumerated() {
+            view.place(at: CGPoint(x: bounds.minX + CGFloat(i) * (w + spacing), y: bounds.midY),
+                       anchor: .leading, proposal: ProposedViewSize(width: w, height: bounds.height))
         }
     }
 }
