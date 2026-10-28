@@ -441,9 +441,8 @@ struct SessionDetailView: View {
     @State private var showPhotosPicker = false
     @State private var showFileImporter = false
     @State private var importingVideos = false
-    @State private var showVideoPlayer = false
 
-    private struct MapRoute: Identifiable { let lapId: Int; var id: Int { lapId } }
+    private struct MapRoute: Identifiable { let lapId: Int; var camera = false; var id: Int { lapId } }
 
     private var track: Track? {
         guard let id = manifest?.track?.id, !id.isEmpty else { return nil }
@@ -516,12 +515,10 @@ struct SessionDetailView: View {
                 dismiss()
             }
         }
-        .fullScreenCover(isPresented: $showVideoPlayer) {
-            SessionVideoView(sessionId: sessionId)
-        }
         .fullScreenCover(item: $mapRoute) { route in
             if let analysis {
-                SessionTrackMapView(sessionId: sessionId, analysis: analysis, track: track, layout: manifest?.track?.layout, lapId: route.lapId)
+                SessionTrackMapView(sessionId: sessionId, analysis: analysis, track: track, layout: manifest?.track?.layout,
+                                    lapId: route.lapId, topView: route.camera ? .camera : .map)
             }
         }
         .photosPicker(isPresented: $showPhotosPicker, selection: $photoItems, matching: .videos)
@@ -533,9 +530,9 @@ struct SessionDetailView: View {
         }
     }
 
-    private func openMap(_ lap: SessionAnalysis.Lap?) {
+    private func openMap(_ lap: SessionAnalysis.Lap?, camera: Bool = false) {
         guard let analysis, !analysis.t.isEmpty else { return }
-        mapRoute = MapRoute(lapId: lap?.id ?? analysis.navigableLaps.first?.id ?? 0)
+        mapRoute = MapRoute(lapId: lap?.id ?? analysis.navigableLaps.first?.id ?? 0, camera: camera)
     }
     // MARK: - Video section
 
@@ -556,7 +553,7 @@ struct SessionDetailView: View {
             }
             if !videos.isEmpty {
                 Button {
-                    showVideoPlayer = true
+                    openMap(analysis?.bestLap, camera: true)
                 } label: {
                     HStack(spacing: 10) {
                         Image(systemName: "play.circle.fill")
@@ -578,7 +575,7 @@ struct SessionDetailView: View {
                 }
                 .buttonStyle(.plain)
                 if videos.contains(where: { $0.hasEmbeddedDate == false }) {
-                    Label("A clip has no clock — check Sync in the player", systemImage: "exclamationmark.triangle.fill")
+                    Label("A clip has no clock — line it up in Video sync", systemImage: "exclamationmark.triangle.fill")
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(Color.recordRed)
                 }
@@ -692,12 +689,7 @@ struct SessionDetailView: View {
         photoItems = []
         importingVideos = true
         Task {
-            for item in items {
-                if let movie = try? await item.loadTransferable(type: PickedMovie.self) {
-                    await importOne(from: movie.url)
-                    try? FileManager.default.removeItem(at: movie.url)
-                }
-            }
+            if let updated = await VideoImporter.importPicked(items, sessionId: sessionId, model: model) { manifest = updated }
             importingVideos = false
         }
     }
@@ -705,33 +697,13 @@ struct SessionDetailView: View {
     private func importFiles(_ urls: [URL]) {
         importingVideos = true
         Task {
-            for url in urls {
-                let scoped = url.startAccessingSecurityScopedResource()
-                await importOne(from: url)
-                if scoped { url.stopAccessingSecurityScopedResource() }
-            }
+            if let updated = await VideoImporter.importFiles(urls, sessionId: sessionId, model: model) { manifest = updated }
             importingVideos = false
         }
     }
 
-    private func importOne(from url: URL) async {
-        guard var manifest else { return }
-        let directory = model.store.directory(for: sessionId)
-        guard let asset = try? await VideoLibrary.importVideo(
-            from: url, sessionDirectory: directory, fallbackStart: manifest.startedAtUTC) else { return }
-        manifest.videos = (manifest.videos ?? []) + [asset]
-        try? model.store.save(manifest)
-        self.manifest = manifest
-        model.recording.sessionUpdated()
-    }
-
     private func deleteVideo(_ asset: VideoAsset) {
-        guard var manifest else { return }
-        VideoLibrary.deleteFile(for: asset, sessionDirectory: model.store.directory(for: sessionId))
-        manifest.videos = (manifest.videos ?? []).filter { $0.id != asset.id }
-        try? model.store.save(manifest)
-        self.manifest = manifest
-        model.recording.sessionUpdated()
+        if let updated = VideoImporter.remove([asset.id], sessionId: sessionId, model: model) { manifest = updated }
     }
 
     private func load() {
@@ -739,9 +711,6 @@ struct SessionDetailView: View {
         manifest = loaded
         if let loaded { model.retimeIfStale(loaded) }
         note = loaded?.note ?? ""
-        if LaunchArgs.openLatestVideo, loaded?.videos?.isEmpty == false, !showVideoPlayer {
-            showVideoPlayer = true
-        }
         let directory = model.store.directory(for: sessionId)
         Task.detached {
             let validation = GForceValidation.validate(sessionDirectory: directory)
@@ -766,8 +735,9 @@ struct SessionDetailView: View {
                 built.corners = corners.map { (name: $0.0, coordinate: $0.1) }
                 analysis = built
                 fetchWeatherIfNeeded(built)
-                if LaunchArgs.openLatestGraph, mapRoute == nil, !built.t.isEmpty {
-                    mapRoute = MapRoute(lapId: built.bestLapId ?? built.navigableLaps.first?.id ?? 0)
+                let openVideo = LaunchArgs.openLatestVideo && manifest.videos?.isEmpty == false
+                if LaunchArgs.openLatestGraph || openVideo, mapRoute == nil, !built.t.isEmpty {
+                    mapRoute = MapRoute(lapId: built.bestLapId ?? built.navigableLaps.first?.id ?? 0, camera: openVideo)
                 }
             }
         }

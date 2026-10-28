@@ -47,6 +47,8 @@ final class SessionVideoPlayback {
 
     private(set) var feeds: [CameraSlot: Feed] = [.front: Feed(), .rear: Feed()]
     private(set) var loaded = false
+    /// Bumped after every load so views redraw: the feeds themselves aren't observed.
+    private(set) var revision = 0
     private var lastSeekAt: CFTimeInterval = 0
 
     var hasVideo: Bool { feeds.values.contains { $0.hasFootage } }
@@ -83,6 +85,7 @@ final class SessionVideoPlayback {
             feed.player.pause()
         }
         loaded = true
+        revision += 1
     }
 
     /// Put both cameras on `sessionT`. Throttled to ~20 seeks/s while scrubbing.
@@ -139,6 +142,7 @@ struct SessionCameraStage: View {
 
     var body: some View {
         GeometryReader { geo in
+            let _ = playback.revision
             let mainFeed = playback.feed(main)
             let secondary = playback.feed(main.other)
             ZStack {

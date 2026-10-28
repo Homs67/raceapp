@@ -96,6 +96,7 @@ struct VideoSyncView: View {
     }
 
     @ViewBuilder private var previewVideo: some View {
+        let _ = playback.revision
         let feed = playback.feed(preview)
         if feed.compTime(at: clipTime(preview)) != nil {
             PlayerLayerView(player: feed.player).aspectRatio(16 / 9, contentMode: .fit)
