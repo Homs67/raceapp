@@ -11,6 +11,7 @@
 
 import SwiftUI
 import MapKit
+import PhotosUI
 import AVFoundation
 import SessionKit
 
@@ -57,9 +58,32 @@ struct SessionTrackMapView: View {
     @State private var manifest: SessionManifest?
     @State private var playback = SessionVideoPlayback()
     @State private var mainCamera: CameraSlot = .front
+    @State private var photoItems: [PhotosPickerItem] = []
+    @State private var showPhotosPicker = false
+    @State private var showFileImporter = false
+    @State private var importStatus: String?
+    @State private var showSync = false
+    @State private var confirmRemove = false
 
     private var units: UnitsFormatter { UnitsFormatter(metric: metric) }
-    private var laps: [SessionAnalysis.Lap] { analysis.navigableLaps }
+
+    /// Laps to step through, limited to the Video sync crop when there is one;
+    /// a drive is trimmed to it.
+    private var laps: [SessionAnalysis.Lap] {
+        let all = analysis.navigableLaps
+        guard let manifest,
+              let w = manifest.effectiveVideoSync.reviewWindow(sessionDuration: manifest.sessionDuration) else { return all }
+        let lo = manifest.startUptime + w.lowerBound, hi = manifest.startUptime + w.upperBound
+        let kept: [SessionAnalysis.Lap] = all.compactMap { l in
+            guard l.end > lo, l.start < hi else { return nil }
+            guard l.kind == .drive else { return l }
+            var trimmed = l
+            trimmed.start = max(l.start, lo)
+            trimmed.end = min(l.end, hi)
+            return trimmed
+        }
+        return kept.isEmpty ? all : kept
+    }
     private var lap: SessionAnalysis.Lap { laps.first { $0.id == lapId } ?? laps[0] }
     private var range: ClosedRange<Int> { analysis.indices(lap) }
     private var cursorIndex: Int { min(range.upperBound, range.lowerBound + Int(cursor)) }
@@ -80,7 +104,9 @@ struct SessionTrackMapView: View {
             }
             VStack(spacing: 0) {
                 topBar
-                if topView == .camera {
+                if let importStatus {
+                    importingCard(importStatus).frame(maxHeight: .infinity)
+                } else if topView == .camera {
                     SessionCameraStage(playback: playback, sessionT: sessionT, main: $mainCamera) { jump(toSession: $0) }
                         .frame(maxHeight: .infinity)
                 } else {
@@ -94,7 +120,7 @@ struct SessionTrackMapView: View {
         }
         .background(Color.black)
         .preferredColorScheme(.dark)
-        .task(id: "\(lapId)-\(mode.rawValue)") { rebuildOverlay(refit: true) }
+        .task(id: "\(lapId)-\(mode.rawValue)-\(lap.start)-\(lap.end)") { rebuildOverlay(refit: true) }
         .task(id: playing) { await play() }
         .task { await loadVideo() }
         .onChange(of: cursor) { if !playing, topView == .camera { playback.seek(to: sessionT) } }
@@ -102,14 +128,67 @@ struct SessionTrackMapView: View {
             if topView == .camera { playback.seek(to: sessionT, precise: true) } else { playback.pause() }
         }
         .onChange(of: playing) { if !playing { playback.pause(); playback.seek(to: sessionT, precise: true) } }
+        .photosPicker(isPresented: $showPhotosPicker, selection: $photoItems, matching: .videos)
+        .onChange(of: photoItems) {
+            let items = photoItems
+            guard !items.isEmpty else { return }
+            photoItems = []
+            runImport { await VideoImporter.importPicked(items, sessionId: sessionId, model: model, progress: $0) }
+        }
+        .fileImporter(isPresented: $showFileImporter, allowedContentTypes: [.movie, .mpeg4Movie],
+                      allowsMultipleSelection: true) { result in
+            guard case .success(let urls) = result, !urls.isEmpty else { return }
+            runImport { await VideoImporter.importFiles(urls, sessionId: sessionId, model: model, progress: $0) }
+        }
+        .fullScreenCover(isPresented: $showSync) {
+            VideoSyncView(sessionId: sessionId, analysis: analysis) { Task { await loadVideo() } }
+        }
+        .confirmationDialog("Remove all video from this session?", isPresented: $confirmRemove, titleVisibility: .visible) {
+            Button("Remove video", role: .destructive) {
+                VideoImporter.remove(sessionId: sessionId, model: model)
+                topView = .map
+                Task { await loadVideo() }
+            }
+        }
     }
 
     private func loadVideo() async {
+        playing = false
         manifest = try? model.store.manifest(for: sessionId)
+        if !laps.contains(where: { $0.id == lapId }), let first = laps.first { lapId = first.id; cursor = 0 }
+        cursor = min(cursor, Double(max(0, range.count - 1)))
         guard let manifest, hasClips else { topView = .map; return }
         await playback.load(manifest: manifest, directory: model.store.directory(for: sessionId))
-        if !playback.feed(.front).hasFootage { mainCamera = .rear }
+        if !playback.feed(mainCamera).hasFootage { mainCamera = mainCamera.other }
         playback.seek(to: sessionT, precise: true)
+    }
+
+    /// Copy clips in with a progress card in the camera slot, then go
+    /// straight to Video sync.
+    private func runImport(_ work: @escaping ((Int, Int) -> Void) async -> SessionManifest?) {
+        playing = false
+        importStatus = "Importing…"
+        Task {
+            let result = await work { i, n in importStatus = n > 1 ? "Importing clip \(i) of \(n)…" : "Importing clip…" }
+            importStatus = nil
+            await loadVideo()
+            if result != nil {
+                topView = .camera
+                showSync = true
+            }
+        }
+    }
+
+    private func importingCard(_ status: String) -> some View {
+        Color(white: 0.07)
+            .aspectRatio(16 / 9, contentMode: .fit)
+            .overlay {
+                VStack(spacing: 12) {
+                    ProgressView().tint(.white)
+                    Text(status).font(.system(size: 15, weight: .semibold)).foregroundStyle(.white)
+                }
+            }
+            .frame(maxHeight: .infinity)
     }
 
     /// Jump to a session time (e.g. the next clip from the gap card), moving
@@ -198,8 +277,14 @@ struct SessionTrackMapView: View {
     private var viewSwitcher: some View {
         EqualWidthHStack(spacing: 2) {
             switcherTab("Map", symbol: "map", on: topView == .map) { topView = .map }
-            switcherTab("Camera", symbol: hasClips ? "video.fill" : "plus", on: topView == .camera, muted: !hasClips) {
-                if hasClips { topView = .camera }
+            if hasClips {
+                switcherTab("Camera", symbol: "video.fill", on: topView == .camera) { topView = .camera }
+            } else {
+                Menu {
+                    addVideoButtons
+                } label: {
+                    tabLabel("Camera", symbol: "plus", on: false, muted: true)
+                }
             }
         }
         .padding(3)
@@ -207,19 +292,26 @@ struct SessionTrackMapView: View {
         .overlay(Capsule().stroke(Color.white.opacity(0.12), lineWidth: 1))
     }
 
-    private func switcherTab(_ label: String, symbol: String, on: Bool, muted: Bool = false, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 6) {
-                Image(systemName: symbol).font(.system(size: 13, weight: .semibold))
-                Text(label).font(.system(size: 15, weight: .semibold))
-            }
-            .foregroundStyle(on ? Color.black : muted ? Color.mutedStrong : Color.white)
-            .padding(.horizontal, 14).frame(height: 38)
-            .frame(maxWidth: .infinity)
-            .background(on ? Color.white : Color.clear, in: Capsule())
-            .contentShape(Capsule())
+    private func switcherTab(_ label: String, symbol: String, on: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) { tabLabel(label, symbol: symbol, on: on) }
+            .buttonStyle(.plain)
+    }
+
+    private func tabLabel(_ label: String, symbol: String, on: Bool, muted: Bool = false) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: symbol).font(.system(size: 13, weight: .semibold))
+            Text(label).font(.system(size: 15, weight: .semibold))
         }
-        .buttonStyle(.plain)
+        .foregroundStyle(on ? Color.black : muted ? Color.mutedStrong : Color.white)
+        .padding(.horizontal, 14).frame(height: 38)
+        .frame(maxWidth: .infinity)
+        .background(on ? Color.white : Color.clear, in: Capsule())
+        .contentShape(Capsule())
+    }
+
+    @ViewBuilder private var addVideoButtons: some View {
+        Button("From Photos", systemImage: "photo.on.rectangle") { showPhotosPicker = true }
+        Button("From Files", systemImage: "folder") { showFileImporter = true }
     }
 
     /// One menu for what the line shows and the base map.
@@ -249,8 +341,18 @@ struct SessionTrackMapView: View {
 
     private var cameraMenu: some View {
         Menu {
-            Button("Swap cameras", systemImage: "arrow.left.arrow.right") { mainCamera = mainCamera.other }
-                .disabled(!(playback.feed(.front).hasFootage && playback.feed(.rear).hasFootage))
+            Button("Sync video…", systemImage: "arrow.left.and.right.square") { playing = false; showSync = true }
+            Menu {
+                addVideoButtons
+            } label: {
+                Label("Add clip…", systemImage: "plus")
+            }
+            Button("Swap cameras", systemImage: "arrow.left.arrow.right") {
+                VideoImporter.swapCameras(sessionId: sessionId, model: model)
+                Task { await loadVideo() }
+            }
+            Divider()
+            Button("Remove video", systemImage: "trash", role: .destructive) { confirmRemove = true }
         } label: {
             circleLabel("ellipsis")
         }

@@ -2,12 +2,18 @@ import Foundation
 
 /// One video clip, stored in the session's `videos/` directory.
 /// `wallClockStart` comes from phone capture time, file metadata, or a fallback;
-/// the session-wide `videoSyncOffset` corrects camera-clock drift for all clips.
+/// the session's `VideoSync` offsets correct camera-clock drift per camera.
 public struct VideoAsset: Codable, Equatable, Sendable, Identifiable {
     public enum Role: String, Codable, Sendable {
         case rear
         case front
         case imported
+    }
+
+    /// Where the clip shows in review: the road-ahead camera or the other one.
+    public enum Camera: String, Codable, Sendable, CaseIterable {
+        case front
+        case rear
     }
 
     public var id: UUID
@@ -20,6 +26,12 @@ public struct VideoAsset: Codable, Equatable, Sendable, Identifiable {
     public var hasEmbeddedDate: Bool?
     /// Capture source. Defaults to `imported` for older manifests.
     public var role: Role
+    /// Review camera, when the user has set it ("Swap cameras").
+    public var camera: Camera?
+
+    /// The phone's back camera and imported GoPro / dashcam footage film the
+    /// road ahead, so they default to Front; the selfie camera is Rear.
+    public var slot: Camera { camera ?? (role == .front ? .rear : .front) }
 
     public init(id: UUID = UUID(), fileName: String, wallClockStart: Date,
                 duration: TimeInterval, fileSizeBytes: Int64? = nil,
@@ -42,6 +54,7 @@ public struct VideoAsset: Codable, Equatable, Sendable, Identifiable {
         fileSizeBytes = try c.decodeIfPresent(Int64.self, forKey: .fileSizeBytes)
         hasEmbeddedDate = try c.decodeIfPresent(Bool.self, forKey: .hasEmbeddedDate)
         role = try c.decodeIfPresent(Role.self, forKey: .role) ?? .imported
+        camera = try c.decodeIfPresent(Camera.self, forKey: .camera)
     }
 }
 
@@ -139,14 +152,18 @@ public enum VideoTimeline {
         assets: [VideoAsset],
         sessionStartUTC: Date,
         sessionDuration: TimeInterval,
-        syncOffset: TimeInterval
+        syncOffset: TimeInterval,
+        window: ClosedRange<TimeInterval>? = nil
     ) -> [VideoSegment] {
         guard sessionDuration > 0 else { return [] }
+        // The review window (the Video sync crop) narrows what footage plays.
+        let lo = max(0, window?.lowerBound ?? 0)
+        let hi = min(sessionDuration, window?.upperBound ?? sessionDuration)
         var placed: [VideoSegment] = assets.compactMap { asset in
             let start = asset.wallClockStart.timeIntervalSince(sessionStartUTC) + syncOffset
             let end = start + asset.duration
-            let clippedStart = max(0, start)
-            let clippedEnd = min(sessionDuration, end)
+            let clippedStart = max(lo, start)
+            let clippedEnd = min(hi, end)
             guard clippedEnd - clippedStart > 0.05 else { return nil }
             return VideoSegment(
                 assetId: asset.id,

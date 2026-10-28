@@ -145,7 +145,10 @@ public struct SessionManifest: Codable, Equatable, Sendable, Identifiable {
     /// Imported video clips (stored in the session's videos/ directory).
     public var videos: [VideoAsset]?
     /// Camera-clock correction applied to all clips (seconds; user-nudged).
+    /// Superseded by `videoSync`; still read as the fallback for both cameras.
     public var videoSyncOffset: TimeInterval?
+    /// Per-camera alignment and the review crop, set in Video sync.
+    public var videoSync: VideoSync?
     /// Post-session IMU↔GPS consistency check (also recomputed on export).
     public var gForceValidation: GForceValidation?
     /// Which sensor fed the canonical `gps.*` / `car.*` channels, and when.

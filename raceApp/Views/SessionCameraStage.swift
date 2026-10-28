@@ -12,18 +12,12 @@ import SwiftUI
 import AVFoundation
 import SessionKit
 
-/// Which physical camera a clip belongs to on screen. Phone back camera and
-/// imported GoPro / dashcam footage film the road ahead; the selfie camera is
-/// the second view.
-enum CameraSlot: String {
-    case front, rear
+/// Which camera a clip shows as in review (front = road ahead).
+typealias CameraSlot = VideoAsset.Camera
 
+extension VideoAsset.Camera {
     var title: String { self == .front ? "Front" : "Rear" }
-    var other: CameraSlot { self == .front ? .rear : .front }
-
-    static func of(_ asset: VideoAsset) -> CameraSlot {
-        asset.role == .front ? .rear : .front
-    }
+    var other: Self { self == .front ? .rear : .front }
 }
 
 @MainActor @Observable
@@ -58,16 +52,27 @@ final class SessionVideoPlayback {
     var hasVideo: Bool { feeds.values.contains { $0.hasFootage } }
     func feed(_ slot: CameraSlot) -> Feed { feeds[slot]! }
 
+    /// Review playback: each camera's clips on the session clock, with its
+    /// saved offset, limited to the Video sync crop.
     func load(manifest: SessionManifest, directory: URL) async {
+        let sync = manifest.effectiveVideoSync
+        await load(assets: manifest.videos ?? [], origin: manifest.startedAtUTC,
+                   duration: manifest.sessionDuration, directory: directory,
+                   offsets: { sync.offset(for: $0) },
+                   window: sync.reviewWindow(sessionDuration: manifest.sessionDuration))
+    }
+
+    /// General form: place clips on a timeline that starts at `origin` and
+    /// runs `duration` seconds (Video sync uses one wider than the session).
+    func load(assets: [VideoAsset], origin: Date, duration: TimeInterval, directory: URL,
+              offsets: (CameraSlot) -> TimeInterval, window: ClosedRange<TimeInterval>? = nil) async {
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
-        let assets = manifest.videos ?? []
-        let duration = manifest.highlights?.durationSeconds ?? 0
-        for slot in [CameraSlot.front, .rear] {
+        for slot in CameraSlot.allCases {
             let feed = feed(slot)
-            let mine = assets.filter { CameraSlot.of($0) == slot }
-            let segments = VideoTimeline.segments(assets: mine, sessionStartUTC: manifest.startedAtUTC,
+            let mine = assets.filter { $0.slot == slot }
+            let segments = VideoTimeline.segments(assets: mine, sessionStartUTC: origin,
                                                   sessionDuration: duration,
-                                                  syncOffset: manifest.videoSyncOffset ?? 0)
+                                                  syncOffset: offsets(slot), window: window)
             feed.compact = VideoTimeline.compact(segments)
             guard feed.hasFootage,
                   let built = try? await VideoLibrary.buildComposition(compact: feed.compact, sessionDirectory: directory)
