@@ -36,6 +36,10 @@ enum TrackMapMode: String, CaseIterable, Identifiable {
 
 enum SessionTopView { case map, camera }
 
+/// What "Add clip" is for: the main view (replacing its clips) or the second camera.
+enum ClipTarget { case main, second }
+enum ClipSource { case photos, files }
+
 struct SessionTrackMapView: View {
     let sessionId: UUID
     let analysis: SessionAnalysis
@@ -68,6 +72,8 @@ struct SessionTrackMapView: View {
     @State private var importStatus: String?
     @State private var showSync = false
     @State private var confirmRemove = false
+    /// Where the clips being picked go, and which clips they replace.
+    @State private var pendingImport: (camera: CameraSlot, replacing: Set<UUID>) = (.front, [])
     @AppStorage("cameraMuted") private var muted = false
 
     private var units: UnitsFormatter { UnitsFormatter(metric: metric) }
@@ -122,12 +128,18 @@ struct SessionTrackMapView: View {
             let items = photoItems
             guard !items.isEmpty else { return }
             photoItems = []
-            runImport { await VideoImporter.importPicked(items, sessionId: sessionId, model: model, progress: $0) }
+            let target = pendingImport
+            runImport(replacing: target.replacing) {
+                await VideoImporter.importPicked(items, sessionId: sessionId, model: model, camera: target.camera, progress: $0)
+            }
         }
         .fileImporter(isPresented: $showFileImporter, allowedContentTypes: [.movie, .mpeg4Movie],
                       allowsMultipleSelection: true) { result in
             guard case .success(let urls) = result, !urls.isEmpty else { return }
-            runImport { await VideoImporter.importFiles(urls, sessionId: sessionId, model: model, progress: $0) }
+            let target = pendingImport
+            runImport(replacing: target.replacing) {
+                await VideoImporter.importFiles(urls, sessionId: sessionId, model: model, camera: target.camera, progress: $0)
+            }
         }
         .fullScreenCover(isPresented: $showSync) {
             VideoSyncView(sessionId: sessionId, analysis: analysis) { Task { await loadVideo() } }
@@ -139,6 +151,23 @@ struct SessionTrackMapView: View {
                 Task { await loadVideo() }
             }
         }
+    }
+
+    private func clips(in slot: CameraSlot) -> [VideoAsset] {
+        (manifest?.videos ?? []).filter { $0.slot == slot }
+    }
+
+    /// "+ Camera" and "Add clip…": pick the slot (and what it replaces), then
+    /// open the system picker.
+    private func addClips(_ target: ClipTarget, from source: ClipSource) {
+        playing = false
+        if !hasClips {
+            pendingImport = (.front, [])
+        } else {
+            let slot = target == .main ? mainCamera : mainCamera.other
+            pendingImport = (slot, Set(clips(in: slot).map(\.id)))
+        }
+        if source == .photos { showPhotosPicker = true } else { showFileImporter = true }
     }
 
     private func loadVideo() async {
@@ -154,11 +183,16 @@ struct SessionTrackMapView: View {
 
     /// Copy clips in with a progress card in the camera slot, then go
     /// straight to Video sync.
-    private func runImport(_ work: @escaping ((Int, Int) -> Void) async -> SessionManifest?) {
+    private func runImport(replacing: Set<UUID>, _ work: @escaping ((Int, Int) -> Void) async -> SessionManifest?) {
         playing = false
         importStatus = "Importing…"
         Task {
             let result = await work { i, n in importStatus = n > 1 ? "Importing clip \(i) of \(n)…" : "Importing clip…" }
+            // Old clips go only once the new ones are in, so a failed or
+            // cancelled import never leaves the session with nothing.
+            if result != nil, !replacing.isEmpty {
+                VideoImporter.remove(replacing, sessionId: sessionId, model: model)
+            }
             importStatus = nil
             await loadVideo()
             if result != nil {
@@ -216,8 +250,9 @@ struct SessionTrackMapView: View {
                          canSwap: Set((manifest?.videos ?? []).map(\.slot)).count > 1,
                          hasBest: analysis.bestLapId != nil,
                          onClose: { dismiss() },
-                         onAddPhotos: { showPhotosPicker = true },
-                         onAddFiles: { showFileImporter = true },
+                         mainHasClips: clips(in: mainCamera).count > 0,
+                         secondHasClips: clips(in: mainCamera.other).count > 0,
+                         onAdd: { target, source in addClips(target, from: source) },
                          onSync: { playing = false; showSync = true },
                          onSwap: {
                              VideoImporter.swapCameras(sessionId: sessionId, model: model)
@@ -765,8 +800,9 @@ private struct SessionMapTopBar: View, Equatable {
     let canSwap: Bool
     let hasBest: Bool
     var onClose: () -> Void
-    var onAddPhotos: () -> Void
-    var onAddFiles: () -> Void
+    let mainHasClips: Bool
+    let secondHasClips: Bool
+    var onAdd: (ClipTarget, ClipSource) -> Void
     var onSync: () -> Void
     var onSwap: () -> Void
     var onRemove: () -> Void
@@ -774,6 +810,7 @@ private struct SessionMapTopBar: View, Equatable {
     static func == (a: Self, b: Self) -> Bool {
         a.topView == b.topView && a.mode == b.mode && a.satellite == b.satellite
             && a.hasClips == b.hasClips && a.canSwap == b.canSwap && a.hasBest == b.hasBest
+            && a.mainHasClips == b.mainHasClips && a.secondHasClips == b.secondHasClips
     }
 
     var body: some View {
@@ -796,7 +833,7 @@ private struct SessionMapTopBar: View, Equatable {
                 switcherTab("Camera", symbol: "video.fill", on: topView == .camera) { topView = .camera }
             } else {
                 Menu {
-                    addVideoButtons
+                    sourceButtons(.main)
                 } label: {
                     tabLabel("Camera", symbol: "plus", on: false, muted: true)
                 }
@@ -824,9 +861,9 @@ private struct SessionMapTopBar: View, Equatable {
         .contentShape(Capsule())
     }
 
-    @ViewBuilder private var addVideoButtons: some View {
-        Button("From Photos", systemImage: "photo.on.rectangle", action: onAddPhotos)
-        Button("From Files", systemImage: "folder", action: onAddFiles)
+    @ViewBuilder private func sourceButtons(_ target: ClipTarget) -> some View {
+        Button("From Photos", systemImage: "photo.on.rectangle") { onAdd(target, .photos) }
+        Button("From Files", systemImage: "folder") { onAdd(target, .files) }
     }
 
     /// One menu for what the line shows and the base map.
@@ -858,7 +895,19 @@ private struct SessionMapTopBar: View, Equatable {
         Menu {
             Button("Sync video…", systemImage: "arrow.left.and.right.square", action: onSync)
             Menu {
-                addVideoButtons
+                if mainHasClips {
+                    Menu {
+                        sourceButtons(.main)
+                    } label: {
+                        Label("Replace main video", systemImage: "arrow.triangle.2.circlepath")
+                    }
+                }
+                Menu {
+                    sourceButtons(.second)
+                } label: {
+                    Label(secondHasClips ? "Replace second camera" : "Add second camera",
+                          systemImage: "rectangle.inset.bottomleading.filled")
+                }
             } label: {
                 Label("Add clip…", systemImage: "plus")
             }

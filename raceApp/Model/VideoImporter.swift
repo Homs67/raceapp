@@ -17,12 +17,13 @@ enum VideoImporter {
     /// Imports Photos picks one by one; returns the updated manifest.
     @discardableResult
     static func importPicked(_ items: [PhotosPickerItem], sessionId: UUID, model: AppModel,
+                             camera: VideoAsset.Camera? = nil,
                              progress: (Int, Int) -> Void = { _, _ in }) async -> SessionManifest? {
         var latest: SessionManifest?
         for (i, item) in items.enumerated() {
             progress(i + 1, items.count)
             if let movie = try? await item.loadTransferable(type: PickedMovie.self) {
-                latest = await importOne(from: movie.url, sessionId: sessionId, model: model) ?? latest
+                latest = await importOne(from: movie.url, sessionId: sessionId, model: model, camera: camera) ?? latest
                 try? FileManager.default.removeItem(at: movie.url)
             }
         }
@@ -32,22 +33,27 @@ enum VideoImporter {
     /// Imports files chosen in Files (security-scoped URLs).
     @discardableResult
     static func importFiles(_ urls: [URL], sessionId: UUID, model: AppModel,
+                            camera: VideoAsset.Camera? = nil,
                             progress: (Int, Int) -> Void = { _, _ in }) async -> SessionManifest? {
         var latest: SessionManifest?
         for (i, url) in urls.enumerated() {
             progress(i + 1, urls.count)
             let scoped = url.startAccessingSecurityScopedResource()
-            latest = await importOne(from: url, sessionId: sessionId, model: model) ?? latest
+            latest = await importOne(from: url, sessionId: sessionId, model: model, camera: camera) ?? latest
             if scoped { url.stopAccessingSecurityScopedResource() }
         }
         return latest
     }
 
-    static func importOne(from url: URL, sessionId: UUID, model: AppModel) async -> SessionManifest? {
+    /// `camera` puts the clip in that slot; nil keeps the default (Front for
+    /// imports).
+    static func importOne(from url: URL, sessionId: UUID, model: AppModel,
+                          camera: VideoAsset.Camera? = nil) async -> SessionManifest? {
         guard var manifest = try? model.store.manifest(for: sessionId) else { return nil }
         let directory = model.store.directory(for: sessionId)
-        guard let asset = try? await VideoLibrary.importVideo(
+        guard var asset = try? await VideoLibrary.importVideo(
             from: url, sessionDirectory: directory, fallbackStart: manifest.startedAtUTC) else { return nil }
+        asset.camera = camera
         manifest.videos = (manifest.videos ?? []) + [asset]
         try? model.store.save(manifest)
         model.recording.sessionUpdated()
