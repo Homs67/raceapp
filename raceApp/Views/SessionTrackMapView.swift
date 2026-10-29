@@ -54,6 +54,10 @@ struct SessionTrackMapView: View {
     @State private var playing = false
     @State private var camera: MapCameraPosition = .automatic
     @State private var overlay = MapOverlay()
+    @State private var overlayVersion = 0
+    /// After a jump (±10 s, lap step), the cursor leads until the footage has
+    /// caught up with the seek, instead of the video pulling it back.
+    @State private var footageLeadsAfter: CFTimeInterval = 0
     @State private var panelHeight: CGFloat = 300
     @State private var manifest: SessionManifest?
     @State private var playback = SessionVideoPlayback()
@@ -189,161 +193,38 @@ struct SessionTrackMapView: View {
         let r = analysis.indices(target)
         cursor = max(0, min(Double(r.count - 1), (uptime - analysis.t[r.lowerBound]) * SessionAnalysis.hz))
         playback.seek(to: t, precise: true)
+        footageLeadsAfter = CACurrentMediaTime() + 0.5
     }
 
     // MARK: - Map
 
+    /// The map only redraws when the line changes or the car moves to the
+    /// next data sample (10 Hz), not on every 30 Hz playback tick.
     private var map: some View {
-        Map(position: $camera) {
-            if let track, track.centerline.count > 2 {
-                MapPolyline(coordinates: track.centerlineCoordinates)
-                    .stroke(Color.white.opacity(satellite ? 0.25 : 0.12), style: StrokeStyle(lineWidth: 12, lineCap: .round, lineJoin: .round))
-            }
-            switch mode {
-            case .speed, .delta:
-                ForEach(overlay.segments) { seg in
-                    MapPolyline(coordinates: seg.coordinates)
-                        .stroke(seg.color, style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round))
-                }
-            case .braking:
-                MapPolyline(coordinates: overlay.line)
-                    .stroke(Color.white.opacity(0.7), style: StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round))
-                ForEach(overlay.zones) { zone in
-                    MapPolyline(coordinates: zone.coordinates)
-                        .stroke(Color.recordRed, style: StrokeStyle(lineWidth: 7, lineCap: .round, lineJoin: .round))
-                    if zone.labeled {
-                        Annotation("", coordinate: zone.coordinates[0], anchor: .bottom) {
-                            brakeLabel(zone)
-                        }
-                    }
-                }
-            }
-            if let gate = layout?.start {
-                GateMapContent(gate: gate, color: .green, label: layout?.finish == nil ? "Start/finish" : "Start")
-            }
-            if let gate = layout?.finish { GateMapContent(gate: gate, color: .white, label: "Finish") }
-            if analysis.lat.indices.contains(cursorIndex) {
-                Annotation("", coordinate: analysis.coordinate(cursorIndex)) {
-                    ZStack {
-                        Circle().fill(Color.white.opacity(0.2)).frame(width: 30, height: 30)
-                        Circle().fill(Color.white).frame(width: 13, height: 13)
-                            .overlay(Circle().stroke(Color.black, lineWidth: 2.5))
-                    }
-                }
-            }
-        }
-        .mapStyle(satellite ? .imagery(elevation: .flat)
-                  : .standard(elevation: .flat, emphasis: .muted, pointsOfInterest: .excludingAll))
-        .mapControls { }
-    }
-
-    private func brakeLabel(_ zone: MapOverlay.Zone) -> some View {
-        HStack(spacing: 4) {
-            Text(zone.corner).font(.system(size: 11, weight: .semibold)).foregroundStyle(Color.mutedStrong)
-            Text("\(zone.entry)→\(zone.min)").font(.system(size: 12, weight: .bold)).foregroundStyle(.white)
-        }
-        .padding(.horizontal, 7).padding(.vertical, 3)
-        .background(Color(white: 0.11).opacity(0.9), in: RoundedRectangle(cornerRadius: 8))
-        .padding(.bottom, 6)
+        SessionMapLayer(camera: $camera, overlay: overlay, overlayVersion: overlayVersion, mode: mode,
+                        satellite: satellite, track: track, layout: layout,
+                        car: analysis.lat.indices.contains(cursorIndex) ? analysis.coordinate(cursorIndex) : nil,
+                        carIndex: cursorIndex)
+            .equatable()
     }
 
     // MARK: - Top bar
 
+    /// Its own view so playback ticks don't rebuild the menus under your finger.
     private var topBar: some View {
-        HStack {
-            circleButton("xmark") { dismiss() }
-            Spacer()
-            viewSwitcher
-            Spacer()
-            if topView == .map { mapStyleMenu } else { cameraMenu }
-        }
-        .padding(.horizontal, 20)
-        .padding(.top, 6)
-    }
-
-    /// Map | Camera, equal widths. Without footage the second tab is a muted "+ Camera".
-    private var viewSwitcher: some View {
-        EqualWidthHStack(spacing: 2) {
-            switcherTab("Map", symbol: "map", on: topView == .map) { topView = .map }
-            if hasClips {
-                switcherTab("Camera", symbol: "video.fill", on: topView == .camera) { topView = .camera }
-            } else {
-                Menu {
-                    addVideoButtons
-                } label: {
-                    tabLabel("Camera", symbol: "plus", on: false, muted: true)
-                }
-            }
-        }
-        .padding(3)
-        .background(.ultraThinMaterial, in: Capsule())
-        .overlay(Capsule().stroke(Color.white.opacity(0.12), lineWidth: 1))
-    }
-
-    private func switcherTab(_ label: String, symbol: String, on: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) { tabLabel(label, symbol: symbol, on: on) }
-            .buttonStyle(.plain)
-    }
-
-    private func tabLabel(_ label: String, symbol: String, on: Bool, muted: Bool = false) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: symbol).font(.system(size: 13, weight: .semibold))
-            Text(label).font(.system(size: 15, weight: .semibold))
-        }
-        .foregroundStyle(on ? Color.black : muted ? Color.mutedStrong : Color.white)
-        .padding(.horizontal, 14).frame(height: 38)
-        .frame(maxWidth: .infinity)
-        .background(on ? Color.white : Color.clear, in: Capsule())
-        .contentShape(Capsule())
-    }
-
-    @ViewBuilder private var addVideoButtons: some View {
-        Button("From Photos", systemImage: "photo.on.rectangle") { showPhotosPicker = true }
-        Button("From Files", systemImage: "folder") { showFileImporter = true }
-    }
-
-    /// One menu for what the line shows and the base map.
-    private var mapStyleMenu: some View {
-        Menu {
-            Section("Line shows") {
-                Picker("Line shows", selection: $mode) {
-                    ForEach(TrackMapMode.allCases) { m in
-                        if m != .delta || analysis.bestLapId != nil {
-                            Text(m.title).tag(m)
-                        }
-                    }
-                }
-                .pickerStyle(.inline)
-            }
-            Section("Map") {
-                Picker("Map", selection: $satellite) {
-                    Label("Standard", systemImage: "map").tag(false)
-                    Label("Satellite", systemImage: "globe.americas").tag(true)
-                }
-                .pickerStyle(.inline)
-            }
-        } label: {
-            circleLabel("square.3.layers.3d")
-        }
-    }
-
-    private var cameraMenu: some View {
-        Menu {
-            Button("Sync video…", systemImage: "arrow.left.and.right.square") { playing = false; showSync = true }
-            Menu {
-                addVideoButtons
-            } label: {
-                Label("Add clip…", systemImage: "plus")
-            }
-            Button("Swap cameras", systemImage: "arrow.left.arrow.right") {
-                VideoImporter.swapCameras(sessionId: sessionId, model: model)
-                Task { await loadVideo() }
-            }
-            Divider()
-            Button("Remove video", systemImage: "trash", role: .destructive) { confirmRemove = true }
-        } label: {
-            circleLabel("ellipsis")
-        }
+        SessionMapTopBar(topView: $topView, mode: $mode, satellite: $satellite, hasClips: hasClips,
+                         canSwap: Set((manifest?.videos ?? []).map(\.slot)).count > 1,
+                         hasBest: analysis.bestLapId != nil,
+                         onClose: { dismiss() },
+                         onAddPhotos: { showPhotosPicker = true },
+                         onAddFiles: { showFileImporter = true },
+                         onSync: { playing = false; showSync = true },
+                         onSwap: {
+                             VideoImporter.swapCameras(sessionId: sessionId, model: model)
+                             Task { await loadVideo() }
+                         },
+                         onRemove: { confirmRemove = true })
+            .equatable()
     }
 
     /// Read-only key for the line on the map, bottom-left above the panel.
@@ -370,20 +251,6 @@ struct SessionTrackMapView: View {
         .padding(.horizontal, 10).frame(height: 28)
         .background(.ultraThinMaterial, in: Capsule())
         .overlay(Capsule().stroke(Color.white.opacity(0.12), lineWidth: 1))
-    }
-
-    private func circleButton(_ symbol: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) { circleLabel(symbol) }
-            .buttonStyle(.plain)
-    }
-
-    private func circleLabel(_ symbol: String) -> some View {
-        Image(systemName: symbol)
-            .font(.system(size: 17, weight: .semibold))
-            .foregroundStyle(.white)
-            .frame(width: 44, height: 44)
-            .background(.ultraThinMaterial, in: Circle())
-            .overlay(Circle().stroke(Color.white.opacity(0.12), lineWidth: 1))
     }
 
     // MARK: - Bottom panel
@@ -566,6 +433,7 @@ struct SessionTrackMapView: View {
             guard let target else { return }
             lapId = target.id
             cursor = 0
+            footageFollowsJump()
         }
         .disabled(target == nil)
         .opacity(target == nil ? 0.35 : 1)
@@ -588,6 +456,15 @@ struct SessionTrackMapView: View {
 
     private func skip(_ seconds: Double) {
         cursor = max(0, min(Double(range.count - 1), cursor + seconds * SessionAnalysis.hz))
+        footageFollowsJump()
+    }
+
+    /// Put the footage where the cursor just jumped to, and let the cursor
+    /// lead for a moment so the seek isn't undone by the video's old time.
+    private func footageFollowsJump() {
+        guard topView == .camera else { return }
+        playback.seek(to: sessionT, precise: true)
+        footageLeadsAfter = CACurrentMediaTime() + 0.5
     }
 
     private var timeline: some View {
@@ -627,19 +504,25 @@ struct SessionTrackMapView: View {
     private func play() async {
         guard playing else { return }
         if Int(cursor) >= range.count - 1 { cursor = 0 }
+        var last = CACurrentMediaTime()
         while playing, !Task.isCancelled {
             try? await Task.sleep(for: .milliseconds(33))
             // Paused or cancelled mid-sleep: don't run a last tick that
             // would start the footage again.
             guard playing, !Task.isCancelled else { break }
             let footage = playback.feed(mainCamera)
-            if topView == .camera, let manifest, footage.player.rate > 0,
+            let now = CACurrentMediaTime()
+            let dt = min(0.25, now - last)
+            last = now
+            if topView == .camera, let manifest, footage.player.rate > 0, now > footageLeadsAfter,
                footage.compTime(at: sessionT) != nil {
                 // Footage plays: it is the clock, the cursor follows it.
                 let uptime = footage.sessionTime + manifest.startUptime
                 cursor = (uptime - analysis.t[range.lowerBound]) * SessionAnalysis.hz
             } else {
-                cursor += SessionAnalysis.hz / 30
+                // Real elapsed time, not a nominal 33 ms: a busy frame
+                // shouldn't slow the replay down.
+                cursor += dt * SessionAnalysis.hz
             }
             if topView == .camera { playback.follow(sessionT: sessionT, playing: true, audible: muted ? nil : mainCamera) }
             if Int(cursor) >= range.count - 1 {
@@ -659,6 +542,7 @@ struct SessionTrackMapView: View {
 
     private func rebuildOverlay(refit: Bool) {
         overlay = MapOverlay.build(analysis, lap: lap, mode: mode)
+        overlayVersion += 1
         if refit, !overlay.line.isEmpty {
             withAnimation { camera = .region(MapRegion.fitting(overlay.line, minSpanMeters: 250)) }
         }
@@ -797,5 +681,207 @@ struct EqualWidthHStack: Layout {
             view.place(at: CGPoint(x: bounds.minX + CGFloat(i) * (w + spacing), y: bounds.midY),
                        anchor: .leading, proposal: ProposedViewSize(width: w, height: bounds.height))
         }
+    }
+}
+
+/// The Map half of the session screen, equatable on what it draws.
+private struct SessionMapLayer: View, Equatable {
+    @Binding var camera: MapCameraPosition
+    let overlay: MapOverlay
+    let overlayVersion: Int
+    let mode: TrackMapMode
+    let satellite: Bool
+    let track: Track?
+    let layout: CourseLayout?
+    let car: CLLocationCoordinate2D?
+    let carIndex: Int
+
+    static func == (a: Self, b: Self) -> Bool {
+        a.overlayVersion == b.overlayVersion && a.mode == b.mode && a.satellite == b.satellite && a.carIndex == b.carIndex
+    }
+
+    var body: some View {
+        Map(position: $camera) {
+            if let track, track.centerline.count > 2 {
+                MapPolyline(coordinates: track.centerlineCoordinates)
+                    .stroke(Color.white.opacity(satellite ? 0.25 : 0.12), style: StrokeStyle(lineWidth: 12, lineCap: .round, lineJoin: .round))
+            }
+            switch mode {
+            case .speed, .delta:
+                ForEach(overlay.segments) { seg in
+                    MapPolyline(coordinates: seg.coordinates)
+                        .stroke(seg.color, style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round))
+                }
+            case .braking:
+                MapPolyline(coordinates: overlay.line)
+                    .stroke(Color.white.opacity(0.7), style: StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round))
+                ForEach(overlay.zones) { zone in
+                    MapPolyline(coordinates: zone.coordinates)
+                        .stroke(Color.recordRed, style: StrokeStyle(lineWidth: 7, lineCap: .round, lineJoin: .round))
+                    if zone.labeled {
+                        Annotation("", coordinate: zone.coordinates[0], anchor: .bottom) {
+                            brakeLabel(zone)
+                        }
+                    }
+                }
+            }
+            if let gate = layout?.start {
+                GateMapContent(gate: gate, color: .green, label: layout?.finish == nil ? "Start/finish" : "Start")
+            }
+            if let gate = layout?.finish { GateMapContent(gate: gate, color: .white, label: "Finish") }
+            if let car {
+                Annotation("", coordinate: car) {
+                    ZStack {
+                        Circle().fill(Color.white.opacity(0.2)).frame(width: 30, height: 30)
+                        Circle().fill(Color.white).frame(width: 13, height: 13)
+                            .overlay(Circle().stroke(Color.black, lineWidth: 2.5))
+                    }
+                }
+            }
+        }
+        .mapStyle(satellite ? .imagery(elevation: .flat)
+                  : .standard(elevation: .flat, emphasis: .muted, pointsOfInterest: .excludingAll))
+        .mapControls { }
+    }
+
+    private func brakeLabel(_ zone: MapOverlay.Zone) -> some View {
+        HStack(spacing: 4) {
+            Text(zone.corner).font(.system(size: 11, weight: .semibold)).foregroundStyle(Color.mutedStrong)
+            Text("\(zone.entry)→\(zone.min)").font(.system(size: 12, weight: .bold)).foregroundStyle(.white)
+        }
+        .padding(.horizontal, 7).padding(.vertical, 3)
+        .background(Color(white: 0.11).opacity(0.9), in: RoundedRectangle(cornerRadius: 8))
+        .padding(.bottom, 6)
+    }
+}
+
+/// Close · Map | Camera · layers / ⋯ menu. Equatable on what it shows, so the
+/// parent's playback ticks leave open menus alone.
+private struct SessionMapTopBar: View, Equatable {
+    @Binding var topView: SessionTopView
+    @Binding var mode: TrackMapMode
+    @Binding var satellite: Bool
+    let hasClips: Bool
+    let canSwap: Bool
+    let hasBest: Bool
+    var onClose: () -> Void
+    var onAddPhotos: () -> Void
+    var onAddFiles: () -> Void
+    var onSync: () -> Void
+    var onSwap: () -> Void
+    var onRemove: () -> Void
+
+    static func == (a: Self, b: Self) -> Bool {
+        a.topView == b.topView && a.mode == b.mode && a.satellite == b.satellite
+            && a.hasClips == b.hasClips && a.canSwap == b.canSwap && a.hasBest == b.hasBest
+    }
+
+    var body: some View {
+        HStack {
+            circleButton("xmark", action: onClose)
+            Spacer()
+            viewSwitcher
+            Spacer()
+            if topView == .map { mapStyleMenu } else { cameraMenu }
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 6)
+    }
+
+    /// Map | Camera, equal widths. Without footage the second tab is a muted "+ Camera".
+    private var viewSwitcher: some View {
+        EqualWidthHStack(spacing: 2) {
+            switcherTab("Map", symbol: "map", on: topView == .map) { topView = .map }
+            if hasClips {
+                switcherTab("Camera", symbol: "video.fill", on: topView == .camera) { topView = .camera }
+            } else {
+                Menu {
+                    addVideoButtons
+                } label: {
+                    tabLabel("Camera", symbol: "plus", on: false, muted: true)
+                }
+            }
+        }
+        .padding(3)
+        .background(.ultraThinMaterial, in: Capsule())
+        .overlay(Capsule().stroke(Color.white.opacity(0.12), lineWidth: 1))
+    }
+
+    private func switcherTab(_ label: String, symbol: String, on: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) { tabLabel(label, symbol: symbol, on: on) }
+            .buttonStyle(.plain)
+    }
+
+    private func tabLabel(_ label: String, symbol: String, on: Bool, muted: Bool = false) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: symbol).font(.system(size: 13, weight: .semibold))
+            Text(label).font(.system(size: 15, weight: .semibold))
+        }
+        .foregroundStyle(on ? Color.black : muted ? Color.mutedStrong : Color.white)
+        .padding(.horizontal, 14).frame(height: 38)
+        .frame(maxWidth: .infinity)
+        .background(on ? Color.white : Color.clear, in: Capsule())
+        .contentShape(Capsule())
+    }
+
+    @ViewBuilder private var addVideoButtons: some View {
+        Button("From Photos", systemImage: "photo.on.rectangle", action: onAddPhotos)
+        Button("From Files", systemImage: "folder", action: onAddFiles)
+    }
+
+    /// One menu for what the line shows and the base map.
+    private var mapStyleMenu: some View {
+        Menu {
+            Section("Line shows") {
+                Picker("Line shows", selection: $mode) {
+                    ForEach(TrackMapMode.allCases) { m in
+                        if m != .delta || hasBest {
+                            Text(m.title).tag(m)
+                        }
+                    }
+                }
+                .pickerStyle(.inline)
+            }
+            Section("Map") {
+                Picker("Map", selection: $satellite) {
+                    Label("Standard", systemImage: "map").tag(false)
+                    Label("Satellite", systemImage: "globe.americas").tag(true)
+                }
+                .pickerStyle(.inline)
+            }
+        } label: {
+            circleLabel("square.3.layers.3d")
+        }
+    }
+
+    private var cameraMenu: some View {
+        Menu {
+            Button("Sync video…", systemImage: "arrow.left.and.right.square", action: onSync)
+            Menu {
+                addVideoButtons
+            } label: {
+                Label("Add clip…", systemImage: "plus")
+            }
+            Button("Swap cameras", systemImage: "arrow.left.arrow.right", action: onSwap)
+                .disabled(!canSwap)
+            Divider()
+            Button("Remove video", systemImage: "trash", role: .destructive, action: onRemove)
+        } label: {
+            circleLabel("ellipsis")
+        }
+    }
+
+    private func circleButton(_ symbol: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) { circleLabel(symbol) }
+            .buttonStyle(.plain)
+    }
+
+    private func circleLabel(_ symbol: String) -> some View {
+        Image(systemName: symbol)
+            .font(.system(size: 17, weight: .semibold))
+            .foregroundStyle(.white)
+            .frame(width: 44, height: 44)
+            .background(.ultraThinMaterial, in: Circle())
+            .overlay(Circle().stroke(Color.white.opacity(0.12), lineWidth: 1))
     }
 }

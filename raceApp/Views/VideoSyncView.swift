@@ -38,6 +38,7 @@ struct VideoSyncView: View {
     @State private var laneDrag: (camera: CameraSlot, seconds: TimeInterval)?
     @State private var scrubFrom: TimeInterval?
     @State private var thumbs: [UUID: [CGImage]] = [:]
+    @State private var speedRange: ClosedRange<Double> = 0...1
 
     private let laneH: CGFloat = 56
     private let laneGap: CGFloat = 8
@@ -53,7 +54,7 @@ struct VideoSyncView: View {
             VStack(spacing: 0) {
                 ZStack(alignment: .topTrailing) {
                     previewVideo.frame(maxWidth: .infinity, maxHeight: .infinity)
-                    RouteMiniMap(analysis: analysis, at: dataIndex)
+                    RouteMiniMap(analysis: analysis, at: dataIndex).equatable()
                         .frame(width: 124, height: 124)
                         .padding(.top, 20).padding(.trailing, 20)
                         .accessibilityHidden(true)
@@ -135,20 +136,18 @@ struct VideoSyncView: View {
                     .offset(x: 8)
                     .allowsHitTesting(false)
                 }
-                lane(row: 0) {
-                    sessionLane(width: max(2, x(sessionDuration) - x(0)))
-                }
-                .offset(x: x(0))
-                .allowsHitTesting(false)
+                lane(row: 0) { sessionLane(width: w) }
+                    .allowsHitTesting(false)
                 ForEach(Array(cameras.enumerated()), id: \.element) { row, camera in
                     let shift = laneDrag?.camera == camera ? laneDrag!.seconds : 0
                     ForEach(assets.filter { $0.slot == camera }) { asset in
                         let span = VideoSyncLayout.span(of: asset, sessionStartUTC: manifest?.startedAtUTC ?? .now,
                                                         offset: sync.offset(for: camera) + shift)
+                        let left = x(span.lowerBound)
                         lane(row: row + 1) {
-                            clipLane(asset, width: max(2, x(span.upperBound) - x(span.lowerBound)))
+                            clipLane(asset, width: max(2, x(span.upperBound) - left), left: left, screen: w)
                         }
-                        .offset(x: x(span.lowerBound))
+                        .offset(x: left)
                         .gesture(laneGesture(camera))
                         .accessibilityElement(children: .ignore)
                         .accessibilityLabel("\(camera.title) camera, \(asset.fileName)")
@@ -222,29 +221,59 @@ struct VideoSyncView: View {
         .allowsHitTesting(false)
     }
 
-    private func sessionLane(width: CGFloat) -> some View {
-        ZStack(alignment: .topLeading) {
-            RoundedRectangle(cornerRadius: 8).fill(Color.accent)
-            ChannelLine(values: analysis.channels[.speed] ?? [], color: .black.opacity(0.4), symmetric: false)
-                .equatable().padding(.top, 20).padding(.bottom, 4)
-            Text("Session · \(clock(sessionDuration))")
-                .font(.system(size: 12, weight: .semibold)).foregroundStyle(.black)
-                .lineLimit(1).fixedSize()
-                .padding(.leading, 8).padding(.top, 4)
+    /// The session lane, drawn for the visible stretch only: a screen-wide
+    /// canvas instead of one as wide as the whole session at this zoom.
+    private func sessionLane(width w: CGFloat) -> some View {
+        let x0 = w / 2 + CGFloat(0 - playhead) * zoom
+        let x1 = w / 2 + CGFloat(sessionDuration - playhead) * zoom
+        let lo = max(0, x0), hi = min(w, x1)
+        return ZStack(alignment: .topLeading) {
+            if hi > lo {
+                Canvas { ctx, size in
+                    let rect = CGRect(x: x0, y: 0, width: x1 - x0, height: size.height)
+                    ctx.fill(Path(roundedRect: rect, cornerRadius: 8), with: .color(Color.accent))
+                    guard let manifest, speedRange.upperBound > speedRange.lowerBound else { return }
+                    let values = analysis.channels[.speed] ?? []
+                    let t = analysis.t
+                    // Samples on screen, plus one either side.
+                    let tLo = playhead - Double(w / 2 / zoom) + manifest.startUptime
+                    let tHi = playhead + Double(w / 2 / zoom) + manifest.startUptime
+                    let first = max(0, analysis.index(at: tLo) - 1)
+                    let last = min(values.count - 1, analysis.index(at: tHi) + 1)
+                    guard last > first else { return }
+                    let step = max(1, (last - first) / 600)
+                    let span = speedRange.upperBound - speedRange.lowerBound
+                    var p = Path()
+                    for k in stride(from: first, through: last, by: step) where t.indices.contains(k) {
+                        let px = w / 2 + CGFloat(t[k] - manifest.startUptime - playhead) * zoom
+                        let py = size.height - 4 - CGFloat((values[k] - speedRange.lowerBound) / span) * (size.height - 24)
+                        if k == first { p.move(to: CGPoint(x: px, y: py)) } else { p.addLine(to: CGPoint(x: px, y: py)) }
+                    }
+                    ctx.stroke(p, with: .color(.black.opacity(0.4)), lineWidth: 1.5)
+                }
+                .frame(width: w, height: laneH)
+                .clipShape(Rectangle().offset(x: lo).size(width: hi - lo, height: laneH))
+                Text("Session · \(clock(sessionDuration))")
+                    .font(.system(size: 12, weight: .semibold)).foregroundStyle(.black)
+                    .lineLimit(1).fixedSize()
+                    .padding(.leading, 8).padding(.top, 4)
+                    .offset(x: max(lo, min(hi - 110, x0)))
+            }
         }
-        .frame(width: width, height: laneH)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .frame(width: w, height: laneH, alignment: .topLeading)
     }
 
-    /// A clip as a filmstrip: one thumbnail per tile, taken from the moment the
-    /// tile covers, so the strip stays true at any zoom.
-    private func clipLane(_ asset: VideoAsset, width: CGFloat) -> some View {
+    /// A clip as a filmstrip. Only the tiles on screen are built, each showing
+    /// the frame from the moment it covers, so the strip stays true at any zoom.
+    private func clipLane(_ asset: VideoAsset, width: CGFloat, left: CGFloat, screen: CGFloat) -> some View {
         let tileW = laneH * 16 / 9
         let images = thumbs[asset.id] ?? []
         let tiles = Int((width / tileW).rounded(.up))
+        let firstTile = max(0, Int((-left / tileW).rounded(.down)))
+        let lastTile = min(tiles - 1, Int(((screen - left) / tileW).rounded(.up)))
         return ZStack(alignment: .topLeading) {
-            HStack(spacing: 0) {
-                ForEach(0..<max(0, min(tiles, 400)), id: \.self) { i in
+            if lastTile >= firstTile {
+                ForEach(firstTile...lastTile, id: \.self) { i in
                     let t = Double(CGFloat(i) * tileW / zoom)
                     let k = min(images.count - 1, Int(t / thumbEvery))
                     Group {
@@ -252,16 +281,16 @@ struct VideoSyncView: View {
                         else { Color(white: 0.12) }
                     }
                     .frame(width: tileW, height: laneH).clipped()
+                    .offset(x: CGFloat(i) * tileW)
                 }
             }
-            .frame(width: width, height: laneH, alignment: .leading)
-            .clipped()
             Text("\(asset.fileName) · \(clock(asset.duration))")
                 .font(.system(size: 11, weight: .semibold)).foregroundStyle(.white).lineLimit(1)
-                .frame(maxWidth: max(0, width - 16), alignment: .leading)
+                .frame(maxWidth: min(220, max(0, width - 16)), alignment: .leading)
                 .padding(.horizontal, 6).padding(.vertical, 2)
                 .background(Color.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 5))
                 .padding(4)
+                .offset(x: max(0, min(width - 230, -left + 8)))
         }
         .frame(width: width, height: laneH, alignment: .topLeading)
         .background(Color(white: 0.1))
@@ -328,10 +357,20 @@ struct VideoSyncView: View {
     private func play() async {
         guard playing else { playback.pause(); return }
         if playhead >= axis.upperBound - 0.1 { playhead = axis.lowerBound }
+        var last = CACurrentMediaTime()
         while playing, !Task.isCancelled {
             try? await Task.sleep(for: .milliseconds(33))
             guard playing, !Task.isCancelled else { break }
-            playhead += 1.0 / 30
+            let now = CACurrentMediaTime()
+            let dt = min(0.25, now - last)
+            last = now
+            // The video is the clock while it plays; elapsed time covers gaps.
+            let feed = playback.feed(preview)
+            if feed.player.rate > 0, feed.compTime(at: clipTime(preview)) != nil {
+                playhead = feed.sessionTime + axis.lowerBound
+            } else {
+                playhead += dt
+            }
             if playhead >= axis.upperBound { playhead = axis.upperBound; playing = false; break }
             playback.follow(sessionT: clipTime(preview), playing: true, audible: preview)
         }
@@ -345,6 +384,8 @@ struct VideoSyncView: View {
         guard let manifest else { return }
         stored = manifest.effectiveVideoSync
         sync = stored
+        let speeds = (analysis.channels[.speed] ?? []).filter(\.isFinite)
+        if let lo = speeds.min(), let hi = speeds.max(), hi > lo { speedRange = lo...hi }
         // Clips that miss the session entirely start at the session instead.
         for camera in cameras {
             let spans = assets.filter { $0.slot == camera }.map {
@@ -421,9 +462,12 @@ struct VideoSyncView: View {
 
 /// The session's own GPS path with a dot at the playhead — the reference for
 /// "where am I in the video". Works for drives as well as tracks.
-struct RouteMiniMap: View {
+struct RouteMiniMap: View, Equatable {
     let analysis: SessionAnalysis
     let at: Int?
+
+    /// The route never changes here; only the dot does, at the data rate.
+    static func == (a: Self, b: Self) -> Bool { a.at == b.at }
 
     var body: some View {
         Canvas { ctx, size in
