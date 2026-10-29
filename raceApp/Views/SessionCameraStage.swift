@@ -55,13 +55,12 @@ final class SessionVideoPlayback {
     func feed(_ slot: CameraSlot) -> Feed { feeds[slot]! }
 
     /// Review playback: each camera's clips on the session clock, with its
-    /// saved offset, limited to the Video sync crop.
+    /// saved offset. (A crop saved by an earlier Video sync is ignored.)
     func load(manifest: SessionManifest, directory: URL) async {
         let sync = manifest.effectiveVideoSync
         await load(assets: manifest.videos ?? [], origin: manifest.startedAtUTC,
                    duration: manifest.sessionDuration, directory: directory,
-                   offsets: { sync.offset(for: $0) },
-                   window: sync.reviewWindow(sessionDuration: manifest.sessionDuration))
+                   offsets: { sync.offset(for: $0) })
     }
 
     /// General form: place clips on a timeline that starts at `origin` and
@@ -102,7 +101,7 @@ final class SessionVideoPlayback {
 
     /// Keep each camera playing where it has footage and paused where it
     /// doesn't, re-seeking only when it has drifted more than 0.25 s.
-    func follow(sessionT: TimeInterval, playing: Bool, audible: CameraSlot) {
+    func follow(sessionT: TimeInterval, playing: Bool, audible: CameraSlot?) {
         for (slot, feed) in feeds {
             feed.player.isMuted = slot != audible
             guard playing, let t = feed.compTime(at: sessionT) else {
@@ -132,6 +131,7 @@ struct SessionCameraStage: View {
     let playback: SessionVideoPlayback
     let sessionT: TimeInterval
     @Binding var main: CameraSlot
+    @Binding var muted: Bool
     var onJump: (TimeInterval) -> Void
 
     @AppStorage("cameraPipCorner") private var cornerRaw = PipCorner.topTrailing.rawValue
@@ -158,8 +158,23 @@ struct SessionCameraStage: View {
                 if secondary.hasFootage {
                     pip(secondary, in: geo.size)
                 }
+                muteButton
+                    .position(x: geo.size.width - inset - 22, y: geo.size.height - inset - 22)
             }
         }
+    }
+
+    private var muteButton: some View {
+        Button { muted.toggle() } label: {
+            Image(systemName: muted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 44, height: 44)
+                .background(.ultraThinMaterial, in: Circle())
+                .overlay(Circle().stroke(Color.white.opacity(0.12), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(muted ? "Unmute video" : "Mute video")
     }
 
     private func gapCard(next: TimeInterval?) -> some View {
@@ -222,7 +237,8 @@ struct SessionCameraStage: View {
 
     private func position(_ corner: PipCorner, in size: CGSize) -> CGPoint {
         let x = corner == .topLeading || corner == .bottomLeading ? inset : size.width - inset - pipSize.width
-        let y = corner == .topLeading || corner == .topTrailing ? inset : size.height - inset - pipSize.height
+        var y = corner == .topLeading || corner == .topTrailing ? inset : size.height - inset - pipSize.height
+        if corner == .bottomTrailing { y -= 44 + 8 } // sit above the mute button
         return CGPoint(x: x, y: y)
     }
 }

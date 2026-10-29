@@ -2,10 +2,12 @@
 //  VideoSyncView.swift
 //  raceApp
 //
-//  Lines a session's footage up with its data, modelled on the iOS Photos
-//  trimmer. One timeline holds a Session lane (the speed trace) and a lane per
-//  camera; drag a lane sideways to align it, drag the white handles to crop.
-//  The crop bounds what review plays — footage and data alike.
+//  Lines a session's footage up with its data. A fixed playhead sits in the
+//  middle of a zoomed timeline; the Session lane (speed trace) and a lane per
+//  camera scroll under it. Drag a camera lane to slide its clips against the
+//  session, drag anywhere else to scrub, pinch to zoom. The preview and the
+//  mini-map show the moment under the playhead, so you line up what you see
+//  (a kerb, a brake point) with the data.
 //
 
 import SwiftUI
@@ -22,78 +24,63 @@ struct VideoSyncView: View {
 
     @State private var manifest: SessionManifest?
     @State private var sync = VideoSync()
-    @State private var saved = VideoSync()
-    @State private var crop: ClosedRange<TimeInterval> = 0...1
+    @State private var stored = VideoSync()
     @State private var axis: ClosedRange<TimeInterval> = 0...1
+    /// Session seconds under the centre playhead.
     @State private var playhead: TimeInterval = 0
     @State private var playing = false
     @State private var playback = SessionVideoPlayback()
     @State private var preview: CameraSlot = .front
-    /// Live drag of a lane, in seconds: camera lanes, or the session lane (nil).
-    @State private var laneDrag: (lane: CameraSlot?, seconds: TimeInterval)?
-    @State private var bubble: String?
+    /// Points per second of the timeline; pinch changes it.
+    @State private var zoom: CGFloat = 16
+    @State private var zoomAtPinchStart: CGFloat?
+    /// A lane being dragged: the camera and its live shift in seconds.
+    @State private var laneDrag: (camera: CameraSlot, seconds: TimeInterval)?
+    @State private var scrubFrom: TimeInterval?
     @State private var thumbs: [UUID: [CGImage]] = [:]
-    @State private var cropAtDragStart: ClosedRange<TimeInterval>?
+
+    private let laneH: CGFloat = 56
+    private let laneGap: CGFloat = 8
+    private let thumbEvery: TimeInterval = 2
 
     private var assets: [VideoAsset] { manifest?.videos ?? [] }
     private var cameras: [CameraSlot] { CameraSlot.allCases.filter { c in assets.contains { $0.slot == c } } }
     private var sessionDuration: TimeInterval { manifest?.sessionDuration ?? 0 }
-    private var changed: Bool {
-        let savedCrop = saved.cropStart.flatMap { s in saved.cropEnd.map { s...$0 } }
-        return sync.frontOffset != saved.frontOffset || sync.rearOffset != saved.rearOffset || cropValue != savedCrop
-    }
-
-    /// The crop worth saving: nil when it still covers the whole axis.
-    private var cropValue: ClosedRange<TimeInterval>? {
-        abs(crop.lowerBound - axis.lowerBound) < 0.05 && abs(crop.upperBound - axis.upperBound) < 0.05 ? nil : crop
-    }
+    private var changed: Bool { sync.frontOffset != stored.frontOffset || sync.rearOffset != stored.rearOffset }
 
     var body: some View {
-        VStack(spacing: 0) {
-            nav
-            ZStack(alignment: .topTrailing) {
-                previewVideo.frame(maxWidth: .infinity, maxHeight: .infinity)
-                RouteMiniMap(analysis: analysis, at: dataIndex)
-                    .frame(width: 124, height: 124)
-                    .padding(.top, 20).padding(.trailing, 20)
+        NavigationStack {
+            VStack(spacing: 0) {
+                ZStack(alignment: .topTrailing) {
+                    previewVideo.frame(maxWidth: .infinity, maxHeight: .infinity)
+                    RouteMiniMap(analysis: analysis, at: dataIndex)
+                        .frame(width: 124, height: 124)
+                        .padding(.top, 20).padding(.trailing, 20)
+                        .accessibilityHidden(true)
+                }
+                playButton.padding(.vertical, 16)
+                timeline
             }
-            timeline.padding(.horizontal, 12).padding(.bottom, 8)
+            .background(Color.black)
+            .navigationTitle("Video Sync")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(Color.black, for: .navigationBar)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { playback.pause(); dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { save() }.disabled(!changed)
+                }
+            }
         }
-        .background(Color.black)
         .preferredColorScheme(.dark)
         .task { await load() }
         .task(id: playing) { await play() }
         .onChange(of: playhead) { if !playing { seekPreview() } }
     }
 
-    // MARK: - Chrome
-
-    private var nav: some View {
-        HStack {
-            pillButton("Cancel") { dismiss() }
-            Spacer()
-            Text("VIDEO SYNC").font(.system(size: 15, weight: .medium)).tracking(0.6).foregroundStyle(Color.mutedStrong)
-            Spacer()
-            Button { save() } label: {
-                Text("Done").font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(changed ? Color.black : Color.mutedWeak)
-                    .padding(.horizontal, 18).frame(height: 44)
-                    .background(changed ? AnyShapeStyle(Color.accent) : AnyShapeStyle(.ultraThinMaterial), in: Capsule())
-            }
-            .buttonStyle(.plain)
-            .disabled(!changed)
-        }
-        .padding(.horizontal, 20).padding(.top, 6)
-    }
-
-    private func pillButton(_ title: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(title).font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
-                .padding(.horizontal, 18).frame(height: 44)
-                .background(.ultraThinMaterial, in: Capsule())
-        }
-        .buttonStyle(.plain)
-    }
+    // MARK: - Preview
 
     @ViewBuilder private var previewVideo: some View {
         let _ = playback.revision
@@ -112,190 +99,208 @@ struct VideoSyncView: View {
         }
     }
 
+    private var playButton: some View {
+        Button { playing.toggle() } label: {
+            Image(systemName: playing ? "pause.fill" : "play.fill")
+                .font(.system(size: 22, weight: .bold))
+                .foregroundStyle(.black)
+                .offset(x: playing ? 0 : 2)
+                .frame(width: 56, height: 56)
+                .background(Color.white, in: Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(playing ? "Pause" : "Play")
+    }
+
     // MARK: - Timeline
 
-    private let laneH: CGFloat = 40
-    private let handleW: CGFloat = 14
-
     private var timeline: some View {
-        VStack(spacing: 6) {
-            HStack(spacing: 0) {
-                Button { playing.toggle() } label: {
-                    Image(systemName: playing ? "pause.fill" : "play.fill")
-                        .font(.system(size: 20, weight: .bold)).foregroundStyle(.white)
-                        .frame(width: 52).frame(maxHeight: .infinity)
+        GeometryReader { geo in
+            let w = geo.size.width
+            let x: (TimeInterval) -> CGFloat = { w / 2 + CGFloat($0 - playhead) * zoom }
+            ZStack(alignment: .topLeading) {
+                Color.clear.contentShape(Rectangle()).gesture(scrubGesture)
+                ruler(width: w, x: x)
+                // A faint track per lane with its name, so a lane whose clips
+                // are off-screen still reads as there.
+                ForEach(Array((["Session"] + cameras.map(\.title)).enumerated()), id: \.offset) { row, name in
+                    lane(row: row) {
+                        RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.05))
+                            .frame(width: w - 16, height: laneH)
+                            .overlay(alignment: .bottomLeading) {
+                                Text(name).font(.system(size: 11, weight: .semibold)).foregroundStyle(Color.mutedWeak)
+                                    .padding(.leading, 8).padding(.bottom, 4)
+                            }
+                    }
+                    .offset(x: 8)
+                    .allowsHitTesting(false)
                 }
-                .buttonStyle(.plain)
-                Rectangle().fill(Color.black).frame(width: 1.5)
-                GeometryReader { geo in lanes(width: geo.size.width) }
-                    .padding(.horizontal, 16)
-            }
-            .frame(height: laneH * CGFloat(1 + cameras.count) + 6 * CGFloat(cameras.count) + 16 + 16)
-            .background(Color(white: 0.2), in: RoundedRectangle(cornerRadius: 10))
-            .overlay(alignment: .top) {
-                if let bubble {
-                    Text(bubble).font(.system(size: 13, weight: .semibold)).monospacedDigit()
+                lane(row: 0) {
+                    sessionLane(width: max(2, x(sessionDuration) - x(0)))
+                }
+                .offset(x: x(0))
+                .allowsHitTesting(false)
+                ForEach(Array(cameras.enumerated()), id: \.element) { row, camera in
+                    let shift = laneDrag?.camera == camera ? laneDrag!.seconds : 0
+                    ForEach(assets.filter { $0.slot == camera }) { asset in
+                        let span = VideoSyncLayout.span(of: asset, sessionStartUTC: manifest?.startedAtUTC ?? .now,
+                                                        offset: sync.offset(for: camera) + shift)
+                        lane(row: row + 1) {
+                            clipLane(asset, width: max(2, x(span.upperBound) - x(span.lowerBound)))
+                        }
+                        .offset(x: x(span.lowerBound))
+                        .gesture(laneGesture(camera))
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel("\(camera.title) camera, \(asset.fileName)")
+                        .accessibilityValue("Starts at \(clock(span.lowerBound)) of the session")
+                        .accessibilityAdjustableAction { dir in
+                            sync.setOffset(sync.offset(for: camera) + (dir == .increment ? 0.1 : -0.1), for: camera)
+                            Task { await rebuild() }
+                        }
+                    }
+                }
+                // Fixed centre playhead with the time on top.
+                VStack(spacing: 4) {
+                    Text(clock(playhead, tenths: true))
+                        .font(.system(size: 13, weight: .semibold)).monospacedDigit()
                         .foregroundStyle(.black)
                         .padding(.horizontal, 8).padding(.vertical, 3)
-                        .background(Color.white, in: RoundedRectangle(cornerRadius: 8))
-                        .offset(y: -30)
+                        .background(Color.white, in: Capsule())
+                    RoundedRectangle(cornerRadius: 1.5).fill(Color.white).frame(width: 3)
+                        .shadow(color: .black.opacity(0.5), radius: 3)
+                }
+                .frame(width: 80)
+                .offset(x: w / 2 - 40)
+                .allowsHitTesting(false)
+                if let laneDrag {
+                    Text("\(laneDrag.camera.title) \(String(format: "%+.1f s", laneDrag.seconds))")
+                        .font(.system(size: 13, weight: .semibold)).monospacedDigit()
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 10).padding(.vertical, 5)
+                        .background(Color.accent, in: Capsule())
+                        .frame(width: w, alignment: .center)
+                        .offset(y: timelineHeight - 26)
                 }
             }
-            HStack {
-                Text(clock(axis.lowerBound))
-                Spacer()
-                Text(clock(axis.upperBound))
-            }
-            .font(.system(size: 11, weight: .medium)).monospacedDigit().foregroundStyle(Color.muted)
-            .padding(.leading, 52 + 16).padding(.trailing, 16)
+            .frame(width: w, height: timelineHeight, alignment: .topLeading)
+            .clipped()
+            .gesture(MagnificationGesture()
+                .onChanged { v in
+                    let base = zoomAtPinchStart ?? zoom
+                    zoomAtPinchStart = base
+                    zoom = min(80, max(2, base * v))
+                }
+                .onEnded { _ in zoomAtPinchStart = nil })
         }
+        .frame(height: timelineHeight)
+        .padding(.bottom, 8)
     }
 
-    private func lanes(width w: CGFloat) -> some View {
-        let x: (TimeInterval) -> CGFloat = { CGFloat(VideoSyncLayout.fraction($0, axis: axis)) * w }
-        let secondsPerPoint = (axis.upperBound - axis.lowerBound) / Double(max(1, w))
-        let sessionShift = laneDrag?.lane == nil ? (laneDrag?.seconds ?? 0) : 0
+    private var rulerH: CGFloat { 26 }
+    private var timelineHeight: CGFloat { rulerH + (laneH + laneGap) * CGFloat(1 + cameras.count) + 34 }
+
+    private func lane<Content: View>(row: Int, @ViewBuilder content: () -> Content) -> some View {
+        content().offset(y: rulerH + 8 + CGFloat(row) * (laneH + laneGap))
+    }
+
+    /// Tick marks every 1, 5, 10 or 30 s depending on zoom.
+    private func ruler(width w: CGFloat, x: (TimeInterval) -> CGFloat) -> some View {
+        let step: TimeInterval = zoom > 40 ? 1 : zoom > 12 ? 5 : zoom > 5 ? 10 : 30
+        let lo = (playhead - Double(w / 2 / zoom)), hi = (playhead + Double(w / 2 / zoom))
+        let first = (lo / step).rounded(.down) * step
+        let ticks = Array(stride(from: first, through: hi, by: step)).map { ($0, x($0)) }
         return ZStack(alignment: .topLeading) {
-            // Scrub strip along the top: drag to move the playhead.
-            Color.clear.frame(width: w, height: 16).contentShape(Rectangle())
-                .gesture(DragGesture(minimumDistance: 0).onChanged { g in
-                    playing = false
-                    playhead = min(axis.upperBound, max(axis.lowerBound, axis.lowerBound + Double(g.location.x) * secondsPerPoint))
-                })
-            // Session lane
-            let s0 = x(sessionShift), s1 = x(sessionDuration + sessionShift)
-            ZStack(alignment: .topLeading) {
-                RoundedRectangle(cornerRadius: 6).fill(Color.accent)
-                ChannelLine(values: analysis.channels[.speed] ?? [], color: .black.opacity(0.35), symmetric: false)
-                    .equatable().padding(.top, 14).padding(.bottom, 3)
-                Text("Session · \(clock(sessionDuration))")
-                    .font(.system(size: 12, weight: .semibold)).foregroundStyle(.black)
-                    .lineLimit(1).fixedSize()
-                    .padding(.leading, 8).padding(.top, 3)
-            }
-            .frame(width: max(2, s1 - s0), height: laneH)
-            .clipShape(RoundedRectangle(cornerRadius: 6))
-            .offset(x: s0, y: 16)
-            .gesture(laneGesture(nil, secondsPerPoint: secondsPerPoint))
-            // Camera lanes
-            ForEach(Array(cameras.enumerated()), id: \.element) { row, camera in
-                let shift = laneDrag?.lane == camera ? (laneDrag?.seconds ?? 0) : 0
-                ForEach(assets.filter { $0.slot == camera }) { asset in
-                    let span = VideoSyncLayout.span(of: asset, sessionStartUTC: manifest?.startedAtUTC ?? .now,
-                                                    offset: sync.offset(for: camera) + shift)
-                    clipBlock(asset, width: max(2, x(span.upperBound) - x(span.lowerBound)))
-                        .offset(x: x(span.lowerBound), y: 16 + (laneH + 6) * CGFloat(row + 1))
-                        .gesture(laneGesture(camera, secondsPerPoint: secondsPerPoint))
+            ForEach(ticks, id: \.0) { t, tx in
+                VStack(alignment: .leading, spacing: 2) {
+                    Rectangle().fill(Color.white.opacity(0.3)).frame(width: 1, height: 6)
+                    Text(clock(t)).font(.system(size: 11, weight: .medium)).monospacedDigit()
+                        .foregroundStyle(Color.muted).fixedSize()
                 }
+                .offset(x: tx)
             }
-            // Outside the crop dims; the white frame crops.
-            Rectangle().fill(Color.black.opacity(0.55)).frame(width: max(0, x(crop.lowerBound) + 16), height: totalHeight)
-                .offset(x: -16).allowsHitTesting(false)
-            Rectangle().fill(Color.black.opacity(0.55)).frame(width: max(0, w - x(crop.upperBound) + 16), height: totalHeight)
-                .offset(x: x(crop.upperBound)).allowsHitTesting(false)
-            cropFrame(x0: x(crop.lowerBound), x1: x(crop.upperBound), secondsPerPoint: secondsPerPoint)
-            // Playhead
-            RoundedRectangle(cornerRadius: 2).fill(Color.white).frame(width: 4, height: totalHeight + 8)
-                .shadow(color: .black.opacity(0.5), radius: 3)
-                .offset(x: x(playhead) - 2, y: -4).allowsHitTesting(false)
         }
-        .frame(width: w, height: totalHeight, alignment: .topLeading)
-        .padding(.vertical, 8)
+        .allowsHitTesting(false)
     }
 
-    private var totalHeight: CGFloat { 16 + laneH * CGFloat(1 + cameras.count) + 6 * CGFloat(cameras.count) }
-
-    private func clipBlock(_ asset: VideoAsset, width: CGFloat) -> some View {
+    private func sessionLane(width: CGFloat) -> some View {
         ZStack(alignment: .topLeading) {
+            RoundedRectangle(cornerRadius: 8).fill(Color.accent)
+            ChannelLine(values: analysis.channels[.speed] ?? [], color: .black.opacity(0.4), symmetric: false)
+                .equatable().padding(.top, 20).padding(.bottom, 4)
+            Text("Session · \(clock(sessionDuration))")
+                .font(.system(size: 12, weight: .semibold)).foregroundStyle(.black)
+                .lineLimit(1).fixedSize()
+                .padding(.leading, 8).padding(.top, 4)
+        }
+        .frame(width: width, height: laneH)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    /// A clip as a filmstrip: one thumbnail per tile, taken from the moment the
+    /// tile covers, so the strip stays true at any zoom.
+    private func clipLane(_ asset: VideoAsset, width: CGFloat) -> some View {
+        let tileW = laneH * 16 / 9
+        let images = thumbs[asset.id] ?? []
+        let tiles = Int((width / tileW).rounded(.up))
+        return ZStack(alignment: .topLeading) {
             HStack(spacing: 0) {
-                ForEach(Array((thumbs[asset.id] ?? []).enumerated()), id: \.offset) { _, img in
-                    Image(decorative: img, scale: 1).resizable().aspectRatio(contentMode: .fill)
-                        .frame(width: laneH * 16 / 9, height: laneH).clipped()
+                ForEach(0..<max(0, min(tiles, 400)), id: \.self) { i in
+                    let t = Double(CGFloat(i) * tileW / zoom)
+                    let k = min(images.count - 1, Int(t / thumbEvery))
+                    Group {
+                        if k >= 0 { Image(decorative: images[k], scale: 1).resizable().aspectRatio(contentMode: .fill) }
+                        else { Color(white: 0.12) }
+                    }
+                    .frame(width: tileW, height: laneH).clipped()
                 }
             }
             .frame(width: width, height: laneH, alignment: .leading)
             .clipped()
             Text("\(asset.fileName) · \(clock(asset.duration))")
                 .font(.system(size: 11, weight: .semibold)).foregroundStyle(.white).lineLimit(1)
-                .frame(maxWidth: max(0, width - 8), alignment: .leading)
+                .frame(maxWidth: max(0, width - 16), alignment: .leading)
                 .padding(.horizontal, 6).padding(.vertical, 2)
                 .background(Color.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 5))
                 .padding(4)
         }
         .frame(width: width, height: laneH, alignment: .topLeading)
         .background(Color(white: 0.1))
-        .clipShape(RoundedRectangle(cornerRadius: 6))
-        .task(id: asset.id) { await loadThumbs(asset, width: width) }
-    }
-
-    private func cropFrame(x0: CGFloat, x1: CGFloat, secondsPerPoint: Double) -> some View {
-        let h = totalHeight + 16
-        return ZStack(alignment: .topLeading) {
-            Rectangle().fill(Color.white).frame(width: x1 - x0 + 2 * handleW, height: 3)
-            Rectangle().fill(Color.white).frame(width: x1 - x0 + 2 * handleW, height: 3).offset(y: h - 3)
-            handle(left: true).offset(x: 0)
-                .gesture(cropGesture(left: true, secondsPerPoint: secondsPerPoint))
-            handle(left: false).offset(x: x1 - x0 + handleW)
-                .gesture(cropGesture(left: false, secondsPerPoint: secondsPerPoint))
-        }
-        .frame(width: x1 - x0 + 2 * handleW, height: h, alignment: .topLeading)
-        .offset(x: x0 - handleW, y: -8)
-    }
-
-    private func handle(left: Bool) -> some View {
-        UnevenRoundedRectangle(topLeadingRadius: left ? 8 : 0, bottomLeadingRadius: left ? 8 : 0,
-                               bottomTrailingRadius: left ? 0 : 8, topTrailingRadius: left ? 0 : 8)
-            .fill(Color.white)
-            .frame(width: handleW, height: totalHeight + 16)
-            .overlay(Image(systemName: left ? "chevron.compact.left" : "chevron.compact.right")
-                .font(.system(size: 16, weight: .bold)).foregroundStyle(.black))
-            .contentShape(Rectangle().inset(by: -10))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(laneDrag == nil ? Color.clear : Color.accent, lineWidth: 2))
+        .task(id: asset.id) { await loadThumbs(asset) }
     }
 
     // MARK: - Gestures
 
-    /// Drag a camera lane (or the session lane) sideways to line it up.
-    private func laneGesture(_ lane: CameraSlot?, secondsPerPoint: Double) -> some Gesture {
+    /// Drag empty timeline or the session lane: the content follows the finger.
+    private var scrubGesture: some Gesture {
+        DragGesture(minimumDistance: 2)
+            .onChanged { g in
+                playing = false
+                let from = scrubFrom ?? playhead
+                scrubFrom = from
+                playhead = clamp(from - Double(g.translation.width / zoom))
+            }
+            .onEnded { _ in scrubFrom = nil }
+    }
+
+    /// Drag a camera lane sideways to slide its clips against the session.
+    private func laneGesture(_ camera: CameraSlot) -> some Gesture {
         DragGesture(minimumDistance: 4)
             .onChanged { g in
                 playing = false
-                let seconds = Double(g.translation.width) * secondsPerPoint
-                laneDrag = (lane, seconds)
-                if let lane { preview = lane }
-                bubble = lane == nil ? "Session \(signed(seconds))" : "\(lane!.title) \(signed(seconds))"
+                preview = camera
+                laneDrag = (camera, Double(g.translation.width / zoom))
                 seekPreview()
             }
             .onEnded { g in
-                let seconds = Double(g.translation.width) * secondsPerPoint
-                if let lane {
-                    sync.setOffset(sync.offset(for: lane) + seconds, for: lane)
-                } else {
-                    // Moving the session right is moving every camera left.
-                    for c in CameraSlot.allCases { sync.setOffset(sync.offset(for: c) - seconds, for: c) }
-                }
+                sync.setOffset(sync.offset(for: camera) + Double(g.translation.width / zoom), for: camera)
                 laneDrag = nil
-                bubble = nil
-                Task { await rebuild(keepCrop: true) }
+                Task { await rebuild() }
             }
     }
 
-    private func cropGesture(left: Bool, secondsPerPoint: Double) -> some Gesture {
-        DragGesture(minimumDistance: 0)
-            .onChanged { g in
-                playing = false
-                let start = cropAtDragStart ?? crop
-                cropAtDragStart = start
-                let t = (left ? start.lowerBound : start.upperBound) + Double(g.translation.width) * secondsPerPoint
-                let proposed = left ? min(t, start.upperBound)...start.upperBound : start.lowerBound...max(t, start.lowerBound)
-                crop = VideoSyncLayout.clampCrop(proposed, axis: axis)
-                playhead = left ? crop.lowerBound : crop.upperBound
-                bubble = clock(playhead)
-            }
-            .onEnded { _ in
-                cropAtDragStart = nil
-                bubble = nil
-            }
-    }
+    private func clamp(_ t: TimeInterval) -> TimeInterval { min(axis.upperBound, max(axis.lowerBound, t)) }
 
     // MARK: - Playback
 
@@ -308,8 +313,7 @@ struct VideoSyncView: View {
     /// Where `camera`'s composition should be for the playhead, including a
     /// lane being dragged (its clips sample `seconds` earlier).
     private func clipTime(_ camera: CameraSlot) -> TimeInterval {
-        var shift: TimeInterval = 0
-        if let d = laneDrag { shift = d.lane == camera ? d.seconds : (d.lane == nil ? -d.seconds : 0) }
+        let shift = laneDrag?.camera == camera ? laneDrag!.seconds : 0
         return playhead - axis.lowerBound - shift
     }
 
@@ -323,12 +327,13 @@ struct VideoSyncView: View {
 
     private func play() async {
         guard playing else { playback.pause(); return }
-        if playhead >= crop.upperBound - 0.1 { playhead = crop.lowerBound }
+        if playhead >= axis.upperBound - 0.1 { playhead = axis.lowerBound }
         while playing, !Task.isCancelled {
             try? await Task.sleep(for: .milliseconds(33))
+            guard playing, !Task.isCancelled else { break }
             playhead += 1.0 / 30
-            if playhead >= crop.upperBound { playhead = crop.upperBound; playing = false }
-            playback.follow(sessionT: clipTime(preview), playing: playing, audible: preview)
+            if playhead >= axis.upperBound { playhead = axis.upperBound; playing = false; break }
+            playback.follow(sessionT: clipTime(preview), playing: true, audible: preview)
         }
         playback.pause()
     }
@@ -338,7 +343,7 @@ struct VideoSyncView: View {
     private func load() async {
         manifest = try? model.store.manifest(for: sessionId)
         guard let manifest else { return }
-        let stored = manifest.effectiveVideoSync
+        stored = manifest.effectiveVideoSync
         sync = stored
         // Clips that miss the session entirely start at the session instead.
         for camera in cameras {
@@ -350,22 +355,19 @@ struct VideoSyncView: View {
             }
         }
         preview = cameras.first ?? .front
-        await rebuild(keepCrop: false)
-        if let s = sync.cropStart, let e = sync.cropEnd { crop = VideoSyncLayout.clampCrop(s...e, axis: axis) }
-        // Baseline is what's stored, so a rescued placement still needs Done.
-        saved = VideoSync(frontOffset: stored.frontOffset, rearOffset: stored.rearOffset,
-                          cropStart: cropValue?.lowerBound, cropEnd: cropValue?.upperBound)
-        playhead = max(axis.lowerBound, min(0, axis.upperBound))
+        // Start zoomed so about 20 s fills the screen.
+        zoom = 402 / 20
+        await rebuild()
+        playhead = 0
         seekPreview()
     }
 
     /// Recompute the axis for the current offsets and reload the players on it.
-    private func rebuild(keepCrop: Bool) async {
+    private func rebuild() async {
         guard let manifest else { return }
         let spans = assets.map { VideoSyncLayout.span(of: $0, sessionStartUTC: manifest.startedAtUTC, offset: sync.offset(for: $0.slot)) }
-        let wasFull = cropValue == nil
         axis = VideoSyncLayout.axis(sessionDuration: sessionDuration, spans: spans)
-        crop = keepCrop && !wasFull ? VideoSyncLayout.clampCrop(crop, axis: axis) : axis
+        playhead = clamp(playhead)
         await playback.load(assets: assets, origin: manifest.startedAtUTC.addingTimeInterval(axis.lowerBound),
                             duration: axis.upperBound - axis.lowerBound,
                             directory: model.store.directory(for: sessionId),
@@ -375,10 +377,7 @@ struct VideoSyncView: View {
 
     private func save() {
         guard var manifest else { return }
-        var out = sync
-        out.cropStart = cropValue?.lowerBound
-        out.cropEnd = cropValue?.upperBound
-        manifest.videoSync = out
+        manifest.videoSync = VideoSync(frontOffset: sync.frontOffset, rearOffset: sync.rearOffset)
         try? model.store.save(manifest)
         model.recording.sessionUpdated()
         playback.pause()
@@ -386,29 +385,37 @@ struct VideoSyncView: View {
         dismiss()
     }
 
-    private func loadThumbs(_ asset: VideoAsset, width: CGFloat) async {
+    /// One frame every `thumbEvery` seconds (capped), drawn per tile by time.
+    private func loadThumbs(_ asset: VideoAsset) async {
         guard thumbs[asset.id] == nil else { return }
         let url = model.store.directory(for: sessionId).appendingPathComponent("videos").appendingPathComponent(asset.fileName)
         let gen = AVAssetImageGenerator(asset: AVURLAsset(url: url))
         gen.appliesPreferredTrackTransform = true
-        gen.maximumSize = CGSize(width: 160, height: 90)
-        gen.requestedTimeToleranceBefore = CMTime(seconds: 1, preferredTimescale: 600)
-        gen.requestedTimeToleranceAfter = CMTime(seconds: 1, preferredTimescale: 600)
-        let count = max(1, min(24, Int((width / (laneH * 16 / 9)).rounded(.up))))
+        gen.maximumSize = CGSize(width: 200, height: 112)
+        gen.requestedTimeToleranceBefore = CMTime(seconds: 0.5, preferredTimescale: 600)
+        gen.requestedTimeToleranceAfter = CMTime(seconds: 0.5, preferredTimescale: 600)
+        let count = max(1, min(300, Int((asset.duration / thumbEvery).rounded(.up))))
         var images: [CGImage] = []
         for i in 0..<count {
-            let t = asset.duration * (Double(i) + 0.5) / Double(count)
-            if let img = try? await gen.image(at: CMTime(seconds: t, preferredTimescale: 600)).image { images.append(img) }
+            let t = min(asset.duration - 0.1, Double(i) * thumbEvery)
+            if let img = try? await gen.image(at: CMTime(seconds: max(0, t), preferredTimescale: 600)).image {
+                images.append(img)
+            } else if let last = images.last { images.append(last) }
+            if i % 15 == 14 { thumbs[asset.id] = images } // show the strip filling in
         }
         thumbs[asset.id] = images
     }
 
-    private func signed(_ s: TimeInterval) -> String { String(format: "%+.1f s", s) }
-
-    /// 2:05 or −0:12 — axis ends can sit before the session starts.
-    private func clock(_ t: TimeInterval) -> String {
-        let s = Int(abs(t).rounded())
-        return (t < -0.5 ? "−" : "") + String(format: "%d:%02d", s / 60, s % 60)
+    /// 2:05 / −0:12, or 2:05.3 with tenths.
+    private func clock(_ t: TimeInterval, tenths: Bool = false) -> String {
+        let sign = t < -0.05 ? "−" : ""
+        let a = abs(t)
+        if tenths {
+            let m = Int(a) / 60
+            return sign + String(format: "%d:%04.1f", m, a - Double(m * 60))
+        }
+        let s = Int(a.rounded())
+        return sign + String(format: "%d:%02d", s / 60, s % 60)
     }
 }
 

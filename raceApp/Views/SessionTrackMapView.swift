@@ -64,26 +64,11 @@ struct SessionTrackMapView: View {
     @State private var importStatus: String?
     @State private var showSync = false
     @State private var confirmRemove = false
+    @AppStorage("cameraMuted") private var muted = false
 
     private var units: UnitsFormatter { UnitsFormatter(metric: metric) }
 
-    /// Laps to step through, limited to the Video sync crop when there is one;
-    /// a drive is trimmed to it.
-    private var laps: [SessionAnalysis.Lap] {
-        let all = analysis.navigableLaps
-        guard let manifest,
-              let w = manifest.effectiveVideoSync.reviewWindow(sessionDuration: manifest.sessionDuration) else { return all }
-        let lo = manifest.startUptime + w.lowerBound, hi = manifest.startUptime + w.upperBound
-        let kept: [SessionAnalysis.Lap] = all.compactMap { l in
-            guard l.end > lo, l.start < hi else { return nil }
-            guard l.kind == .drive else { return l }
-            var trimmed = l
-            trimmed.start = max(l.start, lo)
-            trimmed.end = min(l.end, hi)
-            return trimmed
-        }
-        return kept.isEmpty ? all : kept
-    }
+    private var laps: [SessionAnalysis.Lap] { analysis.navigableLaps }
     private var lap: SessionAnalysis.Lap { laps.first { $0.id == lapId } ?? laps[0] }
     private var range: ClosedRange<Int> { analysis.indices(lap) }
     private var cursorIndex: Int { min(range.upperBound, range.lowerBound + Int(cursor)) }
@@ -107,7 +92,7 @@ struct SessionTrackMapView: View {
                 if let importStatus {
                     importingCard(importStatus).frame(maxHeight: .infinity)
                 } else if topView == .camera {
-                    SessionCameraStage(playback: playback, sessionT: sessionT, main: $mainCamera) { jump(toSession: $0) }
+                    SessionCameraStage(playback: playback, sessionT: sessionT, main: $mainCamera, muted: $muted) { jump(toSession: $0) }
                         .frame(maxHeight: .infinity)
                 } else {
                     Spacer(minLength: 0)
@@ -174,6 +159,9 @@ struct SessionTrackMapView: View {
             await loadVideo()
             if result != nil {
                 topView = .camera
+                // Let the picker finish dismissing before covering the screen,
+                // or the cover can come up without its safe area.
+                try? await Task.sleep(for: .milliseconds(500))
                 showSync = true
             }
         }
@@ -430,7 +418,9 @@ struct SessionTrackMapView: View {
         Rectangle().fill(Color.white.opacity(0.1)).frame(height: 0.5)
     }
 
-    private var isDrive: Bool { lap.kind == .drive }
+    /// Lap pills need a lap to step to; a drive, or a course with a single
+    /// run, gets ±10 s instead.
+    private var usesSkip: Bool { lap.kind == .drive || laps.count < 2 }
 
     private func title(_ l: SessionAnalysis.Lap) -> String {
         switch l.kind {
@@ -517,7 +507,7 @@ struct SessionTrackMapView: View {
 
     /// Lap step on either side of play; a drive has no laps, so ±10 s instead.
     @ViewBuilder private var transport: some View {
-        if isDrive {
+        if usesSkip {
             HStack(spacing: 32) {
                 skipButton(-10)
                 playButton
@@ -639,6 +629,9 @@ struct SessionTrackMapView: View {
         if Int(cursor) >= range.count - 1 { cursor = 0 }
         while playing, !Task.isCancelled {
             try? await Task.sleep(for: .milliseconds(33))
+            // Paused or cancelled mid-sleep: don't run a last tick that
+            // would start the footage again.
+            guard playing, !Task.isCancelled else { break }
             let footage = playback.feed(mainCamera)
             if topView == .camera, let manifest, footage.player.rate > 0,
                footage.compTime(at: sessionT) != nil {
@@ -648,7 +641,7 @@ struct SessionTrackMapView: View {
             } else {
                 cursor += SessionAnalysis.hz / 30
             }
-            if topView == .camera { playback.follow(sessionT: sessionT, playing: true, audible: mainCamera) }
+            if topView == .camera { playback.follow(sessionT: sessionT, playing: true, audible: muted ? nil : mainCamera) }
             if Int(cursor) >= range.count - 1 {
                 // Roll into the next lap; stop after the last one.
                 if let i = laps.firstIndex(where: { $0.id == lapId }), i + 1 < laps.count {
