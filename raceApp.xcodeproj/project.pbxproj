@@ -11,6 +11,7 @@
 		AA0000000000000000000003 /* SessionKit in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000004 /* SessionKit */; };
 		AA0000000000000000000011 /* BleKit in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000012 /* BleKit */; };
 		AA0000000000000000000013 /* RaceBoxKit in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000014 /* RaceBoxKit */; };
+		FA81B0010000000000000009 /* raceAppWidgets.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = FA81B0010000000000000003 /* raceAppWidgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -28,13 +29,35 @@
 			remoteGlobalIDString = FA8169462FFD901600F90252;
 			remoteInfo = raceApp;
 		};
+		FA81B001000000000000000A /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = FA81693F2FFD901600F90252 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = FA81B0010000000000000004;
+			remoteInfo = raceAppWidgets;
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
 		FA8169472FFD901600F90252 /* raceApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = raceApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		FA8169562FFD901700F90252 /* raceAppTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = raceAppTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		FA8169602FFD901700F90252 /* raceAppUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = raceAppUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		FA81B0010000000000000003 /* raceAppWidgets.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = raceAppWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		FA81B0010000000000000008 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				FA81B0010000000000000009 /* raceAppWidgets.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		FA8169492FFD901600F90252 /* raceApp */ = {
@@ -50,6 +73,16 @@
 		FA8169632FFD901700F90252 /* raceAppUITests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = raceAppUITests;
+			sourceTree = "<group>";
+		};
+		FA81B0010000000000000001 /* raceAppWidgets */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = raceAppWidgets;
+			sourceTree = "<group>";
+		};
+		FA81B0010000000000000002 /* raceAppShared */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = raceAppShared;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -80,6 +113,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		FA81B0010000000000000006 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -87,6 +127,8 @@
 			isa = PBXGroup;
 			children = (
 				FA8169492FFD901600F90252 /* raceApp */,
+				FA81B0010000000000000002 /* raceAppShared */,
+				FA81B0010000000000000001 /* raceAppWidgets */,
 				FA8169592FFD901700F90252 /* raceAppTests */,
 				FA8169632FFD901700F90252 /* raceAppUITests */,
 				FA8169482FFD901600F90252 /* Products */,
@@ -99,6 +141,7 @@
 				FA8169472FFD901600F90252 /* raceApp.app */,
 				FA8169562FFD901700F90252 /* raceAppTests.xctest */,
 				FA8169602FFD901700F90252 /* raceAppUITests.xctest */,
+				FA81B0010000000000000003 /* raceAppWidgets.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -113,14 +156,17 @@
 				FA8169432FFD901600F90252 /* Sources */,
 				FA8169442FFD901600F90252 /* Frameworks */,
 				FA8169452FFD901600F90252 /* Resources */,
+				FA81B0010000000000000008 /* Embed Foundation Extensions */,
 				FA81A0B12FFE000000C0FFEE /* Stamp build info */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				FA81B001000000000000000B /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				FA8169492FFD901600F90252 /* raceApp */,
+				FA81B0010000000000000002 /* raceAppShared */,
 			);
 			name = raceApp;
 			packageProductDependencies = (
@@ -179,6 +225,29 @@
 			productReference = FA8169602FFD901700F90252 /* raceAppUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
+		FA81B0010000000000000004 /* raceAppWidgets */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = FA81B001000000000000000C /* Build configuration list for PBXNativeTarget "raceAppWidgets" */;
+			buildPhases = (
+				FA81B0010000000000000005 /* Sources */,
+				FA81B0010000000000000006 /* Frameworks */,
+				FA81B0010000000000000007 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				FA81B0010000000000000001 /* raceAppWidgets */,
+				FA81B0010000000000000002 /* raceAppShared */,
+			);
+			name = raceAppWidgets;
+			packageProductDependencies = (
+			);
+			productName = raceAppWidgets;
+			productReference = FA81B0010000000000000003 /* raceAppWidgets.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -199,6 +268,9 @@
 					FA81695F2FFD901700F90252 = {
 						CreatedOnToolsVersion = 26.3;
 						TestTargetID = FA8169462FFD901600F90252;
+					};
+					FA81B0010000000000000004 = {
+						CreatedOnToolsVersion = 26.3;
 					};
 				};
 			};
@@ -225,6 +297,7 @@
 				FA8169462FFD901600F90252 /* raceApp */,
 				FA8169552FFD901700F90252 /* raceAppTests */,
 				FA81695F2FFD901700F90252 /* raceAppUITests */,
+				FA81B0010000000000000004 /* raceAppWidgets */,
 			);
 		};
 /* End PBXProject section */
@@ -245,6 +318,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		FA81695E2FFD901700F90252 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		FA81B0010000000000000007 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -297,6 +377,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		FA81B0010000000000000005 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -309,6 +396,11 @@
 			isa = PBXTargetDependency;
 			target = FA8169462FFD901600F90252 /* raceApp */;
 			targetProxy = FA8169612FFD901700F90252 /* PBXContainerItemProxy */;
+		};
+		FA81B001000000000000000B /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = FA81B0010000000000000004 /* raceAppWidgets */;
+			targetProxy = FA81B001000000000000000A /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -588,6 +680,62 @@
 			};
 			name = Release;
 		};
+		FA81B001000000000000000D /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = JQCNP2TY2K;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = raceApp;
+				INFOPLIST_FILE = Config/WidgetsInfo.plist;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.goodproductslab.raceApp.widgets;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		FA81B001000000000000000E /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = JQCNP2TY2K;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = raceApp;
+				INFOPLIST_FILE = Config/WidgetsInfo.plist;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.goodproductslab.raceApp.widgets;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -623,6 +771,15 @@
 			buildConfigurations = (
 				FA8169712FFD901700F90252 /* Debug */,
 				FA8169722FFD901700F90252 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		FA81B001000000000000000C /* Build configuration list for PBXNativeTarget "raceAppWidgets" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				FA81B001000000000000000D /* Debug */,
+				FA81B001000000000000000E /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
