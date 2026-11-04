@@ -118,7 +118,7 @@ struct CanMonitorView: View {
     private func analysisSection(_ report: CanMonitorReport) -> some View {
         Section {
             Text(report.analysis.joined(separator: "\n"))
-                .font(.system(size: 11, design: .monospaced))
+                .font(.system(size: 12, design: .monospaced))
                 .foregroundStyle(Color.mutedStrong)
                 .textSelection(.enabled)
         } header: { Text("Discovery analysis") }
@@ -151,7 +151,7 @@ struct CanMonitorView: View {
     private func rawSection(_ report: CanMonitorReport) -> some View {
         Section {
             Text(report.rawLines.joined(separator: "\n"))
-                .font(.system(size: 11, design: .monospaced))
+                .font(.system(size: 12, design: .monospaced))
                 .foregroundStyle(Color.mutedStrong)
                 .textSelection(.enabled)
         } header: { Text("Raw sample") }

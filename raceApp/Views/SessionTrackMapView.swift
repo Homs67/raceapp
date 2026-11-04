@@ -831,7 +831,7 @@ private struct SessionMapTopBar: View, Equatable {
             switcherTab("Map", symbol: "map", on: topView == .map) { topView = .map }
             if hasClips {
                 switcherTab("Camera", symbol: "video.fill", on: topView == .camera) { topView = .camera }
-            } else {
+            } else if !CommandLine.arguments.contains("-seed-presentation") {   // no footage to show in the talk
                 Menu {
                     sourceButtons(.main)
                 } label: {

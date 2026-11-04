@@ -35,7 +35,7 @@ struct DashboardsSettingsView: View {
                             }
                             Spacer()
                             if dashboard.id == store.selectedId {
-                                Text("Current").font(.system(size: 11, weight: .semibold)).foregroundStyle(Color.accent)
+                                Text("Current").font(.system(size: 12, weight: .semibold)).foregroundStyle(Color.accent)
                             }
                             Image(systemName: "chevron.right").font(.system(size: 12, weight: .semibold)).foregroundStyle(Color.mutedWeak)
                         }

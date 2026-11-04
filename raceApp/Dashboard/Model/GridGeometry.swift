@@ -16,8 +16,12 @@ struct GridGeometry: Equatable {
     /// Edge to edge: the only thing kept clear is the sensor housing —
     /// the top in portrait, the leading/trailing edge that carries it in
     /// landscape. The home indicator overlays the bottom row (it auto-hides).
+    ///
+    /// `safe.top` is honoured in landscape as well. There is no sensor housing
+    /// up there, so callers normally pass 0; the recording dashboard passes the
+    /// height of its permanent top bar, which widgets must not sit under.
     init(available: CGSize, grid: GridSpec, landscape: Bool, safe: EdgeInsets = EdgeInsets()) {
-        let top = landscape ? 0 : safe.top
+        let top = safe.top
         let leading = landscape ? safe.leading : 0
         let trailing = landscape ? safe.trailing : 0
         let raw = CGRect(x: leading, y: top,

@@ -25,10 +25,16 @@ final class AppModel {
     let raceBox = RaceBoxController()
     /// Widget dashboards shown while recording (Settings → Dashboards).
     let dashboards = DashboardStore()
+    let achievements = AchievementsModel()
+    let garage = Garage()
     private(set) var backgroundLocationStatus: PhoneSensorSuite.BackgroundLocationStatus = .notDetermined
     /// When Always Location is unavailable, keep the screen awake for the
     /// active session so iOS cannot suspend phone-only capture.
     private(set) var forceScreenAwakeForSession = false
+    /// Whether the live dashboard is covering the app. It used to be the same
+    /// thing as "a session is recording"; collapsing separates them, so a
+    /// session can keep running with the dashboard put away.
+    var isDashboardPresented = false
     /// Settings / Debug sheets presented from Sessions toolbar.
     var showSettings = false
     var showDebug = false
@@ -84,6 +90,7 @@ final class AppModel {
             }
         }
         recording.onRecordingDidStop = { [weak self] in
+            self?.isDashboardPresented = false
             self?.metrics.stop()
             self?.sensors.endRecordingActivity()
             self?.forceScreenAwakeForSession = false
@@ -188,6 +195,12 @@ final class AppModel {
                 Task {
                     try? await Task.sleep(for: .seconds(2))
                     startRecording(metricUnits: false)
+                    // `-record-for <seconds>`: stop on its own, for testing what
+                    // happens after a session ends (track match, achievements).
+                    if let seconds = Self.argument(after: "-record-for").flatMap(Double.init) {
+                        try? await Task.sleep(for: .seconds(seconds))
+                        stopRecording()
+                    }
                 }
             }
         }
@@ -219,6 +232,7 @@ final class AppModel {
                 supportedPids: connection.supportedPidList
             )
             if started {
+                isDashboardPresented = true
                 sensors.beginRecordingActivity()
                 applyRecordingIdlePolicy()
                 connection.recordingDidStart() // CAN stream if enabled + mapped

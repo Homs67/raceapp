@@ -27,6 +27,8 @@ public actor SessionRecorder {
     }
 
     public var isRecording: Bool { manifest != nil }
+    /// Open but not writing. Still `isRecording` — the session owns its files.
+    public var isPaused: Bool { manifest?.status == .paused }
     public var currentSessionId: UUID? { manifest?.id }
     public var currentDistanceMeters: Double { accumulator.distanceMeters }
 
@@ -52,6 +54,7 @@ public actor SessionRecorder {
             supportedPids: supportedPids
         )
         newManifest.status = .recording
+        newManifest.segments = [.init(start: now)]
         try store.create(newManifest)
         writer = try SessionWriter(sessionDirectory: store.directory(for: newManifest.id))
         manifest = newManifest
@@ -71,9 +74,61 @@ public actor SessionRecorder {
         return newManifest.id
     }
 
+    /// Stop writing without ending the session (the driver is between runs).
+    /// Files, channel writers and the session id all survive, so resuming is
+    /// instant and everything lands in one session.
+    public func pause(at now: TimeInterval = monotonicNow()) async throws {
+        guard manifest != nil else { throw RecorderError.notRecording }
+        guard manifest?.status != .paused else { return }
+
+        // Close the open segment, and the open OBD gap with it — a dropout that
+        // was in progress ends here as far as the record is concerned, rather
+        // than swallowing the whole pause.
+        closeOpenSegment(at: now)
+        if let gapStart = openObdGapStart {
+            manifest?.obdGaps.append(.init(start: gapStart, end: now))
+            openObdGapStart = nil
+        }
+        manifest?.status = .paused
+        await flush()
+        if let paused = manifest { try? store.save(paused) }
+    }
+
+    /// Open a new segment and start writing again.
+    public func resume(at now: TimeInterval = monotonicNow()) async throws {
+        guard manifest != nil else { throw RecorderError.notRecording }
+        guard manifest?.status == .paused else { return }
+
+        var segments = manifest?.segments ?? []
+        segments.append(.init(start: now))
+        manifest?.segments = segments
+        manifest?.status = .recording
+
+        // Nothing was sampled across the pause, so every continuity tracker is
+        // stale. Left alone they would each report the pause as a dropout:
+        // a fake sensor gap, a fake OBD gap, and a slug of phantom distance.
+        lastSampleT = now
+        lastSensorSampleT = [:]
+        lastRaceBoxSampleT = nil
+        openObdGapStart = nil
+        accumulator.noteDiscontinuity()
+        autoStop.noteResumed(at: now)
+
+        if let resumed = manifest { try? store.save(resumed) }
+    }
+
+    /// Close whichever segment is open at `t`. No-op when none is.
+    private func closeOpenSegment(at t: TimeInterval) {
+        guard var segments = manifest?.segments, !segments.isEmpty else { return }
+        if segments[segments.count - 1].end == nil {
+            segments[segments.count - 1].end = max(t, segments[segments.count - 1].start)
+            manifest?.segments = segments
+        }
+    }
+
     /// Ingest one sample from any source.
     public func ingest(channel: ChannelId, value: Double, at t: TimeInterval) async {
-        guard manifest != nil, let writer else { return }
+        guard manifest != nil, manifest?.status != .paused, let writer else { return }
         await writer.append(channel, value: value, at: t)
         accumulator.add(channel: channel, value: value, t: t)
         lastSampleT = max(lastSampleT, t)
@@ -142,8 +197,10 @@ public actor SessionRecorder {
     }
 
     /// R1.6: the app's periodic tick asks whether the forgotten-stop rule fires.
+    /// Paused is deliberate stillness, so the forgotten-stop rule stands down
+    /// until the session is recording again.
     public func shouldAutoStop(now: TimeInterval = monotonicNow()) -> Bool {
-        manifest != nil && autoStop.shouldAutoStop(now: now)
+        manifest != nil && manifest?.status != .paused && autoStop.shouldAutoStop(now: now)
     }
 
     /// Flush all channel buffers at an app lifecycle boundary without ending
@@ -156,9 +213,15 @@ public actor SessionRecorder {
     /// Stop and finalize (R1.3). Saving is instant — data was never buffered-only.
     @discardableResult
     public func stop(at now: TimeInterval = monotonicNow()) async throws -> SessionManifest {
-        guard var finalManifest = manifest, let writer else { throw RecorderError.notRecording }
+        guard manifest != nil, let writer else { throw RecorderError.notRecording }
         flushTask?.cancel()
         flushTask = nil
+
+        // Close on the same instant the highlights use, so the summed segments
+        // and the finalized duration agree. Stopping while paused finds the
+        // last segment already closed and leaves it alone.
+        closeOpenSegment(at: max(lastSampleT, manifest?.startUptime ?? now))
+        guard var finalManifest = manifest else { throw RecorderError.notRecording }
 
         if let gapStart = openObdGapStart { // session ends mid-dropout
             finalManifest.obdGaps.append(.init(start: gapStart, end: now))
@@ -182,7 +245,11 @@ public actor SessionRecorder {
         }
         finalManifest.channels = summaries
         let end = max(lastSampleT, finalManifest.startUptime)
-        finalManifest.highlights = accumulator.finalize(startUptime: finalManifest.startUptime, endUptime: end)
+        // nil for a manifest that predates segments (crash recovery rebuilds one
+        // without them) — finalize then falls back to the wall-clock span.
+        let recorded = finalManifest.segments.map { _ in finalManifest.recordedSeconds() }
+        finalManifest.highlights = accumulator.finalize(
+            startUptime: finalManifest.startUptime, endUptime: end, recordedSeconds: recorded)
         finalManifest.endedAtUTC = finalManifest.utcDate(forUptime: end)
         finalManifest.status = .complete
         let duration = finalManifest.highlights?.durationSeconds ?? max(0, end - finalManifest.startUptime)

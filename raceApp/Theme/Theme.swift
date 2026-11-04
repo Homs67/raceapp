@@ -23,6 +23,8 @@ extension Color {
     static let textPrimary = Color.white
     static let accent = Color(hex: 0xDF5313)     // primary accent (gear, throttle, START, active)
     static let recordRed = Color(hex: 0xFF3B30)  // recording, redline, destructive
+    static let linkGreen = Color(hex: 0x30D158)  // a device link that is up
+
     static let cardGray = Color(hex: 0x1F1F1F)   // card fill
 
     // Backward-compatible aliases (other tabs still reference these; migrate later)
@@ -41,6 +43,10 @@ extension Color {
     static let toolbarRed = Color(hex: 0xD93420)     // STOP button, elapsed time, slower delta
     static let deltaGreen = Color(hex: 0x4D9E63)     // faster-than-best delta
     static let mapOutline = Color(hex: 0x3A3A3A)     // lap-widget track outline
+
+    // Collapsed recorder (Figma board 06)
+    static let barGlass = Color(hex: 0x2C2C2E).opacity(0.72)  // session bar tint, over a material
+    static let barStopGrey = Color(hex: 0x4A4A4E)             // stop, kept off red away from the dashboard
 }
 
 extension Font {
@@ -50,8 +56,8 @@ extension Font {
         .system(size: size, weight: weight).width(.compressed).monospacedDigit()
     }
 
-    /// 9–11pt uppercase micro-labels.
-    static func microLabel(_ size: CGFloat = 10) -> Font {
+    /// Uppercase micro-labels; 12 pt is the smallest type in the app.
+    static func microLabel(_ size: CGFloat = 12) -> Font {
         .system(size: size, weight: .medium)
     }
 
@@ -156,4 +162,44 @@ struct UnitsFormatter {
 
     var distanceUnit: String { metric ? "km" : "mi" }
     func distance(fromMeters m: Double) -> Double { metric ? m / 1000 : m / 1609.344 }
+}
+
+/// Delete / remove in a menu, with the icon red like the title. Menus draw
+/// symbols in the app's orange tint unless the image carries its own colour.
+struct DestructiveLabel: View {
+    let title: String
+    var systemImage = "trash"
+
+    init(_ title: String, systemImage: String = "trash") {
+        self.title = title
+        self.systemImage = systemImage
+    }
+
+    var body: some View {
+        Label {
+            Text(title)
+        } icon: {
+            Image(uiImage: UIImage(systemName: systemImage)?
+                .withTintColor(.systemRed, renderingMode: .alwaysOriginal) ?? UIImage())
+        }
+    }
+}
+
+/// The trash button in a selection toolbar: red, dimmed while nothing is selected.
+struct DestructiveToolbarIcon: View {
+    var enabled: Bool
+    var body: some View {
+        Image(systemName: "trash")
+            .foregroundStyle(Color.recordRed.opacity(enabled ? 1 : 0.35))
+    }
+}
+
+extension UIColor {
+    /// 0xRRGGBB.
+    var hexValue: UInt32 {
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        getRed(&r, green: &g, blue: &b, alpha: &a)
+        func c(_ v: CGFloat) -> UInt32 { UInt32(max(0, min(255, (v * 255).rounded()))) }
+        return c(r) << 16 | c(g) << 8 | c(b)
+    }
 }

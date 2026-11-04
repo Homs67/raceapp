@@ -5,3 +5,7 @@ DerivedData/
 *.xcuserstate
 .swiftpm/
 .build/
+
+# Internal demo deck (local only)
+presentation/
+presentation.zip

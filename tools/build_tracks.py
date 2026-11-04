@@ -11,7 +11,7 @@ Pipeline (RaceBox-style track DB, reproducibly):
   6. Emit raceApp/Tracks/<id>.json (Track schema v1).
 
 Geometry © OpenStreetMap contributors, ODbL (https://openstreetmap.org/copyright).
-Run:  python3 tools/build_tracks.py         (from repo root)
+Run:  python3 tools/build_tracks.py [track-id ...]   (from repo root; no ids = all tracks)
 Add a track: extend the build() calls in main() and re-run.
 """
 import json, math, os, subprocess, sys
@@ -83,6 +83,11 @@ def gate(pts, i, half=12.0):
     brg = bearing(pts[i], pts[(i+1) % len(pts)])
     return {"a": list(offset(pts[i], brg+90, half)), "b": list(offset(pts[i], brg-90, half)), "approximate": True}
 
+def signed_area(pts):
+    """Shoelace area in local metres: > 0 means the points run counter-clockwise."""
+    lat0 = sum(p[0] for p in pts)/len(pts); xy = to_xy(pts, lat0); n = len(xy)
+    return sum(xy[i][0]*xy[(i+1) % n][1]-xy[(i+1) % n][0]*xy[i][1] for i in range(n))/2
+
 def nidx(pts, c): return min(range(len(pts)), key=lambda i: hav(pts[i], c))
 def rot(p, i): return p[i:]+p[:i]
 def walkback(pts, i, dist):
@@ -107,6 +112,23 @@ def overpass(bbox):
             continue
     raise SystemExit(f"All Overpass mirrors failed. Last response: {last!r}")
 
+def osm_way(way_id):
+    """One way with node coordinates from the main OSM API, shaped like an Overpass element."""
+    url = f"https://api.openstreetmap.org/api/0.6/way/{way_id}/full.json"
+    r = subprocess.run(["curl", "-s", "--max-time", "60", "-A", "raceApp-build-tracks", url], capture_output=True, text=True)
+    els = json.loads(r.stdout)["elements"]
+    nodes = {e["id"]: e for e in els if e["type"] == "node"}
+    way = next(e for e in els if e["type"] == "way")
+    return {"id": way_id, "geometry": [{"lat": nodes[n]["lat"], "lon": nodes[n]["lon"]} for n in way["nodes"]]}
+
+def fetch(bbox, way_ids):
+    """Overpass for the area; if every mirror is down, the main OSM API for just the ways we use."""
+    try:
+        return overpass(bbox)
+    except SystemExit as e:
+        print(f"  {e}\n  Falling back to the OSM API for ways {way_ids}")
+        return {i: osm_way(i) for i in way_ids}
+
 def geom(e): return [(p["lat"], p["lon"]) for p in e["geometry"]]
 
 def stitch(elems, order):
@@ -122,7 +144,11 @@ def stitch(elems, order):
 CANON = {"Andretti Hairpin": "T2", "The Corkscrew": "T8–8A", "Rainey Curve": "T9"}
 
 def build(spec):
-    rp = resample(spec["raw"], 4.0)
+    raw = spec["raw"][::-1] if spec.get("reverse") else spec["raw"]
+    # Resample around the whole loop, including the closing segment back to the first point:
+    # OSM closed ways can have one long straight between their last and first nodes.
+    rp = resample(raw+[raw[0]], 4.0)
+    if hav(rp[-1], rp[0]) < 2.0: rp.pop()
     rp = rot(rp, nidx(rp, spec["sf"]))
     L = plen(rp+[rp[0]])
     corners = []
@@ -136,7 +162,8 @@ def build(spec):
         corners.append(c)
     track = {
         "schemaVersion": 1, "id": spec["id"], "name": spec["name"], "location": spec["location"],
-        "country": "USA", "configuration": spec["config"], "direction": "clockwise",
+        "country": "USA", "configuration": spec["config"],
+        "direction": "counterclockwise" if signed_area(rp) > 0 else "clockwise",
         "source": "OpenStreetMap (ODbL); corners auto-derived from centerline curvature, key names curated",
         "lengthMeters": round(L, 1), "lengthMiles": round(L/1609.34, 3), "turnCount": len(corners),
         "startFinish": gate(rp, 0), "corners": corners,
@@ -148,37 +175,43 @@ def build(spec):
     path = os.path.join(OUT_DIR, f"{spec['id']}.json")
     json.dump(track, open(path, "w"), indent=2)
     flag = "" if abs(len(corners)-spec["expected"]) <= 3 else "  <-- COUNT OFF, retune"
-    print(f"  {spec['name']}: {track['lengthMiles']}mi, {len(corners)} corners (official ~{spec['expected']}){flag}")
+    print(f"  {spec['name']}: {track['lengthMiles']}mi {track['direction']}, {len(corners)} corners (official ~{spec['expected']}){flag}")
 
 def main():
-    print("Fetching OSM geometry…")
-    willow = overpass("34.83,-118.32,34.91,-118.22")
-    laguna = overpass("36.56,-121.77,36.60,-121.73")
-
-    big = geom(willow[10440074])[:-1]
-    sow = geom(willow[10431309])[:-1]
-    lag = stitch(laguna, [1315957506, 1315957503, 1315957504, 1315957505,
-                          10464852, 1315957508, 1315957507, 1315957502])
-    def mid(oid): g = geom(laguna[oid]); return g[len(g)//2]
-    lag_names = {"Andretti Hairpin": mid(1315957508), "The Corkscrew": mid(1315957503),
-                 "Rainey Curve": mid(1315957505)}
-    # Laguna S/F: front straight, ~180 m before the Andretti Hairpin (T2)
-    lag_rs = resample(lag, 4.0)
-    sfL = lag_rs[walkback(lag_rs, nidx(lag_rs, lag_names["Andretti Hairpin"]), 180)]
-
-    print("Building tracks →", os.path.normpath(OUT_DIR))
-    build({"id": "laguna-seca", "name": "WeatherTech Raceway Laguna Seca", "location": "Monterey, CA",
-           "config": "Grand Prix (11-turn)", "raw": lag, "sf": sfL, "expected": 11,
-           "thresh": 0.008, "w": 3, "names": lag_names,
-           "notes": "Corkscrew=T8/8A, Rainey=T9, Andretti Hairpin=T2. Start/finish approximate; verify against a recorded lap."})
-    build({"id": "big-willow", "name": "Willow Springs International Raceway", "location": "Rosamond, CA",
-           "config": "Big Willow (9-turn)", "raw": big, "sf": (34.86962, -118.26026), "expected": 9,
-           "thresh": 0.009, "w": 4,
-           "notes": "Start/finish anchored to OSM way origin on the front straight; verify on-track."})
-    build({"id": "streets-of-willow", "name": "Streets of Willow Springs", "location": "Rosamond, CA",
-           "config": "OSM primary loop (~1.0 mi)", "raw": sow, "sf": (34.87481, -118.25888), "expected": 8,
-           "thresh": 0.011, "w": 4,
-           "notes": "Streets runs MANY configs (full course ~1.6mi/14T). This is the primary OSM closed loop only; capture the exact club config from a recorded lap."})
+    only = set(sys.argv[1:])
+    want = lambda tid: not only or tid in only
+    BIG, SOW = 10440074, 10431309
+    LAG = [1315957506, 1315957503, 1315957504, 1315957505, 10464852, 1315957508, 1315957507, 1315957502]
+    print("Fetching OSM geometry, building tracks →", os.path.normpath(OUT_DIR))
+    if want("big-willow") or want("streets-of-willow"):
+        willow = fetch("34.83,-118.32,34.91,-118.22", [i for i, t in ((BIG, "big-willow"), (SOW, "streets-of-willow")) if want(t)])
+    if want("laguna-seca"):
+        laguna = fetch("36.56,-121.77,36.60,-121.73", LAG)
+        lag = stitch(laguna, LAG)
+        def mid(oid): g = geom(laguna[oid]); return g[len(g)//2]
+        lag_names = {"Andretti Hairpin": mid(1315957508), "The Corkscrew": mid(1315957503),
+                     "Rainey Curve": mid(1315957505)}
+        # Laguna S/F: front straight, ~180 m before the Andretti Hairpin (T2)
+        lag_rs = resample(lag, 4.0)
+        sfL = lag_rs[walkback(lag_rs, nidx(lag_rs, lag_names["Andretti Hairpin"]), 180)]
+        build({"id": "laguna-seca", "name": "WeatherTech Raceway Laguna Seca", "location": "Monterey, CA",
+               "config": "Grand Prix (11-turn)", "raw": lag, "sf": sfL, "expected": 11,
+               "thresh": 0.008, "w": 3, "names": lag_names,
+               "notes": "Corkscrew=T8/8A, Rainey=T9, Andretti Hairpin=T2. Start/finish approximate; verify against a recorded lap."})
+    # OSM stores Big Willow counter-clockwise; it's raced clockwise, so reverse it.
+    # Corners are numbered in driving order from S/F, so T1–T9 then match the official turns.
+    if want("big-willow"):
+        big = geom(willow[BIG])[:-1]
+        build({"id": "big-willow", "name": "Willow Springs International Raceway", "location": "Rosamond, CA",
+               "config": "Big Willow (9-turn)", "raw": big, "reverse": True, "sf": (34.86962, -118.26026), "expected": 9,
+               "thresh": 0.009, "w": 4,
+               "notes": "Raced clockwise (OSM way reversed). Start/finish anchored to OSM way origin on the front straight; verify on-track."})
+    if want("streets-of-willow"):
+        sow = geom(willow[SOW])[:-1]
+        build({"id": "streets-of-willow", "name": "Streets of Willow Springs", "location": "Rosamond, CA",
+               "config": "OSM primary loop (~1.0 mi)", "raw": sow, "sf": (34.87481, -118.25888), "expected": 8,
+               "thresh": 0.011, "w": 4,
+               "notes": "Streets runs MANY configs (full course ~1.6mi/14T). This is the primary OSM closed loop only; capture the exact club config from a recorded lap."})
     print("Done.")
 
 if __name__ == "__main__":

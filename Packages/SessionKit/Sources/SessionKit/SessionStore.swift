@@ -79,12 +79,16 @@ public struct SessionStore: Sendable {
 
     // MARK: - Crash recovery (R1.5)
 
-    /// Find sessions still marked `.recording` (app died mid-session), finalize
-    /// them from what reached disk, and mark them `.recovered`. Run at launch.
+    /// Find sessions still open (app died mid-session), finalize them from what
+    /// reached disk, and mark them `.recovered`. Run at launch.
+    ///
+    /// Paused counts as open: a session the driver paused in the paddock before
+    /// the app was killed is exactly as interrupted as a recording one, and
+    /// nothing else would ever close it.
     @discardableResult
     public func recoverInterruptedSessions() -> [SessionManifest] {
         var recovered: [SessionManifest] = []
-        for var manifest in list() where manifest.status == .recording {
+        for var manifest in list() where manifest.isLive {
             let dir = directory(for: manifest.id)
             var lastSampleT = manifest.startUptime
             var summaries: [SessionManifest.ChannelSummary] = []

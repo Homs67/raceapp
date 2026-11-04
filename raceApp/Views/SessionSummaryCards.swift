@@ -24,27 +24,13 @@ struct SessionHeroMap: View {
     private var units: UnitsFormatter { UnitsFormatter(metric: metric) }
 
     var body: some View {
-        ZStack {
-            LinearGradient(colors: [Color(white: 0.09), Color(white: 0.045)], startPoint: .top, endPoint: .bottom)
-            grid
+        MapCard {
             Canvas { ctx, size in draw(ctx, size) }
                 // Clear of the chip on top and the legend below.
                 .padding(.top, 50).padding(.bottom, 34).padding(.horizontal, 20)
             overlays
         }
         .frame(height: 236)
-        .clipShape(RoundedRectangle(cornerRadius: 22))
-        .overlay(RoundedRectangle(cornerRadius: 22).stroke(Color.cardBorder, lineWidth: 1))
-        .contentShape(RoundedRectangle(cornerRadius: 22))
-    }
-
-    private var grid: some View {
-        Canvas { ctx, size in
-            var p = Path()
-            stride(from: 0, through: size.width, by: 24).forEach { p.move(to: .init(x: $0, y: 0)); p.addLine(to: .init(x: $0, y: size.height)) }
-            stride(from: 0, through: size.height, by: 24).forEach { p.move(to: .init(x: 0, y: $0)); p.addLine(to: .init(x: size.width, y: $0)) }
-            ctx.stroke(p, with: .color(.white.opacity(0.025)), lineWidth: 1)
-        }
     }
 
     private var overlays: some View {
@@ -61,10 +47,7 @@ struct SessionHeroMap: View {
                     conditionsChip(symbol: "thermometer.medium", text: "Air \(Int(units.temp(fromC: c).rounded()))° (car)")
                 }
                 Spacer()
-                Image(systemName: "arrow.up.left.and.arrow.down.right")
-                    .font(.system(size: 13, weight: .semibold)).foregroundStyle(.white)
-                    .frame(width: 32, height: 32)
-                    .background(.ultraThinMaterial, in: Circle())
+                MapCardExpandIcon()
             }
             Spacer()
             HStack(spacing: 6) {
@@ -120,6 +103,38 @@ struct SessionHeroMap: View {
             let u = v.isFinite ? (v - sr.lowerBound) / (sr.upperBound - sr.lowerBound) : 0
             ctx.stroke(p, with: .color(SpeedColor.color(u)), style: StrokeStyle(lineWidth: 3.8, lineCap: .round))
         }
+    }
+}
+
+/// The drawn-map card shared by the session preview and the track page:
+/// a dark gradient with a faint 24 pt grid, rounded and outlined.
+struct MapCard<Content: View>: View {
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        ZStack {
+            LinearGradient(colors: [Color(white: 0.09), Color(white: 0.045)], startPoint: .top, endPoint: .bottom)
+            Canvas { ctx, size in
+                var p = Path()
+                stride(from: 0, through: size.width, by: 24).forEach { p.move(to: .init(x: $0, y: 0)); p.addLine(to: .init(x: $0, y: size.height)) }
+                stride(from: 0, through: size.height, by: 24).forEach { p.move(to: .init(x: 0, y: $0)); p.addLine(to: .init(x: size.width, y: $0)) }
+                ctx.stroke(p, with: .color(.white.opacity(0.025)), lineWidth: 1)
+            }
+            content
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 22))
+        .overlay(RoundedRectangle(cornerRadius: 22).stroke(Color.cardBorder, lineWidth: 1))
+        .contentShape(RoundedRectangle(cornerRadius: 22))
+    }
+}
+
+/// The round "open full screen" mark in a map card's corner.
+struct MapCardExpandIcon: View {
+    var body: some View {
+        Image(systemName: "arrow.up.left.and.arrow.down.right")
+            .font(.system(size: 13, weight: .semibold)).foregroundStyle(.white)
+            .frame(width: 32, height: 32)
+            .background(.ultraThinMaterial, in: Circle())
     }
 }
 

@@ -1,0 +1,94 @@
+<!doctype html><html><head><meta charset="utf-8"><title>RaceBox render</title>
+<style>html,body{margin:0;background:#000;overflow:hidden}canvas{display:block}</style>
+<script src="../../presentation/src/three.min.js"></script><script src="racebox-model.js"></script></head><body>
+<script>
+// Renders the printed RaceBox case (no dash mount) for the device page mockups.
+// ?yaw=-0.6&pitch=0.42&explode=0..1&bg=000000
+const q = new URLSearchParams(location.search);
+const yaw = +(q.get('yaw') ?? -0.6), pitch = +(q.get('pitch') ?? 0.42), explode = +(q.get('explode') ?? 0);
+const W = +(q.get('w') ?? 800), H = +(q.get('h') ?? 800);
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(1); renderer.setSize(W, H, false);
+renderer.domElement.style.width = '100vmin'; renderer.domElement.style.height = (100 * H / W) + 'vmin';
+renderer.outputEncoding = THREE.sRGBEncoding; renderer.toneMapping = THREE.ACESFilmicToneMapping;
+if (q.get('bg')) renderer.setClearColor(new THREE.Color('#' + q.get('bg'))); else renderer.setClearColor(0x000000, 0);
+document.body.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+const env = new THREE.Scene();
+env.add(new THREE.Mesh(new THREE.BoxGeometry(10, 10, 10), new THREE.MeshBasicMaterial({ color: 0x2a2a2e, side: THREE.BackSide })));
+const panel = (w, h, pos, rot, i) => { const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ color: new THREE.Color(i, i, i), side: THREE.DoubleSide })); m.position.set(...pos); m.rotation.set(...rot); env.add(m); };
+panel(6, 3, [0, 4.9, 0], [Math.PI / 2, 0, 0], 1.4);
+panel(3, 4, [-4.9, 1, 1], [0, Math.PI / 2, 0], 3);
+panel(2, 4, [4.9, 0.5, -2], [0, -Math.PI / 2, 0], 2.2);
+panel(5, 1.5, [0, 1.5, -4.9], [0, 0, 0], 1.6);
+scene.environment = new THREE.PMREMGenerator(renderer).fromScene(env, 0.035).texture;
+const DARK = q.get('dark') === '1';
+const SHELL = q.get('shell') === '1';
+const L = DARK ? 0.42 : 1;                       // dark trim: same setup, less light on the case
+scene.add(new THREE.HemisphereLight(0xffffff, 0x222226, 0.35 * L));
+const key = new THREE.DirectionalLight(0xffffff, 1.0 * L); key.position.set(-120, 260, 160); scene.add(key);
+const rim = new THREE.DirectionalLight(0xffe2d0, (DARK ? 1.05 : 1.4)); rim.position.set(180, 60, -200); scene.add(rim);
+const rim2 = new THREE.DirectionalLight(0xffffff, (DARK ? 0.42 : 0.6)); rim2.position.set(-200, 40, -120); scene.add(rim2);
+
+const plastic = new THREE.MeshPhysicalMaterial({ color: 0x060607, roughness: 0.78, metalness: 0, clearcoat: 0, envMapIntensity: +(q.get('env') ?? (DARK ? 0.2 : 0.55)) });
+const red = new THREE.MeshPhysicalMaterial({ color: 0xe0150c, roughness: 0.3, emissive: 0x500000 });
+const steel = new THREE.MeshStandardMaterial({ color: 0xb4b7bc, roughness: 0.28, metalness: 1 });
+const MATS = {
+  RaceBox_Micro_PCB: new THREE.MeshStandardMaterial({ color: 0x9c1018, roughness: 0.35 }),
+  RaceBox_GNSS_antenna: new THREE.MeshStandardMaterial({ color: 0xb08a4a, roughness: 0.35, metalness: 0.5 }),
+  battery_PID258: new THREE.MeshStandardMaterial({ color: 0x8e8f94, roughness: 0.42, metalness: 0.55 }),
+  bq25185_PCB: new THREE.MeshStandardMaterial({ color: 0x141416, roughness: 0.32 }),
+  bq25185_USB_C: steel,
+  switch_PCB: new THREE.MeshStandardMaterial({ color: 0x1f4fae, roughness: 0.35 }),
+  physical_switch_slider: steel,
+};
+const DZ = { buttons: 128, upper: 100, switch: 72, racebox: 50, charger: 30, battery: 14, lower: -26 };
+function groupOf(name, c) {
+  if (/LOWER_BODY/.test(name)) return 'lower';
+  if (/UPPER_BODY/.test(name)) return 'upper';
+  if (/^03_|^03b_|RED_CENTER|^06_/.test(name)) return 'buttons';
+  if (/^battery/.test(name)) return 'battery';
+  if (/^bq25185/.test(name)) return 'charger';
+  if (/^RaceBox/.test(name)) return 'racebox';
+  if (/SWITCH|^switch_|^physical_switch/.test(name)) return 'switch';
+  if (/washer_[12]$/.test(name)) return 'racebox';
+  if (/washer/.test(name)) return 'charger';
+  if (name === 'screw') { if (Math.abs(c.x) > 20) return 'lower'; if (c.z > 18) return 'switch'; if (c.z > 10.5) return 'racebox'; return 'charger'; }
+  return 'lower';
+}
+const bin = Uint8Array.from(atob(MODEL.bin), c => c.charCodeAt(0)).buffer;
+const root = new THREE.Group(); root.rotation.x = -Math.PI / 2; scene.add(root);
+const box = new THREE.Box3(), frame = [];
+MODEL.parts.forEach(p => {
+  if (/DASHBOARD_BASE|SLED/.test(p.name)) return;
+  // shell=1: case only. From straight above the vent holes would otherwise
+  // show the PCB, antenna and battery through them.
+  if (SHELL && /^(RaceBox_|battery|bq25185|switch_PCB|switch_JST|physical_switch_body|countersunk|screw$)/.test(p.name)) return;
+  const pos = new Int16Array(bin, p.pOff, p.nv * 3), idx = new Uint16Array(bin, p.iOff, p.ni);
+  const f = new Float32Array(pos.length); for (let i = 0; i < pos.length; i++) f[i] = pos[i] * MODEL.q;
+  const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.BufferAttribute(f, 3)); geo.setIndex(new THREE.BufferAttribute(idx, 1));
+  geo.computeVertexNormals(); geo.computeBoundingBox();
+  const c = new THREE.Vector3(); geo.boundingBox.getCenter(c);
+  let mat;
+  if (/RED_CENTER/.test(p.name)) mat = red;
+  else if (DARK && /BODY/.test(p.name)) mat = plastic;
+  else if (p.name === 'screw') mat = steel;
+  else if (/^(0\d|03b|countersunk)/.test(p.name)) mat = plastic;
+  else if (MATS[p.name]) mat = MATS[p.name];
+  else { const [r, g, b] = p.color || [.5, .5, .5]; mat = new THREE.MeshStandardMaterial({ color: new THREE.Color(r, g, b), roughness: 0.5 }); }
+  const m = new THREE.Mesh(geo, mat);
+  m.position.z = (DZ[groupOf(p.name, c)] || 0) * explode;
+  root.add(m);
+  if (/BODY/.test(p.name) || explode > 0) frame.push(m);
+});
+root.updateMatrixWorld(true); frame.forEach(m => box.expandByObject(m));
+const center = box.getCenter(new THREE.Vector3()), size = box.getSize(new THREE.Vector3());
+const r = size.length() * 0.5;
+const cam = new THREE.PerspectiveCamera(26, W / H, 1, 5000);
+const dist = r / Math.sin(THREE.MathUtils.degToRad(13)) * (+(q.get('fit') ?? 1.05));
+cam.position.set(center.x + dist * Math.cos(pitch) * Math.sin(yaw), center.y + dist * Math.sin(pitch), center.z + dist * Math.cos(pitch) * Math.cos(yaw));
+cam.lookAt(center);
+renderer.setRenderTarget(null); renderer.setViewport(0, 0, W, H);
+renderer.render(scene, cam);
+if (q.get('save')) renderer.domElement.toBlob(b => fetch('/save/' + q.get('save'), { method: 'POST', body: b }).then(() => document.title = 'saved'));
+</script></body></html>

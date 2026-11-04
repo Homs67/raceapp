@@ -87,6 +87,25 @@ final class SessionStoreTests: XCTestCase {
         XCTAssertTrue(store.recoverInterruptedSessions().isEmpty)
     }
 
+    /// A session paused in the paddock when the app was killed is just as
+    /// interrupted as a recording one — nothing else will ever close it.
+    func testRecoveryClaimsPausedSessionsToo() async throws {
+        var manifest = makeManifest()
+        manifest.status = .paused
+        manifest.segments = [.init(start: manifest.startUptime, end: manifest.startUptime + 30)]
+        try store.create(manifest)
+        let writer = try SessionWriter(sessionDirectory: store.directory(for: manifest.id))
+        for i in 0..<30 {
+            await writer.append(.gpsSpeed, value: 20, at: manifest.startUptime + Double(i))
+        }
+        await writer.flushAll()
+
+        let recovered = store.recoverInterruptedSessions()
+        XCTAssertEqual(recovered.count, 1)
+        XCTAssertEqual(recovered[0].status, .recovered)
+        XCTAssertTrue(store.recoverInterruptedSessions().isEmpty)
+    }
+
     func testStorageBytes() async throws {
         let manifest = makeManifest()
         try store.create(manifest)

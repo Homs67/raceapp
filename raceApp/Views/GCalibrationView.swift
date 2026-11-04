@@ -233,7 +233,7 @@ struct GCalibrationView: View {
                                          @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("STEP \(number) OF \(total)")
-                .font(.system(size: 11, weight: .bold))
+                .font(.system(size: 12, weight: .bold))
                 .kerning(1.2)
                 .foregroundStyle(Color.accent)
             Text(title)
@@ -290,7 +290,7 @@ struct GCalibrationView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title).font(.system(size: 14)).foregroundStyle(Color.textPrimary)
                 if !met {
-                    Text(hint).font(.system(size: 11)).foregroundStyle(Color.muted)
+                    Text(hint).font(.system(size: 12)).foregroundStyle(Color.muted)
                 }
             }
         }

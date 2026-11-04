@@ -4,8 +4,74 @@
     {
       "name": "architecture-docs",
       "runtimeExecutable": "python3",
-      "runtimeArgs": ["-m", "http.server", "8765", "--directory", "docs/architecture"],
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8765",
+        "--directory",
+        "docs/architecture"
+      ],
       "port": 8765
+    },
+    {
+      "name": "drift-proto",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8766",
+        "--directory",
+        "/private/tmp/claude-501/-Users-alex-Git-raceApp/060dba10-7446-42cc-998e-6b3184ee4781/scratchpad/drift-proto"
+      ],
+      "port": 8766
+    },
+    {
+      "name": "presentation",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8767",
+        "--directory",
+        "presentation"
+      ],
+      "port": 8767
+    },
+    {
+      "name": "design-previews",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8768",
+        "--directory",
+        "design/map-previews"
+      ],
+      "port": 8768
+    },
+    {
+      "name": "tracks-grid",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8769",
+        "--directory",
+        "design/tracks-grid"
+      ],
+      "port": 8769
+    },
+    {
+      "name": "profile-preview",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8770",
+        "--directory",
+        "design/profile"
+      ],
+      "port": 8770
     }
   ]
 }

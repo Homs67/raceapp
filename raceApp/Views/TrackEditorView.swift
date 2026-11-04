@@ -2,16 +2,18 @@
 //  TrackEditorView.swift
 //  raceApp
 //
-//  Set a track's lines, two ways on one screen:
+//  Set a track's lines on a full-screen map, one line at a time:
 //
-//  - on site: walk to the line, point the phone the way cars will drive,
-//    tap Mark here. The position is the RaceBox's when it is with you and
-//    has a fix (±0.3 m), otherwise the phone's (±3–5 m), averaged over the
-//    last few seconds; the chip says which and how good.
-//  - on the map: tap the satellite image where the line is.
+//  - placing: a crosshair sits at the map center. "Place here" drops the
+//    line there; "Mark where I stand" uses the RaceBox's position when it
+//    is with you and has a fix (±0.3 m), otherwise the phone's (±3–5 m),
+//    averaged over the last few seconds.
+//  - editing: the placed line glows and a card offers Rotate, Direction
+//    and Width. Cancel removes the line and goes back to placing.
 //
-//  Either way the line is then fine-tuned: rotate, flip, width. Saving
-//  re-times every session on this track.
+//  A point-to-point course does the start, then Next, then the finish.
+//  Saving re-times every session on this track. Design: Figma Track App,
+//  "New track flow — iteration 2".
 //
 
 import SwiftUI
@@ -24,170 +26,258 @@ struct TrackEditorView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     @State private var draft: Track
-    @State private var editing: Which = .start
+    @State private var phase: Phase
+    @State private var tool: GateTool = .rotate
     @State private var camera: MapCameraPosition
+    @State private var center: CLLocationCoordinate2D?
+    @State private var satellite = true
+    /// Lines flipped with the Direction tool since they were placed (point-to-point).
+    @State private var reversed: Set<Which> = []
     @State private var live = LivePosition()
     @State private var compass = Compass()
+    /// The new-track flow takes over after saving; on its own the editor pops.
+    private let onSaved: ((Track) -> Void)?
 
     enum Which: Hashable { case start, finish }
 
-    init(track: Track) {
-        _draft = State(initialValue: track)
-        let anchor = track.startGate.map { CLLocationCoordinate2D(latitude: $0.lat, longitude: $0.lon) }
-            ?? track.anchor
-        _camera = State(initialValue: anchor.map {
-            .region(MKCoordinateRegion(center: $0, latitudinalMeters: 160, longitudinalMeters: 160))
-        } ?? .userLocation(fallback: .automatic))
+    enum Phase: Equatable {
+        case placing(Which)
+        case editing(Which)
+
+        var which: Which {
+            switch self {
+            case .placing(let w), .editing(let w): return w
+            }
+        }
     }
 
-    private var isAutocross: Bool { draft.trackKind == .autocross }
-    private var gate: TimingGate? { editing == .start ? draft.startGate : draft.finishGate }
-    private var defaultWidth: Double { isAutocross ? 15 : 25 }
+    /// - Parameters:
+    ///   - region: where to open the map when the track has no lines yet
+    ///     (the location step of the new-track flow).
+    init(track: Track, region: MKCoordinateRegion? = nil, onSaved: ((Track) -> Void)? = nil) {
+        _draft = State(initialValue: track)
+        _phase = State(initialValue: track.startGate == nil ? .placing(.start) : .editing(.start))
+        self.onSaved = onSaved
+        let anchor = track.startGate.map { CLLocationCoordinate2D(latitude: $0.lat, longitude: $0.lon) }
+            ?? track.anchor
+        if let anchor {
+            _camera = State(initialValue: .region(MKCoordinateRegion(center: anchor, latitudinalMeters: 160, longitudinalMeters: 160)))
+        } else if let region {
+            _camera = State(initialValue: .region(region))
+        } else {
+            _camera = State(initialValue: .userLocation(fallback: .automatic))
+        }
+    }
+
+    private var isPointToPoint: Bool { draft.trackKind == .autocross }
+    private var gate: TimingGate? { gate(phase.which) }
+    private var defaultWidth: Double { isPointToPoint ? 15 : 25 }
+
+    private func gate(_ which: Which) -> TimingGate? {
+        which == .start ? draft.startGate : draft.finishGate
+    }
 
     var body: some View {
-        VStack(spacing: 0) {
-            MapReader { proxy in
-                Map(position: $camera) {
-                    if draft.centerline.count > 2 {
-                        MapPolyline(coordinates: draft.centerlineCoordinates).stroke(.white.opacity(0.35), lineWidth: 2)
-                    }
-                    if let g = draft.startGate {
-                        GateMapContent(gate: g, color: .green, label: isAutocross ? "Start" : "Start/finish")
-                    }
-                    if let g = draft.finishGate, isAutocross {
-                        GateMapContent(gate: g, color: .white, label: "Finish")
-                    }
-                    if let here = live.coordinate {
-                        Annotation("", coordinate: here) {
-                            Circle().fill(Color.accent).frame(width: 12, height: 12)
-                                .overlay(Circle().stroke(.white, lineWidth: 2))
-                        }
-                    }
-                }
-                .mapStyle(.hybrid(elevation: .flat, pointsOfInterest: .excludingAll))
-                .onTapGesture { point in
-                    if let c = proxy.convert(point, from: .local) {
-                        place(at: c, heading: nil)
-                    }
-                }
+        ZStack {
+            map
+            // Centred on the full-bleed map, not the safe area: "Place here"
+            // drops the line at the map's own center.
+            if case .placing = phase {
+                MapCrosshair()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .ignoresSafeArea()
             }
-            controls
+            VStack(spacing: 0) {
+                topBar
+                Spacer()
+                card
+                    .padding(.bottom, 8)
+            }
         }
         .background(Color.bgScreen)
+        .toolbar(.hidden, for: .navigationBar)
         .toolbar(.hidden, for: .tabBar)
-        .navigationTitle(draft.name)
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .confirmationAction) {
-                Button("Save") { save() }.fontWeight(.semibold)
-            }
-        }
+        .animation(.snappy(duration: 0.25), value: phase)
         .onAppear { live.start(model: model); compass.start() }
         .onDisappear { live.stop(); compass.stop() }
     }
 
-    // MARK: Controls
+    // MARK: Map
 
-    private var controls: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            if isAutocross {
-                Picker("Line", selection: $editing) {
-                    Text("Start").tag(Which.start)
-                    Text("Finish").tag(Which.finish)
-                }
-                .pickerStyle(.segmented)
+    private var map: some View {
+        Map(position: $camera, interactionModes: [.pan, .zoom]) {
+            if draft.centerline.count > 2 {
+                MapPolyline(coordinates: draft.centerlineCoordinates).stroke(.white.opacity(0.35), lineWidth: 2)
             }
-
-            HStack(spacing: 10) {
-                sourceChip
-                Spacer()
-                Button {
-                    if let c = live.averaged { place(at: c, heading: compass.heading) }
-                } label: {
-                    Label("Mark here", systemImage: "mappin.and.ellipse")
-                        .font(.system(size: 15, weight: .semibold))
-                        .padding(.horizontal, 14).padding(.vertical, 9)
-                        .background(Color.accent, in: Capsule())
-                        .foregroundStyle(.black)
-                }
-                .disabled(live.averaged == nil)
+            if let g = draft.startGate {
+                GateMapContent(gate: g, color: .green, label: isPointToPoint ? "Start" : "Start/finish",
+                               selected: phase == .editing(.start), onTap: { select(.start) })
             }
-
-            if let gate {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Text("Direction \(Int(gate.headingDegrees.rounded()))°")
-                            .font(.system(size: 13)).foregroundStyle(Color.muted)
-                        Spacer()
-                        Button { rotate(by: -5) } label: { Image(systemName: "rotate.left") }
-                        Button { rotate(by: 5) } label: { Image(systemName: "rotate.right") }
-                        Button { rotate(by: 180) } label: { Image(systemName: "arrow.up.arrow.down") }
-                        if let h = compass.heading {
-                            Button { setHeading(h) } label: { Image(systemName: "location.north.line") }
-                        }
-                    }
-                    .buttonStyle(.bordered)
-                    Slider(value: Binding(get: { gate.headingDegrees },
-                                          set: { setHeading($0) }), in: 0...359, step: 1)
-                    Stepper("Width \(Int(gate.widthMeters)) m", value: Binding(
-                        get: { gate.widthMeters },
-                        set: { w in update { $0.widthMeters = w } }), in: 4...60, step: 1)
-                        .font(.system(size: 13))
+            if isPointToPoint, let g = draft.finishGate {
+                GateMapContent(gate: g, color: .white, label: "Finish",
+                               selected: phase == .editing(.finish), onTap: { select(.finish) })
+            }
+            if let here = live.coordinate {
+                Annotation("", coordinate: here) {
+                    Circle().fill(Color.accent).frame(width: 12, height: 12)
+                        .overlay(Circle().stroke(.white, lineWidth: 2))
                 }
-            } else {
-                Text(editing == .start
-                     ? "Stand on the start line, point the phone the way cars will go, and tap Mark here. Or tap the map."
-                     : "Walk to the finish line and do the same. Or tap the map.")
-                    .font(.system(size: 13)).foregroundStyle(Color.muted)
             }
         }
-        .padding(16)
-        .background(Color.cardBg)
-        .tint(Color.accent)
+        .mapStyle(satellite ? .imagery(elevation: .flat)
+                  : .standard(elevation: .flat, emphasis: .muted, pointsOfInterest: .excludingAll))
+        .mapControls { }
+        .onMapCameraChange(frequency: .continuous) { ctx in center = ctx.region.center }
+        .ignoresSafeArea()
     }
 
-    private var sourceChip: some View {
-        HStack(spacing: 6) {
-            Image(systemName: live.source == .raceBox ? "antenna.radiowaves.left.and.right" : "iphone")
-            if let acc = live.accuracy {
-                Text("\(live.source == .raceBox ? "RaceBox" : "iPhone") ±\(acc < 1 ? String(format: "%.1f", acc) : String(Int(acc.rounded()))) m")
-            } else {
-                Text("No position")
+    private var topBar: some View {
+        HStack {
+            MapGlassButton(symbol: "chevron.left") { dismiss() }
+                .accessibilityLabel("Back")
+            Spacer()
+            MapTitleCapsule(title: draft.name, subtitle: subtitle)
+            Spacer()
+            Menu {
+                Picker("Map", selection: $satellite) {
+                    Label("Satellite", systemImage: "globe.americas").tag(true)
+                    Label("Standard", systemImage: "map").tag(false)
+                }
+                .pickerStyle(.inline)
+            } label: {
+                MapGlassLabel(symbol: "square.3.layers.3d")
             }
+            .accessibilityLabel("Map style")
         }
-        .font(.system(size: 12, weight: .medium))
-        .foregroundStyle(live.accuracy == nil ? Color.muted : Color.textPrimary)
-        .padding(.horizontal, 10).padding(.vertical, 6)
-        .background(Color.white.opacity(0.08), in: Capsule())
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+    }
+
+    private var subtitle: String {
+        if isPointToPoint {
+            return phase.which == .start ? "Step 1 of 2 · Start" : "Step 2 of 2 · Finish"
+        }
+        return gate == nil ? "Start/finish not set" : "Editing start/finish"
+    }
+
+    // MARK: Cards
+
+    @ViewBuilder private var card: some View {
+        switch phase {
+        case .placing(let which):
+            PlacingCard(title: "Place the \(lineName(which))",
+                        subtitle: "Move the map so the cross sits on the \(which == .finish ? "finish" : isPointToPoint ? "start" : "line"), or stand on it and use your position.",
+                        onBack: which == .finish && draft.startGate != nil ? { select(.start) } : nil,
+                        onPlace: { placeAtCrosshair(which) },
+                        markDetail: markDetail,
+                        markEnabled: live.averaged != nil,
+                        onMark: { markHere(which) })
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+        case .editing(let which):
+            GateToolCard(title: "Edit \(isPointToPoint ? lineName(which) : "start/finish")",
+                         onCancel: { remove(which) },
+                         trailing: trailingAction(which),
+                         tool: $tool) {
+                toolControl(which)
+            }
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+        }
+    }
+
+    private func lineName(_ which: Which) -> String {
+        guard isPointToPoint else { return "start/finish line" }
+        return which == .start ? "start line" : "finish line"
+    }
+
+    private var markDetail: (text: String, symbol: String) {
+        guard let acc = live.accuracy else { return ("Waiting for a position", "location.slash") }
+        let device = live.source == .raceBox ? "RaceBox" : "iPhone"
+        let meters = acc < 1 ? String(format: "%.1f", acc) : String(Int(acc.rounded()))
+        return ("\(device) · ±\(meters) m", live.source == .raceBox ? "antenna.radiowaves.left.and.right" : "iphone")
+    }
+
+    /// Circuit: Save. Point-to-point: Next after the start, Save after the finish.
+    private func trailingAction(_ which: Which) -> (label: String, enabled: Bool, action: () -> Void) {
+        if isPointToPoint && which == .start {
+            return ("Next", true, { select(.finish) })
+        }
+        let complete = draft.startGate != nil && (!isPointToPoint || draft.finishGate != nil)
+        return ("Save", complete, save)
+    }
+
+    @ViewBuilder private func toolControl(_ which: Which) -> some View {
+        switch tool {
+        case .rotate:
+            RotationDial(degrees: Binding(get: { gate?.headingDegrees ?? 0 }, set: { setHeading($0) }))
+        case .direction:
+            DirectionTiles(labels: isPointToPoint ? ("Forward", "Reverse") : ("Clockwise", "Counter-clockwise"),
+                           reversed: isReversed(which)) { setReversed($0, which) }
+        case .width:
+            WidthStepper(meters: Binding(get: { gate?.widthMeters ?? defaultWidth },
+                                         set: { w in update { $0.widthMeters = w } }))
+        }
     }
 
     // MARK: Editing
 
-    private func place(at c: CLLocationCoordinate2D, heading: Double?) {
-        let existing = gate
-        let h = heading ?? existing?.headingDegrees ?? suggestedHeading(from: c)
-        let g = TimingGate(lat: c.latitude, lon: c.longitude, headingDegrees: h,
-                           widthMeters: existing?.widthMeters ?? defaultWidth)
-        if editing == .start { draft.startGate = g } else { draft.finishGate = g }
-        // After placing the start of an autocross course, move on to the finish.
-        if editing == .start, isAutocross, draft.finishGate == nil { editing = .finish }
+    private func select(_ which: Which) {
+        phase = gate(which) == nil ? .placing(which) : .editing(which)
     }
 
-    /// With one line placed, aim a fresh one along the line between them.
-    private func suggestedHeading(from c: CLLocationCoordinate2D) -> Double {
-        if editing == .finish, let s = draft.startGate {
+    private func placeAtCrosshair(_ which: Which) {
+        guard let c = center else { return }
+        place(at: c, heading: nil, which)
+    }
+
+    private func markHere(_ which: Which) {
+        guard let c = live.averaged else { return }
+        place(at: c, heading: compass.heading, which)
+    }
+
+    private func place(at c: CLLocationCoordinate2D, heading: Double?, _ which: Which) {
+        let existing = gate(which)
+        let h = heading ?? existing?.headingDegrees ?? suggestedHeading(from: c, which)
+        let g = TimingGate(lat: c.latitude, lon: c.longitude, headingDegrees: h,
+                           widthMeters: existing?.widthMeters ?? defaultWidth)
+        if which == .start { draft.startGate = g } else { draft.finishGate = g }
+        reversed.remove(which)
+        tool = .rotate
+        phase = .editing(which)
+    }
+
+    /// A finish aims along the line from the start. Anything else points up
+    /// the screen (the map doesn't rotate here), so the line lies flat.
+    private func suggestedHeading(from c: CLLocationCoordinate2D, _ which: Which) -> Double {
+        if which == .finish, let s = draft.startGate {
             return Track.bearing([s.lat, s.lon], [c.latitude, c.longitude])
         }
-        return compass.heading ?? 0
+        return 0
+    }
+
+    /// Cancel: the line goes, and you place it again.
+    private func remove(_ which: Which) {
+        if which == .start { draft.startGate = nil } else { draft.finishGate = nil }
+        reversed.remove(which)
+        phase = .placing(which)
+    }
+
+    private func isReversed(_ which: Which) -> Bool {
+        isPointToPoint ? reversed.contains(which) : draft.direction == "counterclockwise"
+    }
+
+    private func setReversed(_ on: Bool, _ which: Which) {
+        guard on != isReversed(which) else { return }
+        update { $0.headingDegrees = ($0.headingDegrees + 180).truncatingRemainder(dividingBy: 360) }
+        if isPointToPoint {
+            if on { reversed.insert(which) } else { reversed.remove(which) }
+        } else {
+            draft.direction = on ? "counterclockwise" : "clockwise"
+        }
     }
 
     private func update(_ change: (inout TimingGate) -> Void) {
-        if editing == .start, var g = draft.startGate { change(&g); draft.startGate = g }
-        if editing == .finish, var g = draft.finishGate { change(&g); draft.finishGate = g }
-    }
-
-    private func rotate(by degrees: Double) {
-        update { $0.headingDegrees = ($0.headingDegrees + degrees + 360).truncatingRemainder(dividingBy: 360) }
+        if phase.which == .start, var g = draft.startGate { change(&g); draft.startGate = g }
+        if phase.which == .finish, var g = draft.finishGate { change(&g); draft.finishGate = g }
     }
 
     private func setHeading(_ h: Double) {
@@ -196,8 +286,9 @@ struct TrackEditorView: View {
 
     private func save() {
         model.tracks.save(draft)
-        if let saved = model.tracks.track(id: draft.id) { model.trackDidChange(saved) }
-        dismiss()
+        let saved = model.tracks.track(id: draft.id) ?? draft
+        model.trackDidChange(saved)
+        if let onSaved { onSaved(saved) } else { dismiss() }
     }
 }
 

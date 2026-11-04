@@ -25,6 +25,14 @@ public struct HighlightsAccumulator: Sendable {
     /// Live distance integrated so far (metres).
     public var distanceMeters: Double { distance }
 
+    /// Nothing was sampled across a pause, so the next sample does not follow
+    /// on from the last one. Drop the anchors that integrate between samples —
+    /// left in place they charge the pause as distance and as elevation gain.
+    public mutating func noteDiscontinuity() {
+        lastSpeedSample = nil
+        lastAltitude = nil
+    }
+
     public mutating func add(channel: ChannelId, value: Double, t: TimeInterval) {
         switch channel {
         case .gpsSpeed:
@@ -62,9 +70,13 @@ public struct HighlightsAccumulator: Sendable {
         }
     }
 
-    public func finalize(startUptime: TimeInterval, endUptime: TimeInterval) -> SessionManifest.Highlights {
+    /// `recordedSeconds` is the summed length of the session's segments, which
+    /// is shorter than the wall-clock span whenever the driver paused. Without
+    /// it the duration counts time nothing was written.
+    public func finalize(startUptime: TimeInterval, endUptime: TimeInterval,
+                         recordedSeconds: TimeInterval? = nil) -> SessionManifest.Highlights {
         var highlights = SessionManifest.Highlights()
-        highlights.durationSeconds = max(0, endUptime - startUptime)
+        highlights.durationSeconds = recordedSeconds ?? max(0, endUptime - startUptime)
         highlights.distanceMeters = distance
         highlights.maxSpeedMps = maxSpeed
         highlights.avgSpeedMps = speedCount > 0 ? speedSum / Double(speedCount) : 0

@@ -177,4 +177,130 @@ final class SessionRecorderTests: XCTestCase {
         XCTAssertFalse(fires, "no OBD ever seen — no ignition-off signal (R1.6 scope)")
         _ = try await recorder.stop(at: 10_001)
     }
+
+    // MARK: - Pause / resume
+
+    /// Two 30 s runs either side of a four-minute pause in the paddock is one
+    /// session of 60 s, not one of 300.
+    func testPausedTimeIsNotRecordedTime() async throws {
+        _ = try await recorder.start(at: 100)
+        for i in 0..<31 { await recorder.ingest(channel: .gpsSpeed, value: 15, at: 100 + Double(i)) }
+        try await recorder.pause(at: 130)
+        try await recorder.resume(at: 370)
+        for i in 0..<31 { await recorder.ingest(channel: .gpsSpeed, value: 15, at: 370 + Double(i)) }
+
+        let manifest = try await recorder.stop(at: 400)
+        XCTAssertEqual(manifest.segments?.count, 2)
+        XCTAssertEqual(manifest.recordedSeconds(), 60, accuracy: 0.001)
+        XCTAssertEqual(manifest.highlights?.durationSeconds ?? 0, 60, accuracy: 0.001,
+                       "the 240 s pause must not count as recorded time")
+    }
+
+    func testEverySegmentIsClosedWhenTheSessionStops() async throws {
+        _ = try await recorder.start(at: 0)
+        await recorder.ingest(channel: .gpsSpeed, value: 10, at: 5)
+        try await recorder.pause(at: 10)
+        try await recorder.resume(at: 60)
+        await recorder.ingest(channel: .gpsSpeed, value: 10, at: 65)
+        let manifest = try await recorder.stop(at: 70)
+
+        XCTAssertEqual(manifest.segments?.count, 2)
+        XCTAssertTrue(manifest.segments?.allSatisfy { $0.end != nil } ?? false,
+                      "a finalized session leaves no segment open")
+    }
+
+    func testSamplesArrivingWhilePausedAreDropped() async throws {
+        let id = try await recorder.start(at: 0)
+        await recorder.ingest(channel: .gpsSpeed, value: 10, at: 1)
+        try await recorder.pause(at: 2)
+
+        let paused = await recorder.isPaused
+        XCTAssertTrue(paused)
+        for i in 0..<20 { await recorder.ingest(channel: .gpsSpeed, value: 10, at: 3 + Double(i)) }
+
+        try await recorder.resume(at: 100)
+        await recorder.ingest(channel: .gpsSpeed, value: 10, at: 101)
+        let manifest = try await recorder.stop(at: 102)
+
+        XCTAssertEqual(manifest.channels.first { $0.id == .gpsSpeed }?.sampleCount, 2,
+                       "only the samples either side of the pause were written")
+        let samples = ChannelReader.samples(for: .gpsSpeed,
+                                            inSessionDirectory: store.directory(for: id))
+        XCTAssertEqual(samples.map(\.t), [1, 101])
+    }
+
+    /// The accumulator integrates distance between consecutive speed samples.
+    /// Across a pause there is no "between", so nothing should be added.
+    func testPauseAddsNoPhantomDistance() async throws {
+        _ = try await recorder.start(at: 0)
+        for i in 0..<11 { await recorder.ingest(channel: .gpsSpeed, value: 20, at: Double(i)) }
+        try await recorder.pause(at: 10)
+        try await recorder.resume(at: 600)
+        for i in 0..<11 { await recorder.ingest(channel: .gpsSpeed, value: 20, at: 600 + Double(i)) }
+
+        let manifest = try await recorder.stop(at: 611)
+        XCTAssertEqual(manifest.highlights?.distanceMeters ?? 0, 400, accuracy: 1,
+                       "20 m/s × 10 s, twice — the pause contributes nothing")
+    }
+
+    func testPauseDoesNotLeaveASensorGapAcrossIt() async throws {
+        _ = try await recorder.start(at: 0)
+        await recorder.ingest(channel: .gpsSpeed, value: 10, at: 1)
+        try await recorder.pause(at: 2)
+        try await recorder.resume(at: 500)
+        await recorder.ingest(channel: .gpsSpeed, value: 10, at: 501)
+        let manifest = try await recorder.stop(at: 502)
+
+        let spanning = (manifest.sensorGaps ?? []).filter { $0.duration > 100 }
+        XCTAssertTrue(spanning.isEmpty,
+                      "a pause is not a GPS dropout — got \(spanning)")
+    }
+
+    func testAutoStopStandsDownWhilePaused() async throws {
+        _ = try await recorder.start(at: 0)
+        await recorder.ingest(channel: ChannelId.obd(.rpm), value: 2000, at: 10)
+        await recorder.ingest(channel: .gpsSpeed, value: 20, at: 10)
+        await recorder.ingest(channel: .gpsSpeed, value: 0, at: 20)
+        try await recorder.pause(at: 25)
+
+        let whilePaused = await recorder.shouldAutoStop(now: 10_000)
+        XCTAssertFalse(whilePaused, "pausing is a deliberate stop, not a forgotten one")
+
+        try await recorder.resume(at: 10_001)
+        let justResumed = await recorder.shouldAutoStop(now: 10_010)
+        XCTAssertFalse(justResumed, "the forgotten-stop clocks restart on resume")
+        _ = try await recorder.stop(at: 10_020)
+    }
+
+    func testStoppingWhilePausedFinalizesCleanly() async throws {
+        _ = try await recorder.start(at: 0)
+        for i in 0..<21 { await recorder.ingest(channel: .gpsSpeed, value: 10, at: Double(i)) }
+        try await recorder.pause(at: 20)
+
+        let manifest = try await recorder.stop(at: 900)
+        XCTAssertEqual(manifest.status, .complete)
+        XCTAssertEqual(manifest.segments?.count, 1)
+        XCTAssertEqual(manifest.highlights?.durationSeconds ?? 0, 20, accuracy: 0.001,
+                       "the 880 s between pause and stop is not recorded time")
+    }
+
+    /// Sessions recorded before pause existed carry no segments at all.
+    func testManifestWithoutSegmentsFallsBackToItsFinalizedDuration() {
+        var legacy = SessionManifest(startedAtUTC: Date(), startUptime: 0, status: .complete)
+        legacy.segments = nil
+        var highlights = SessionManifest.Highlights()
+        highlights.durationSeconds = 212
+        legacy.highlights = highlights
+
+        XCTAssertEqual(legacy.recordedSeconds(), 212, accuracy: 0.001)
+    }
+
+    func testOpenSegmentIsMeasuredToNow() {
+        var live = SessionManifest(startedAtUTC: Date(), startUptime: 100)
+        live.segments = [.init(start: 100, end: 160), .init(start: 400)]
+
+        XCTAssertEqual(live.recordedSeconds(asOf: 430), 90, accuracy: 0.001)
+        XCTAssertEqual(live.recordedSeconds(), 60, accuracy: 0.001,
+                       "without a clock, only closed segments count")
+    }
 }

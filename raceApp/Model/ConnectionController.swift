@@ -24,6 +24,15 @@ final class ConnectionController {
     }
 
     private(set) var state: ObdConnectionState = .idle
+    /// The user pressed disconnect — see `RaceBoxController.userDisconnected`.
+    private(set) var userDisconnected = false
+    /// A failure worth colouring. Goes quiet after a minute, so a stale
+    /// problem stops shouting; see `RaceBoxController.fail`.
+    private(set) var failureIsFresh = false
+    private var failureDecay: Task<Void, Never>?
+    /// What ELM327 negotiated, e.g. "CAN 11/500". Read once at init; `ATDPN`
+    /// is cheap but the answer never changes while a link is up.
+    private(set) var currentProtocol: String?
     private(set) var discovered: [DiscoveredAdapter] = []
     private(set) var isScanning = false
     private(set) var scanTimedOut = false
@@ -99,6 +108,22 @@ final class ConnectionController {
         }
     }
     var carLinkUp: Bool { state == .live }
+
+    private func noteFailure() {
+        failureIsFresh = true
+        failureDecay?.cancel()
+        failureDecay = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(60))
+            guard let self, !Task.isCancelled else { return }
+            self.failureIsFresh = false
+        }
+    }
+
+    private func clearFailure() {
+        failureDecay?.cancel()
+        failureDecay = nil
+        failureIsFresh = false
+    }
 
     var storedAdapterName: String? { UserDefaults.standard.string(forKey: Keys.adapterName) }
     var hasStoredAdapter: Bool { UserDefaults.standard.string(forKey: Keys.adapterId) != nil }
@@ -406,6 +431,8 @@ final class ConnectionController {
 
     /// User-facing retry after a timed-out / empty scan.
     func retryScan() {
+        clearFailure()
+        userDisconnected = false
         startScan(showAll: showAllDevices)
     }
 
@@ -420,6 +447,7 @@ final class ConnectionController {
     }
 
     func startScan(showAll: Bool = false) {
+        userDisconnected = false
         stopScan()
         connectionTask?.cancel()
         connectionTask = nil
@@ -466,6 +494,7 @@ final class ConnectionController {
     /// End an empty scan so UI can show not-found (keeps `scanTimedOut`).
     private func finishEmptyScan() {
         scanTimedOut = true
+        if hasStoredAdapter { noteFailure() }
         scanTask?.cancel()
         scanTask = nil
         scanTimeoutTask?.cancel()
@@ -542,6 +571,20 @@ final class ConnectionController {
         isDemo = false
         discovered = []
         scanTimedOut = false
+        clearFailure()
+        userDisconnected = false
+        state = .idle
+    }
+
+    /// Drop the link but keep the adapter — "disconnect", as opposed to
+    /// "forget", which throws it away.
+    func disconnectKeepingAdapter() {
+        teardownSession(dropLink: true)
+        clearFailure()
+        currentProtocol = nil
+        discovered = []
+        scanTimedOut = false
+        userDisconnected = hasStoredAdapter
         state = .idle
     }
 
@@ -657,6 +700,12 @@ final class ConnectionController {
             state = .initializingElm
             _ = try await session.initialize(elmProtocol: elmProtocol)
             state = .connectingEcu
+            // The adapter is talking, whatever the car is doing.
+            clearFailure()
+            userDisconnected = false
+            if let raw = (try? await session.execute("ATDPN"))?.joined() {
+                currentProtocol = ObdProtocolName.short(raw)
+            }
 
             // ECU readiness is decided by directly probing RPM, not by the 0100
             // supported-bitmap — some adapters/ECUs answer live PIDs fine but
@@ -696,6 +745,7 @@ final class ConnectionController {
             }
         } catch {
             lastError = "Adapter didn't respond — unplug it for 10 seconds and plug it back in."
+            noteFailure()
             state = .idle
         }
     }
@@ -800,6 +850,7 @@ final class ConnectionController {
         pollerTask?.cancel()
         pollerTask = nil
         bus.clearObdChannels()
+        currentProtocol = nil
         onObdLinkLost?()
         guard state != .idle else { return } // user chose to disconnect
         reconnectingAfterLinkLoss = true

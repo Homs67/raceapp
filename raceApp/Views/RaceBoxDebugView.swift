@@ -82,7 +82,7 @@ struct RaceBoxDebugView: View {
                         Text(controller.publishesToBus
                              ? "Sessions take position and speed from this device"
                              : "Sessions use phone GPS")
-                            .font(.system(size: 11))
+                            .font(.system(size: 12))
                             .foregroundStyle(Color.muted)
                     }
                 }
@@ -150,7 +150,7 @@ struct RaceBoxDebugView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(check.title).font(.system(size: 13))
                         Text(check.detail)
-                            .font(.system(size: 11, design: .monospaced))
+                            .font(.system(size: 12, design: .monospaced))
                             .foregroundStyle(Color.muted)
                     }
                 }
@@ -365,7 +365,7 @@ struct RaceBoxDebugView: View {
                     .foregroundStyle(highlight)
                 if let raw {
                     Text(raw)
-                        .font(.system(size: 10, design: .monospaced))
+                        .font(.system(size: 12, design: .monospaced))
                         .foregroundStyle(Color.muted)
                 }
             }

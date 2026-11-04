@@ -83,7 +83,16 @@ struct DashboardPagerView: View {
             // the bare screen — the device insets, not the bar's — and the
             // whole thing is zoomed out to clear the bar, like Home Screen
             // jiggle mode. Nothing reflows; Done zooms it back.
-            let gridSafe = DeviceSafeArea.gridInsets(fallback: safe)
+            let deviceGridSafe = DeviceSafeArea.gridInsets(fallback: safe)
+            // The recording top bar is permanent, so the grid starts below it
+            // rather than under it. The control bar along the bottom stays an
+            // overlay — it can be tapped away, so it costs the grid nothing.
+            let gridSafe = mode.isRecording
+                ? EdgeInsets(top: max(deviceGridSafe.top, RecordingTopBar.height(safeTop: safe.top)),
+                             leading: deviceGridSafe.leading,
+                             bottom: deviceGridSafe.bottom,
+                             trailing: deviceGridSafe.trailing)
+                : deviceGridSafe
             // The glass nav bar doesn't inset content, so the reader may not
             // report it; take the larger of what it reports and the bar's
             // known height below the device inset.
@@ -147,9 +156,13 @@ struct DashboardPagerView: View {
                     .frame(width: fullSize.width, height: fullSize.height)
                     .animation(.snappy(duration: 0.25), value: zoom)
 
-                    if mode.isRecording, edit == nil {
-                        RecordingIslandDot(safe: gridSafe, size: fullSize, landscape: landscape)
-                    }
+                    // The island dot was the only persistent recording
+                    // indicator while the old toolbar stayed hidden. The top
+                    // bar now carries a dot and the clock permanently, and the
+                    // two sit a few points apart, so the dot is no longer
+                    // drawn. `RecordingIslandDot` is left defined below — its
+                    // island geometry is fiddly and worth keeping if we want
+                    // it back.
 
                     VStack(spacing: 6) {
                         healthPill
@@ -159,17 +172,39 @@ struct DashboardPagerView: View {
                     }
                     .padding(.top, safe.top)
 
-                    if mode.isRecording, edit == nil, toolbar.visible {
-                        RecordingToolbar(
+                    if mode.isRecording, edit == nil {
+                        RecordingTopBar(
                             elapsed: live.elapsed,
+                            isPaused: model.recording.isPaused,
                             pageIndex: store.selectedIndex,
                             pageCount: store.dashboards.count,
+                            onCollapse: {
+                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                                model.isDashboardPresented = false
+                            },
+                            safeTop: safe.top,
+                            safeLeading: deviceGridSafe.leading,
+                            safeTrailing: deviceGridSafe.trailing)
+                        .frame(maxHeight: .infinity, alignment: .top)
+                    }
+
+                    if mode.isRecording, edit == nil, toolbar.visible {
+                        RecordingControlBar(
+                            isPaused: model.recording.isPaused,
+                            onPauseResume: {
+                                Task {
+                                    if model.recording.isPaused {
+                                        await model.recording.resume()
+                                    } else {
+                                        await model.recording.pause()
+                                    }
+                                }
+                            },
                             onStop: { model.stopRecording() },
-                            onInteract: { toolbar.touch() },
-                            edge: landscape ? .top : .bottom,
+                            compact: landscape,
                             safeBottom: safe.bottom)
-                        .frame(maxHeight: .infinity, alignment: landscape ? .top : .bottom)
-                        .transition(.move(edge: landscape ? .top : .bottom).combined(with: .opacity))
+                        .frame(maxHeight: .infinity, alignment: .bottom)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
                 }
                 // Explicit full-screen frame and position: a child that merely
@@ -262,7 +297,7 @@ struct DashboardPagerView: View {
                 model.dashboards.selectedId = model.dashboards.dashboards[n].id
             }
             if CommandLine.arguments.contains("-dashboard-toolbar") {
-                toolbar.show(for: .seconds(3600))
+                toolbar.show()
             }
             #endif
         case .preview(let id, let startEditing, _):

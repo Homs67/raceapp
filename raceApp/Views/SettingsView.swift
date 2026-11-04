@@ -7,6 +7,7 @@
 //
 
 import SwiftUI
+import BleKit
 import ObdKit
 import SessionKit
 import RaceBoxKit
@@ -15,25 +16,26 @@ struct SettingsView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     @AppStorage("useMetricUnits") private var metric = false
-    @State private var showCalibration = false
     @AppStorage("keepScreenAwake") private var keepAwake = false
     @AppStorage("shiftEnabled") private var shiftEnabled = false
     @AppStorage("shiftRPM") private var shiftRPM: Double = 5500
     @State private var preferredCar = PreferredCar.load()
+    /// A RaceBox in range that has never been paired. Offered once per visit;
+    /// "Not now" means not now.
+    @State private var declinedPairing = false
+    @State private var path = NavigationPath()
 
     private var connection: ConnectionController { model.connection }
-    private let connectedGreen = Color(hex: 0x30D158)
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             List {
                 ScreenPageTitle(title: "Settings")
                     .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 0, trailing: 16))
                     .listRowSeparator(.hidden)
                     .listRowBackground(Color.clear)
 
-                adapterSection
-                raceBoxSection
+                devicesSection
                 preferencesSection
                 generalSettingsSection
                 experimentalSection
@@ -57,375 +59,95 @@ struct SettingsView: View {
                     OBDHelpView()
                 case "my-car":
                     MyCarPickerView(selection: $preferredCar)
+                case "racebox":
+                    RaceBoxDeviceView()
+                case "obd":
+                    ObdDeviceView()
+                case "racebox-signals":
+                    RaceBoxDebugView()
+                case "racebox-memory":
+                    RaceBoxMemoryView().environment(model)
                 default:
                     EmptyView()
                 }
             }
-            .sheet(isPresented: $showCalibration) {
-                GCalibrationView().environment(model)
-            }
             .onAppear { connection.beginAdapterDiscoveryIfNeeded() }
+            .sheet(item: Binding(get: { pairable }, set: { if $0 == nil { declinedPairing = true } })) { device in
+                ConnectSheet(device: device) {
+                    #if DEBUG
+                    if Self.pairDemo { model.raceBox.startSimulated(); return }
+                    #endif
+                    model.raceBox.select(device)
+                } onDismiss: {
+                    declinedPairing = true
+                    model.raceBox.disconnect()
+                }
+                .environment(model)
+            }
         }
     }
 
-    // MARK: - OBD-II adapter
+    // MARK: - Devices
 
-    @ViewBuilder
-    private var adapterSection: some View {
+    /// Two cards, one status line each. Everything that used to live here —
+    /// adapter picker, RSSI, satellites, protocol, a button per branch of the
+    /// state machine — is on the device pages now.
+    /// Nothing remembered, something in range: worth asking about.
+    #if DEBUG
+    static let pairDemo = CommandLine.arguments.contains("-pair-demo")
+    #endif
+
+    private var pairable: DiscoveredAdapter? {
+        #if DEBUG
+        // `-pair-demo`: a RaceBox "in range" in the Simulator, so first pairing can be shown.
+        if Self.pairDemo {
+            guard !declinedPairing, !model.raceBox.isSimulated else { return nil }
+            return DiscoveredAdapter(id: UUID(uuidString: "5ACEB0C5-0000-4000-8000-000000000001")!,
+                                     name: "RaceBox Micro 3241500917", rssi: -48)
+        }
+        #endif
+        guard !declinedPairing,
+              model.raceBox.storedDeviceName == nil,
+              case .scanning = model.raceBox.state else { return nil }
+        return model.raceBox.discovered.first
+    }
+
+    private var devicesSection: some View {
         Section {
-            adapterStatusCard
+            HStack(alignment: .top, spacing: 12) {
+                Button { path.append("racebox") } label: {
+                    DeviceCard(title: "RaceBox",
+                               artwork: "RaceBoxHero",
+                               status: .raceBox(model.raceBox))
+                }
+                .buttonStyle(.plain)
+
+                Button { path.append("obd") } label: {
+                    DeviceCard(title: "OBD-II",
+                               artwork: "ObdAdapter",
+                               status: .obd(connection))
+                }
+                .buttonStyle(.plain)
+            }
+            // The List already insets its rows; adding our own put the cards
+            // further from the edge than every other card in Settings.
+            .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
         } header: {
             HStack {
-                Text(sectionTitle)
+                Text("Devices")
                 Spacer()
-                NavigationLink(value: "help") {
-                    Text("Help")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(Color.accentCyan)
-                }
-            }
-            .textCase(nil)
-        }
-        .listRowBackground(Color.cardBg)
-    }
-
-    private var sectionTitle: String {
-        if connection.showAllDevices { return "All devices" }
-        if case .connected = connection.adapterUIStatus { return "OBD-II adapter" }
-        return "OBD-II Device"
-    }
-
-    @ViewBuilder
-    private var adapterStatusCard: some View {
-        switch connection.adapterUIStatus {
-        case .bluetoothOff:
-            statusRow(
-                icon: "bluetooth",
-                text: "Turn on bluetooth to find a device",
-                dimmed: true
-            ) {
-                if let url = URL(string: UIApplication.openSettingsURLString) {
-                    UIApplication.shared.open(url)
-                }
-            }
-
-        case .finding:
-            VStack(alignment: .leading, spacing: 10) {
-                statusRow(
-                    icon: nil,
-                    text: connection.showAllDevices
-                        ? "Scanning all Bluetooth devices…"
-                        : "Finding an OBD-II adapter…",
-                    dimmed: true,
-                    progress: true
-                )
-                if connection.showAllDevices {
-                    collapseAllDevicesButton
-                }
-            }
-
-        case .notFound:
-            VStack(alignment: .leading, spacing: 10) {
-                statusRow(
-                    icon: nil,
-                    text: connection.showAllDevices
-                        ? "No Bluetooth devices found"
-                        : "No OBD-II adapter found",
-                    dimmed: true
-                )
-                retryScanButton
-                if connection.showAllDevices {
-                    collapseAllDevicesButton
-                } else {
-                    showAllDevicesButton
-                }
-            }
-
-        case .found(let adapters):
-            VStack(alignment: .leading, spacing: 12) {
-                statusRow(
-                    icon: nil,
-                    text: connection.showAllDevices
-                        ? "All Bluetooth devices"
-                        : "Found an adapter…",
-                    dimmed: true
-                )
-                ForEach(adapters) { adapter in
-                    Button {
-                        connection.select(adapter)
-                    } label: {
-                        HStack {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(adapter.name)
-                                    .font(.system(size: 14, weight: .semibold))
-                                    .foregroundStyle(Color.textPrimary)
-                                Text("\(adapter.rssi) dBm")
-                                    .font(.system(size: 11)).monospacedDigit()
-                                    .foregroundStyle(Color.muted)
-                            }
-                            Spacer()
-                            Text("Connect")
-                                .font(.system(size: 14, weight: .semibold))
-                                .foregroundStyle(Color.accent)
-                        }
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.borderless)
-                }
-                if connection.showAllDevices {
-                    collapseAllDevicesButton
-                } else {
-                    showAllDevicesButton
-                }
-            }
-
-        case .connecting(let name):
-            HStack(spacing: 10) {
-                ProgressView()
-                Text("Connecting to \(name)…")
-                    .font(.system(size: 14))
-                    .foregroundStyle(Color.muted)
-                Spacer()
-                Button("Cancel") { connection.cancelPendingConnection() }
-                    .font(.system(size: 13))
-                    .buttonStyle(.borderless)
-            }
-
-        case .reconnecting(let name):
-            HStack(spacing: 10) {
-                ProgressView()
-                Text("Reconnecting to \(name)…")
-                    .font(.system(size: 14))
-                    .foregroundStyle(Color.muted)
-                Spacer()
-                Button("Cancel") { connection.cancelPendingConnection() }
-                    .font(.system(size: 13))
-                    .buttonStyle(.borderless)
-            }
-
-        case .connected(let name, let waitingForIgnition):
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 8) {
-                    Image(systemName: "wifi")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(connectedGreen)
-                    Text("Connected to \(name)")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(Color.textPrimary)
-                }
-                if waitingForIgnition {
-                    Text("Adapter link OK — turn ignition on for live car data")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Color.muted)
-                } else if connection.carLinkUp {
-                    Text("\(String(format: "%.0f", model.bus.obdHz(now: uptimeNow()))) Hz")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Color.muted)
-                }
-                Button(connection.isDemo ? "Stop demo" : "Disconnect") {
-                    connection.forget()
-                }
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(Color.recordRed)
-                .frame(maxWidth: .infinity)
-                .buttonStyle(.borderless)
-            }
-            .padding(.vertical, 2)
-        }
-    }
-
-    private var retryScanButton: some View {
-        Button {
-            connection.retryScan()
-        } label: {
-            Text("Retry")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(Color.accentCyan)
-                .frame(maxWidth: .infinity)
-                .padding(.top, 2)
-        }
-        .buttonStyle(.borderless)
-    }
-
-    private var showAllDevicesButton: some View {
-        Button {
-            connection.setShowAllDevices(true)
-        } label: {
-            HStack(spacing: 4) {
-                Text("Show all devices")
-                    .font(.system(size: 13, weight: .medium))
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 11, weight: .semibold))
-            }
-            .foregroundStyle(Color.muted)
-        }
-        .buttonStyle(.plain)
-    }
-
-    private var collapseAllDevicesButton: some View {
-        Button {
-            connection.setShowAllDevices(false)
-        } label: {
-            Text("Collapse")
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(Color.accentCyan)
-                .frame(maxWidth: .infinity)
-                .padding(.top, 2)
-        }
-        .buttonStyle(.plain)
-    }
-
-    @ViewBuilder
-    private func statusRow(icon: String?, text: String, dimmed: Bool,
-                           progress: Bool = false, action: (() -> Void)? = nil) -> some View {
-        let row = HStack(spacing: 10) {
-            if progress { ProgressView() }
-            if let icon {
-                Image(systemName: icon)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(Color.muted)
-            }
-            Text(text)
-                .font(.system(size: 14))
-                .foregroundStyle(dimmed ? Color.muted : Color.textPrimary)
-            Spacer(minLength: 0)
-        }
-        .padding(.vertical, 2)
-
-        if let action {
-            Button(action: action) { row }.buttonStyle(.plain)
-        } else {
-            row
-        }
-    }
-
-    // MARK: - RaceBox
-
-    private var raceBoxSection: some View {
-        Section {
-            raceBoxStatusCard
-        } header: {
-            HStack {
-                Text("RaceBox")
-                Spacer()
-                NavigationLink {
-                    RaceBoxDebugView()
+                Button {
+                    connection.retryScan()
+                    model.raceBox.start()
                 } label: {
-                    Text("Signals")
+                    Text("+ Add")
                         .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(Color.accentCyan)
+                        .foregroundStyle(Color.accent)
                 }
             }
             .textCase(nil)
-        }
-        .listRowBackground(Color.cardBg)
-    }
-
-    @ViewBuilder
-    private var raceBoxStatusCard: some View {
-        let rb = model.raceBox
-        switch rb.state {
-        case .connected:
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 8) {
-                    Image(systemName: "location.north.line.fill")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(connectedGreen)
-                    Text("Connected to \(rb.deviceInfo?.displayName ?? rb.storedDeviceName ?? "RaceBox")")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(Color.textPrimary)
-                }
-                if let msg = rb.latest {
-                    let power: LoggerPower = {
-                        switch msg.power(for: rb.deviceInfo?.model ?? .micro) {
-                        case .inputVoltage(let v): return .from(inputVolts: v)
-                        case .battery(let pct, let charging): return .battery(percent: pct, charging: charging)
-                        }
-                    }()
-                    Text((msg.hasValidFix ? "\(msg.satellites) satellites · 3D fix" : "\(msg.satellites) satellites · waiting for fix")
-                         + " · " + power.shortText)
-                        .font(.system(size: 12))
-                        .foregroundStyle(power.needsAttention ? Color.warnAmber : Color.muted)
-                    if let why = power.explanation {
-                        Text(why)
-                            .font(.system(size: 11))
-                            .foregroundStyle(Color.muted)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-                if rb.deviceInfo?.supportsStandaloneRecording != false {
-                    NavigationLink {
-                        RaceBoxMemoryView().environment(model)
-                    } label: {
-                        HStack(spacing: 6) {
-                            Text("Recorded on device").foregroundStyle(Color.textPrimary)
-                            Spacer()
-                            if let status = rb.recordingStatus, status.storedMessages > 0 {
-                                Text("\(status.memoryLevelPercent)% full").foregroundStyle(Color.muted)
-                            }
-                        }
-                        .font(.system(size: 14))
-                    }
-                }
-                Button("Disconnect") { rb.forget() }
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(Color.recordRed)
-                    .frame(maxWidth: .infinity)
-                    .buttonStyle(.borderless)
-            }
-            .padding(.vertical, 2)
-        case .scanning:
-            statusRow(icon: nil, text: "Finding a RaceBox…", dimmed: true, progress: true)
-            ForEach(rb.discovered) { device in
-                Button(device.name) { rb.select(device) }
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(Color.accent)
-                    .buttonStyle(.borderless)
-            }
-            Button("Cancel") { rb.disconnect() }
-                .font(.system(size: 13))
-                .foregroundStyle(Color.muted)
-                .buttonStyle(.borderless)
-        case .connecting(let name):
-            statusRow(icon: nil, text: "Connecting to \(name)…", dimmed: true, progress: true)
-        case .failed(let reason):
-            statusRow(icon: "exclamationmark.triangle", text: "Failed — \(reason)", dimmed: true)
-            Button("Retry") { rb.start() }
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(Color.accent)
-                .buttonStyle(.borderless)
-        case .idle:
-            if let name = rb.storedDeviceName {
-                statusRow(icon: "location.slash", text: "Not connected — \(name)", dimmed: true)
-                HStack {
-                    Button("Connect") { rb.start() }
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(Color.accent)
-                    Spacer()
-                    Button("Forget") { rb.forget() }
-                        .font(.system(size: 13))
-                        .foregroundStyle(Color.muted)
-                }
-                .buttonStyle(.borderless)
-            } else {
-                statusRow(icon: "location.slash", text: "No RaceBox paired — optional 25 Hz GPS", dimmed: true)
-                Button("Find RaceBox") { rb.start() }
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(Color.accent)
-                    .buttonStyle(.borderless)
-            }
-        }
-    }
-
-    /// Right-hand hint on the calibration row.
-    private var calibrationSummary: String {
-        guard model.raceBox.state == .connected else { return "no RaceBox" }
-        switch model.raceBox.framePhase {
-        case .leveling: return "not started"
-        case .aligning: return "needs a drive"
-        case .calibrated:
-            guard let q = model.raceBox.frameQuality else { return "ready" }
-            return q.isTrustworthy ? "ready" : "improving"
         }
     }
 
@@ -433,19 +155,6 @@ struct SettingsView: View {
 
     private var preferencesSection: some View {
         Section("Preferences") {
-            NavigationLink(value: "my-car") {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("My car")
-                        .font(.system(size: 13))
-                        .foregroundStyle(Color.muted)
-                    Text(preferredCar?.displayName ?? "Select from a list...")
-                        .font(.system(size: 15))
-                        .foregroundStyle(preferredCar == nil ? Color.mutedWeak : Color.textPrimary)
-                }
-                .padding(.vertical, 2)
-            }
-            .listRowBackground(Color.cardGray)
-
             VStack(alignment: .leading, spacing: 10) {
                 Toggle("Performance shift indicator", isOn: $shiftEnabled)
                     .font(.system(size: 14))
@@ -471,7 +180,7 @@ struct SettingsView: View {
                         Text("Dashboards")
                             .font(.system(size: 15))
                         Text("\(model.dashboards.dashboards.count) configured · long-press a widget to edit")
-                            .font(.system(size: 11))
+                            .font(.system(size: 12))
                             .foregroundStyle(Color.muted)
                     }
                 }
@@ -498,23 +207,6 @@ struct SettingsView: View {
                     model.applyRecordingIdlePolicy()
                 }
 
-            Button {
-                showCalibration = true
-            } label: {
-                HStack(spacing: 6) {
-                    Text("Calibrate G-force").foregroundStyle(Color.textPrimary)
-                    Spacer()
-                    Text(calibrationSummary)
-                        .foregroundStyle(Color.muted)
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(Color.mutedWeak)
-                }
-                .font(.system(size: 13))
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-
             LabeledContent("Sessions on device") {
                 Text(ByteCountFormatter.string(fromByteCount: model.store.totalStorageBytes(), countStyle: .file))
             }
@@ -534,7 +226,7 @@ struct SettingsView: View {
                         Text("CAN Monitor (beta)")
                             .font(.system(size: 15))
                         Text("Read advanced signals — steering, brake, pedal")
-                            .font(.system(size: 11))
+                            .font(.system(size: 12))
                             .foregroundStyle(Color.muted)
                     }
                 } icon: {
@@ -550,11 +242,11 @@ struct SettingsView: View {
                     Text("Record CAN signals (beta)")
                         .font(.system(size: 15))
                     Text("Sessions capture steering, brake & pedal at 50–105 Hz instead of OBD polling")
-                        .font(.system(size: 11))
+                        .font(.system(size: 12))
                         .foregroundStyle(Color.muted)
                     if let mode = model.connection.canStreamMode {
                         Text("Streaming now: \(mode)")
-                            .font(.system(size: 11))
+                            .font(.system(size: 12))
                             .foregroundStyle(Color.accent)
                     }
                 }
@@ -568,7 +260,7 @@ struct SettingsView: View {
                     Text("Save drives to iCloud Drive")
                         .font(.system(size: 15))
                     Text(model.cloudSync.status ?? "CSV + JSON of every session, in Files → iCloud Drive → raceApp → Drives")
-                        .font(.system(size: 11))
+                        .font(.system(size: 12))
                         .foregroundStyle(Color.muted)
                 }
             }
@@ -630,7 +322,7 @@ struct OBDHelpView: View {
     private func setupStep(_ number: Int, _ text: String) -> some View {
         HStack(alignment: .top, spacing: 10) {
             Text("\(number)")
-                .font(.system(size: 11, weight: .bold)).monospacedDigit()
+                .font(.system(size: 12, weight: .bold)).monospacedDigit()
                 .foregroundStyle(Color.accentCyan)
                 .frame(width: 18, height: 18)
                 .background(Color.accentCyan.opacity(0.12), in: Circle())

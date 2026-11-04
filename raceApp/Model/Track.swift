@@ -42,6 +42,13 @@ struct Track: Codable, Identifiable {
     enum Kind: String, Codable, CaseIterable {
         case circuit     // one line, laps
         case autocross   // separate start and finish, runs
+
+        /// The UI calls a start-to-finish course "point-to-point": it covers
+        /// autocross, hill climbs and canyon runs alike. The raw value stays.
+        var title: String { self == .circuit ? "Circuit" : "Point-to-point" }
+
+        /// SF Symbol for point-to-point; circuits draw `CircuitGlyph` instead.
+        static let pointToPointSymbol = "point.bottomleft.forward.to.point.topright.scurvepath"
     }
     var kind: Kind?
     /// True for tracks made in the app (and user edits of bundled ones).
@@ -83,7 +90,7 @@ struct Track: Codable, Identifiable {
     static func newUserTrack(name: String, kind: Kind) -> Track {
         let now = Date()
         return Track(schemaVersion: 1, id: UUID().uuidString, name: name, location: "", country: "",
-                     configuration: kind == .autocross ? "Autocross" : "Circuit",
+                     configuration: kind.title,
                      direction: "clockwise", source: "user", lengthMeters: 0, lengthMiles: 0,
                      turnCount: 0, startFinish: Gate(a: [], b: [], approximate: false), corners: [],
                      centerline: [], cornerNumbering: nil, notes: nil,

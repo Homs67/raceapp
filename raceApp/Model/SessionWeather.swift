@@ -34,6 +34,20 @@ enum SessionWeather {
                      source: "Apple Weather")
     }
 
+    /// Conditions right now at a place (the track page's "Conditions now").
+    static func current(at coordinate: CLLocationCoordinate2D) async throws -> SessionManifest.WeatherSnapshot {
+        let w = try await WeatherService.shared.weather(
+            for: CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude), including: .current)
+        return .init(temperatureC: w.temperature.converted(to: .celsius).value,
+                     humidity: w.humidity,
+                     windMps: w.wind.speed.converted(to: .metersPerSecond).value,
+                     windFromDegrees: w.wind.direction.converted(to: .degrees).value,
+                     symbolName: w.symbolName,
+                     condition: w.condition.description,
+                     observedAt: w.date,
+                     source: "Apple Weather")
+    }
+
     /// Mark and legal link Apple requires wherever its weather data is shown.
     static func attribution() async -> WeatherAttribution? {
         try? await WeatherService.shared.attribution

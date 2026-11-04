@@ -41,6 +41,10 @@ struct DebugView: View {
                     NavigationLink("OBD-II diagnostics", value: "diagnostics")
                         .font(.system(size: 15))
                         .listRowBackground(Color.cardGray)
+
+                    NavigationLink("Emblem playground", value: "emblem")
+                        .font(.system(size: 15))
+                        .listRowBackground(Color.cardGray)
                 }
 
                 Section {
@@ -61,6 +65,14 @@ struct DebugView: View {
                         .font(.system(size: 15))
                         .listRowBackground(Color.cardGray)
                     }
+
+                    #if DEBUG
+                    Button("RaceBox in range (connect card)") {
+                        presentSettingsPreview { model.raceBox.previewDiscovery() }
+                    }
+                    .font(.system(size: 15))
+                    .listRowBackground(Color.cardGray)
+                    #endif
 
                     if model.connection.uiStatusOverride != nil {
                         Button("Clear OBD status preview", role: .destructive) {
@@ -107,6 +119,8 @@ struct DebugView: View {
                         .navigationBarTitleDisplayMode(.inline)
                 case "diagnostics":
                     DiagnosticsView()
+                case "emblem":
+                    EmblemPlaygroundView()
                 case let trackRoute where trackRoute.hasPrefix("track:"):
                     let id = String(trackRoute.dropFirst("track:".count))
                     if let track = TrackDatabase.track(id: id) {

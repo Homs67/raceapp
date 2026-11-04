@@ -60,27 +60,19 @@ struct SessionsView: View {
 
                             ForEach(sessionSections) { section in
                                 // Title as a normal row so it scrolls away (List section headers pin).
-                                Text(section.title)
-                                    .font(.system(size: 13, weight: .semibold))
-                                    .foregroundStyle(Color.muted)
+                                Text(section.title.uppercased())
+                                    .font(.numeral(20, weight: .bold))
+                                    .foregroundStyle(Color(hex: 0x8A8A8A))
                                     .frame(maxWidth: .infinity, alignment: .leading)
-                                    .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 2, trailing: 16))
+                                    .listRowInsets(EdgeInsets(top: 18, leading: 16, bottom: 0, trailing: 16))
                                     .listRowSeparator(.hidden)
                                     .listRowBackground(Color.clear)
 
                                 ForEach(section.sessions) { session in
                                     sessionRow(for: session)
-                                        // 16 outer margin + 16 inner padding inside the card.
-                                        .listRowInsets(EdgeInsets(top: 5, leading: 32, bottom: 5, trailing: 32))
+                                        .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
                                         .listRowSeparator(.hidden)
-                                        .listRowBackground(
-                                            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                                .fill(Color.cardBg)
-                                                // Plain List ignores horizontal insets for backgrounds —
-                                                // pad the card itself so it doesn't go edge-to-edge.
-                                                .padding(.horizontal, 16)
-                                                .padding(.vertical, 5)
-                                        )
+                                        .listRowBackground(Color.clear)
                                 }
                                 .onDelete { offsets in
                                     guard !isSelecting else { return }
@@ -114,24 +106,17 @@ struct SessionsView: View {
                             Button(role: .destructive) {
                                 deleteSelectedSessions()
                             } label: {
-                                Image(systemName: "trash")
+                                DestructiveToolbarIcon(enabled: !selectedIds.isEmpty)
                             }
                             .disabled(selectedIds.isEmpty)
                             .accessibilityLabel("Delete selected")
-                        } else {
+                        } else if !CommandLine.arguments.contains("-seed-presentation") {   // clean screenshots for the talk
                             Button {
                                 model.showDebug = true
                             } label: {
                                 Image(systemName: "ladybug")
                             }
                             .accessibilityLabel("Debug")
-
-                            Button {
-                                model.showSettings = true
-                            } label: {
-                                Image(systemName: "gearshape")
-                            }
-                            .accessibilityLabel("Settings")
                         }
                     }
                 }
@@ -171,14 +156,16 @@ struct SessionsView: View {
                           ? "checkmark.circle.fill" : "circle")
                         .font(.system(size: 22))
                         .foregroundStyle(selectedIds.contains(session.id) ? Color.accent : Color.muted)
-                    SessionRow(session: session, metric: metric)
+                    SessionCard(session: session, metric: metric)
                 }
             }
             .buttonStyle(.plain)
         } else {
-            NavigationLink(value: session.id) {
-                SessionRow(session: session, metric: metric)
-            }
+            // The link sits behind the card so List doesn't add its chevron.
+            SessionCard(session: session, metric: metric)
+                .background {
+                    NavigationLink(value: session.id) { EmptyView() }.opacity(0)
+                }
         }
     }
 
@@ -227,13 +214,15 @@ struct SessionsView: View {
         sessions.removeAll { ids.contains($0.id) }
         for session in toDelete {
             try? model.store.delete(session.id)
+            SessionThumbnails.shared.remove(session.id)
             path.removeAll { $0 == session.id }
         }
         model.recording.sessionUpdated()
     }
 }
 
-/// Exclusive date buckets for the Sessions list. Empty buckets are omitted.
+/// Exclusive date buckets for the Sessions list: Today, Last 7 days, then
+/// one per month ("October 2026"). Empty buckets are omitted.
 private struct SessionDateSection: Identifiable {
     let id: String
     let title: String
@@ -242,26 +231,18 @@ private struct SessionDateSection: Identifiable {
     static func group(_ sessions: [SessionManifest], now: Date = Date(),
                       calendar: Calendar = .current) -> [SessionDateSection] {
         let startOfToday = calendar.startOfDay(for: now)
-        let startOfYesterday = calendar.date(byAdding: .day, value: -1, to: startOfToday) ?? startOfToday
         let startOfLast7 = calendar.date(byAdding: .day, value: -7, to: startOfToday) ?? startOfToday
-        let startOfLast30 = calendar.date(byAdding: .day, value: -30, to: startOfToday) ?? startOfToday
 
         var today: [SessionManifest] = []
-        var yesterday: [SessionManifest] = []
         var last7: [SessionManifest] = []
-        var last30: [SessionManifest] = []
         var byMonth: [Date: [SessionManifest]] = [:] // keyed by month start
 
         for session in sessions {
             let day = calendar.startOfDay(for: session.startedAtUTC)
-            if day == startOfToday {
+            if day >= startOfToday {
                 today.append(session)
-            } else if day == startOfYesterday {
-                yesterday.append(session)
             } else if day >= startOfLast7 {
                 last7.append(session)
-            } else if day >= startOfLast30 {
-                last30.append(session)
             } else {
                 let comps = calendar.dateComponents([.year, .month], from: day)
                 let monthStart = calendar.date(from: comps) ?? day
@@ -273,29 +254,16 @@ private struct SessionDateSection: Identifiable {
         if !today.isEmpty {
             sections.append(.init(id: "today", title: "Today", sessions: today))
         }
-        if !yesterday.isEmpty {
-            sections.append(.init(id: "yesterday", title: "Yesterday", sessions: yesterday))
-        }
         if !last7.isEmpty {
             sections.append(.init(id: "last7", title: "Last 7 days", sessions: last7))
         }
-        if !last30.isEmpty {
-            sections.append(.init(id: "last30", title: "Last month", sessions: last30))
-        }
-
         let monthFormatter = DateFormatter()
         monthFormatter.calendar = calendar
-        let currentYear = calendar.component(.year, from: now)
-
+        monthFormatter.dateFormat = "MMMM yyyy"
         for monthStart in byMonth.keys.sorted(by: >) {
-            let year = calendar.component(.year, from: monthStart)
-            monthFormatter.dateFormat = year == currentYear ? "MMMM" : "MMMM yyyy"
-            let title = monthFormatter.string(from: monthStart)
-            let items = byMonth[monthStart] ?? []
-            guard !items.isEmpty else { continue }
             sections.append(.init(id: "month-\(monthStart.timeIntervalSince1970)",
-                                  title: title,
-                                  sessions: items))
+                                  title: monthFormatter.string(from: monthStart),
+                                  sessions: byMonth[monthStart] ?? []))
         }
         return sections
     }
@@ -351,70 +319,6 @@ private struct OBDConnectionStatusBar: View {
 
     private var barColor: Color {
         anyLink ? .black : .accent
-    }
-}
-
-private struct SessionRow: View {
-    let session: SessionManifest
-    let metric: Bool
-
-    var body: some View {
-        HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 6) {
-                    Text(session.locationName ?? "Session")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(Color.textPrimary)
-                    if session.status == .recovered {
-                        badge("RECOVERED", color: .warnAmber)
-                    }
-                    if session.phoneOnly {
-                        badge("NO OBD", color: .mutedStrong)
-                    }
-                }
-                Text(session.startedAtUTC.formatted(date: .abbreviated, time: .shortened))
-                    .font(.system(size: 11))
-                    .foregroundStyle(Color.muted)
-                if let ref = session.track, !ref.id.isEmpty {
-                    HStack(spacing: 4) {
-                        Image(systemName: "flag.checkered").font(.system(size: 9))
-                        Text(ref.nameSnapshot)
-                        if let best = ref.best { Text("· best \(RunFormat.time(best))").monospacedDigit() }
-                    }
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(Color.accent)
-                }
-            }
-            Spacer()
-            VStack(alignment: .trailing, spacing: 3) {
-                Text(durationText)
-                    .font(.numeral(16, weight: .medium))
-                    .foregroundStyle(Color.textPrimary)
-                Text(distanceText)
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(Color.muted)
-            }
-        }
-        .padding(.vertical, 16)
-    }
-
-    private var durationText: String {
-        let seconds = Int(session.highlights?.durationSeconds ?? 0)
-        return String(format: "%d:%02d", seconds / 60, seconds % 60)
-    }
-
-    private var distanceText: String {
-        let units = UnitsFormatter(metric: metric)
-        let distance = units.distance(fromMeters: session.highlights?.distanceMeters ?? 0)
-        return String(format: "%.1f %@", distance, units.distanceUnit)
-    }
-
-    private func badge(_ text: String, color: Color) -> some View {
-        Text(text)
-            .font(.microLabel(8)).kerning(0.8)
-            .foregroundStyle(color)
-            .padding(.horizontal, 5).padding(.vertical, 2)
-            .background(color.opacity(0.12), in: RoundedRectangle(cornerRadius: 4))
     }
 }
 
@@ -489,8 +393,10 @@ struct SessionDetailView: View {
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
-                    Button("Delete Session", systemImage: "trash", role: .destructive) {
+                    Button(role: .destructive) {
                         confirmingDelete = true
+                    } label: {
+                        DestructiveLabel("Delete Session")
                     }
                 } label: {
                     Image(systemName: "ellipsis")

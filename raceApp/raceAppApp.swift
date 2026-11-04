@@ -15,7 +15,13 @@ struct raceAppApp: App {
             ContentView()
                 .environment(model)
                 .preferredColorScheme(.dark)
-                .task { model.onLaunch() }
+                .task {
+                    model.onLaunch()
+                    #if DEBUG
+                    DemoSessionSeeder.runIfRequested(model)
+                    DemoSessionSeeder.runPresentationIfRequested(model)
+                    #endif
+                }
         }
         .onChange(of: scenePhase) { _, phase in
             model.scenePhaseChanged(phase)

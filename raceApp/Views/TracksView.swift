@@ -18,6 +18,10 @@ struct TracksView: View {
     @State private var path = NavigationPath(TracksView.debugInitialPath())
     @State private var showNew = false
     @State private var stats: [String: TrackStats] = [:]
+    @State private var isSelecting = false
+    @State private var selectedIds: Set<String> = []
+    /// Tracks waiting on the delete confirmation.
+    @State private var pendingDelete: [Track] = []
 
     static func debugInitialPath() -> [String] {
         #if DEBUG
@@ -32,32 +36,71 @@ struct TracksView: View {
     private var userTracks: [Track] { model.tracks.all.filter(\.isUserTrack) }
     private var bundled: [Track] { model.tracks.all.filter { !$0.isUserTrack } }
 
+    private let columns = [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)]
+
     var body: some View {
         NavigationStack(path: $path) {
-            List {
-                Section {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    ScreenPageTitle(title: isSelecting ? selectedTitle : "Tracks")
+                        .padding(.top, 4)
+                    sectionTitle("Custom tracks")
                     if userTracks.isEmpty {
-                        Text("Add a course at your next event: tap + and mark the start and finish where you stand, or draw them on the map.")
+                        Text("Add a circuit or a point-to-point course: tap +, find the place, and drop the lines on the map or mark them where you stand.")
                             .font(.system(size: 13)).foregroundStyle(Color.muted)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(16)
+                            .background(Color.cardBg, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    } else {
+                        grid(userTracks, deletable: true)
                     }
-                    ForEach(userTracks) { track in
-                        NavigationLink(value: track.id) { TrackRow(track: track, stats: stats[track.id]) }
-                    }
-                } header: { Text("My tracks") }
-                Section {
-                    ForEach(bundled) { track in
-                        NavigationLink(value: track.id) { TrackRow(track: track, stats: stats[track.id]) }
-                    }
-                } header: { Text("Circuits") }
-            }
-            .scrollContentBackground(.hidden)
-            .background(Color.bgScreen)
-            .listRowBackground(Color.cardBg)
-            .navigationTitle("Tracks")
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button { showNew = true } label: { Image(systemName: "plus") }
+                    sectionTitle("Circuits")
+                    grid(bundled, deletable: false)
                 }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 24)
+            }
+            .background(Color.bgScreen)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    if !userTracks.isEmpty {
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                isSelecting.toggle()
+                                if !isSelecting { selectedIds.removeAll() }
+                            }
+                        } label: {
+                            Image(systemName: isSelecting ? "checkmark.circle.fill" : "checkmark.circle")
+                        }
+                        .accessibilityLabel(isSelecting ? "Done selecting" : "Select tracks")
+                    }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    if isSelecting {
+                        Button(role: .destructive) {
+                            pendingDelete = userTracks.filter { selectedIds.contains($0.id) }
+                        } label: { DestructiveToolbarIcon(enabled: !selectedIds.isEmpty) }
+                        .disabled(selectedIds.isEmpty)
+                        .accessibilityLabel("Delete selected")
+                    } else {
+                        Button { showNew = true } label: { Image(systemName: "plus") }
+                            .accessibilityLabel("New track")
+                    }
+                }
+            }
+            // `presenting:` hands the alert its own copy: the binding is
+            // cleared as the alert closes, before the button's action runs.
+            .alert(deleteTitle, isPresented: Binding(get: { !pendingDelete.isEmpty },
+                                                      set: { if !$0 { pendingDelete = [] } }),
+                   presenting: pendingDelete) { tracks in
+                Button("Delete", role: .destructive) { delete(tracks) }
+                Button("Cancel", role: .cancel) {}
+            } message: { _ in
+                Text("Sessions keep their times and the track's name, but won't be re-timed.")
+            }
+            .onChange(of: userTracks.isEmpty) { _, empty in
+                if empty { isSelecting = false; selectedIds.removeAll() }
             }
             .navigationDestination(for: String.self) { id in
                 if let track = model.tracks.track(id: id) {
@@ -67,32 +110,133 @@ struct TracksView: View {
             .navigationDestination(for: TrackEditorRoute.self) { route in
                 TrackEditorView(track: route.track)
             }
-            .sheet(isPresented: $showNew) {
-                NewTrackSheet { track in
-                    model.tracks.save(track)
-                    let saved = model.tracks.track(id: track.id) ?? track
-                    path.append(saved.id)
-                    path.append(TrackEditorRoute(track: saved))
-                }
+            .navigationDestination(for: UUID.self) { id in
+                SessionDetailView(sessionId: id)
+            }
+            .navigationDestination(for: TrackSessionsRoute.self) { route in
+                TrackSessionsList(route: route)
+            }
+            .fullScreenCover(isPresented: $showNew) {
+                NewTrackFlow { saved in path.append(saved.id) }
+                    .environment(model)
             }
         }
         .task(id: "\(model.tracks.version)-\(model.recording.sessionsVersion)") { stats = TrackStats.compute(model.store.list()) }
     }
+
+    private func sectionTitle(_ title: String) -> some View {
+        Text(title.uppercased())
+            .font(.numeral(20, weight: .bold))
+            .foregroundStyle(Color(hex: 0x8A8A8A))
+            .padding(.top, 18)
+            .padding(.bottom, 10)
+    }
+
+    private var selectedTitle: String {
+        selectedIds.isEmpty ? "Select" : "\(selectedIds.count) Selected"
+    }
+
+    private var deleteTitle: String {
+        pendingDelete.count == 1 ? "Delete \u{201C}\(pendingDelete[0].name)\u{201D}?" : "Delete \(pendingDelete.count) tracks?"
+    }
+
+    /// Custom tracks can be selected and deleted; bundled circuits can't, so
+    /// they dim while selecting.
+    private func grid(_ tracks: [Track], deletable: Bool) -> some View {
+        LazyVGrid(columns: columns, spacing: 10) {
+            ForEach(tracks) { track in
+                if isSelecting {
+                    Button {
+                        guard deletable else { return }
+                        if selectedIds.contains(track.id) { selectedIds.remove(track.id) } else { selectedIds.insert(track.id) }
+                    } label: {
+                        TrackCard(track: track, stats: stats[track.id])
+                            .overlay(alignment: .topTrailing) {
+                                if deletable {
+                                    Image(systemName: selectedIds.contains(track.id) ? "checkmark.circle.fill" : "circle")
+                                        .font(.system(size: 22))
+                                        .foregroundStyle(selectedIds.contains(track.id) ? Color.accent : Color.muted)
+                                        .background(Circle().fill(Color.cardBg))
+                                        .padding(10)
+                                }
+                            }
+                            .overlay {
+                                if selectedIds.contains(track.id) {
+                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                        .stroke(Color.accent, lineWidth: 2)
+                                }
+                            }
+                            .opacity(deletable ? 1 : 0.35)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!deletable)
+                } else {
+                    NavigationLink(value: track.id) {
+                        TrackCard(track: track, stats: stats[track.id])
+                    }
+                    .buttonStyle(.plain)
+                    .contextMenu {
+                        if deletable {
+                            Button(role: .destructive) { pendingDelete = [track] } label: {
+                                DestructiveLabel("Delete")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func delete(_ tracks: [Track]) {
+        for track in tracks {
+            model.tracks.delete(id: track.id)
+            selectedIds.remove(track.id)
+        }
+        pendingDelete = []
+        if selectedIds.isEmpty { isSelecting = false }
+    }
 }
 
-/// Session count and best time per track, from the sessions' cached runs.
+/// Session count, best time and where the best run was, per track, from
+/// the sessions' cached runs.
 struct TrackStats {
+    struct BestRun: Equatable {
+        var session: UUID
+        var start: TimeInterval
+        var end: TimeInterval
+    }
     var sessions = 0
     var best: TimeInterval?
+    var bestRun: BestRun?
+    /// Completed laps or runs across every session.
+    var laps = 0
+    var lastVisit: Date?
+    /// Best of the latest visit minus best of the one before (negative = faster).
+    var lastVisitDelta: TimeInterval?
 
     static func compute(_ manifests: [SessionManifest]) -> [String: TrackStats] {
         var out: [String: TrackStats] = [:]
+        var visits: [String: [(date: Date, best: TimeInterval)]] = [:]
         for m in manifests {
             guard let ref = m.track, !ref.id.isEmpty else { continue }
             var s = out[ref.id] ?? TrackStats()
             s.sessions += 1
-            if let b = ref.best { s.best = min(s.best ?? .infinity, b) }
+            s.lastVisit = max(s.lastVisit ?? .distantPast, m.startedAtUTC)
+            var sessionBest: TimeInterval?
+            for run in ref.runs where run.kind != .dnf {
+                guard let end = run.end else { continue }
+                s.laps += 1
+                sessionBest = min(sessionBest ?? .infinity, end - run.start)
+                guard end - run.start < (s.best ?? .infinity) else { continue }
+                s.best = end - run.start
+                s.bestRun = BestRun(session: m.id, start: run.start, end: end)
+            }
+            if let sessionBest { visits[ref.id, default: []].append((m.startedAtUTC, sessionBest)) }
             out[ref.id] = s
+        }
+        for (id, v) in visits where v.count > 1 {
+            let sorted = v.sorted { $0.date < $1.date }
+            out[id]?.lastVisitDelta = sorted[sorted.count - 1].best - sorted[sorted.count - 2].best
         }
         return out
     }
@@ -106,186 +250,12 @@ struct TrackEditorRoute: Hashable {
     func hash(into h: inout Hasher) { h.combine(track.id) }
 }
 
-private struct TrackRow: View {
-    let track: Track
-    let stats: TrackStats?
-
-    var body: some View {
-        HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(track.name).font(.system(size: 15, weight: .semibold)).foregroundStyle(Color.textPrimary)
-                Text(subtitle).font(.system(size: 12)).foregroundStyle(Color.muted)
-            }
-            Spacer()
-            if let best = stats?.best {
-                VStack(alignment: .trailing, spacing: 2) {
-                    Text(RunFormat.time(best)).font(.numeral(15, weight: .medium)).foregroundStyle(Color.textPrimary)
-                    Text("best").font(.system(size: 10)).foregroundStyle(Color.muted)
-                }
-            }
-        }
-        .padding(.vertical, 4)
-    }
-
-    private var subtitle: String {
-        var parts: [String] = [track.trackKind == .autocross ? "Autocross" : "Circuit"]
-        if track.isUserTrack, let d = track.createdAt { parts.append(d.formatted(date: .abbreviated, time: .omitted)) }
-        else if !track.location.isEmpty { parts.append(track.location) }
-        if track.layout == nil { parts.append(track.trackKind == .autocross ? "gates not set" : "no line yet") }
-        if let n = stats?.sessions, n > 0 { parts.append("\(n) session\(n == 1 ? "" : "s")") }
-        return parts.joined(separator: " · ")
-    }
-}
-
 enum RunFormat {
     /// 0:24.31 or 1:52.07
     static func time(_ t: TimeInterval) -> String {
         let total = max(0, t)
         let m = Int(total) / 60
         return String(format: "%d:%05.2f", m, total - Double(m * 60))
-    }
-}
-
-// MARK: - New track
-
-private struct NewTrackSheet: View {
-    let create: (Track) -> Void
-    @Environment(\.dismiss) private var dismiss
-    @State private var kind: Track.Kind = .autocross
-    @State private var name = ""
-
-    private var defaultName: String {
-        "\(kind == .autocross ? "Autocross" : "Circuit") · \(Date().formatted(.dateTime.day().month(.abbreviated).year()))"
-    }
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section {
-                    Picker("Type", selection: $kind) {
-                        Text("Autocross").tag(Track.Kind.autocross)
-                        Text("Circuit").tag(Track.Kind.circuit)
-                    }
-                    .pickerStyle(.segmented)
-                } footer: {
-                    Text(kind == .autocross
-                         ? "Separate start and finish lines. Each pass from one to the other is a run."
-                         : "One line, crossed once per lap.")
-                }
-                Section("Name") {
-                    TextField(defaultName, text: $name)
-                }
-                Section {
-                    Label("Mark on site: walk to each line, tap Mark here", systemImage: "figure.walk")
-                    Label("Or draw: tap the satellite map where the line is", systemImage: "map")
-                } footer: {
-                    Text("You can save before the lines are set and finish later. Sessions recorded near the track are matched to it automatically, even ones recorded before you made it.")
-                }
-                .font(.system(size: 13)).foregroundStyle(Color.muted)
-            }
-            .navigationTitle("New track")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Next") {
-                        let trimmed = name.trimmingCharacters(in: .whitespaces)
-                        create(Track.newUserTrack(name: trimmed.isEmpty ? defaultName : trimmed, kind: kind))
-                        dismiss()
-                    }
-                }
-            }
-        }
-        .presentationDetents([.medium, .large])
-    }
-}
-
-// MARK: - Detail
-
-struct TrackDetailView: View {
-    @Environment(AppModel.self) private var model
-    @Environment(\.dismiss) private var dismiss
-    let track: Track
-    @State private var sessions: [SessionManifest] = []
-    @State private var renaming = false
-    @State private var newName = ""
-    @State private var confirmDelete = false
-
-    private var current: Track { model.tracks.track(id: track.id) ?? track }
-
-    var body: some View {
-        List {
-            Section {
-                TrackGatesMap(track: current, trace: [])
-                    .frame(height: 240)
-                    .listRowInsets(EdgeInsets())
-            }
-            Section {
-                NavigationLink(value: TrackEditorRoute(track: editableCopy)) {
-                    Label(current.layout == nil ? "Set the lines" : "Edit lines", systemImage: "line.diagonal")
-                }
-                if current.isUserTrack {
-                    Button { newName = current.name; renaming = true } label: { Label("Rename", systemImage: "pencil") }
-                    Button(role: .destructive) { confirmDelete = true } label: { Label("Delete track", systemImage: "trash") }
-                }
-            } footer: {
-                if !current.isUserTrack {
-                    Text("Bundled from OpenStreetMap; the start/finish line is approximate. Editing it saves your own copy.")
-                }
-            }
-            Section("Sessions") {
-                if sessions.isEmpty {
-                    Text("None yet. Drive here with recording on and sessions are matched automatically.")
-                        .font(.system(size: 13)).foregroundStyle(Color.muted)
-                }
-                ForEach(sessions) { m in
-                    HStack {
-                        Text(m.startedAtUTC.formatted(date: .abbreviated, time: .shortened))
-                        Spacer()
-                        let done = m.track?.runs.filter { $0.kind != .dnf }.count ?? 0
-                        Text("\(done) \(current.trackKind == .autocross ? "run" : "lap")\(done == 1 ? "" : "s")")
-                            .foregroundStyle(Color.muted)
-                        if let best = m.track?.best { Text(RunFormat.time(best)).font(.numeral(14, weight: .medium)) }
-                    }
-                    .font(.system(size: 14))
-                }
-            }
-        }
-        .scrollContentBackground(.hidden)
-        .background(Color.bgScreen)
-        .navigationTitle(current.name)
-        .navigationBarTitleDisplayMode(.inline)
-        .task(id: "\(model.tracks.version)-\(model.recording.sessionsVersion)") {
-            sessions = model.store.list().filter { $0.track?.id == track.id }
-        }
-        .alert("Rename track", isPresented: $renaming) {
-            TextField("Name", text: $newName)
-            Button("Save") {
-                var t = current
-                t.name = newName
-                model.tracks.save(t)
-                model.trackDidChange(model.tracks.track(id: t.id) ?? t)
-            }
-            Button("Cancel", role: .cancel) {}
-        }
-        .alert("Delete \(current.name)?", isPresented: $confirmDelete) {
-            Button("Delete", role: .destructive) {
-                model.tracks.delete(id: current.id)
-                dismiss()
-            }
-        } message: {
-            Text("Sessions keep their times and the track's name, but won't be re-timed.")
-        }
-    }
-
-    /// Bundled tracks are edited as a user copy that shadows the original.
-    private var editableCopy: Track {
-        var t = current
-        if !t.isUserTrack, t.startGate == nil, let layout = t.layout {
-            t.startGate = layout.start
-            t.kind = .circuit
-        }
-        return t
     }
 }
 
@@ -330,10 +300,21 @@ struct GateMapContent: MapContent {
     let gate: TimingGate
     let color: Color
     let label: String
+    /// Being edited: a soft glow under the line, as in the line editor.
+    var selected = false
+    /// Tapping the direction badge (the line editor selects the gate).
+    var onTap: (() -> Void)? = nil
 
     var body: some MapContent {
         let e = gate.endpoints
-        MapPolyline(coordinates: [.init(latitude: e.a.lat, longitude: e.a.lon), .init(latitude: e.b.lat, longitude: e.b.lon)])
+        let ends: [CLLocationCoordinate2D] = [.init(latitude: e.a.lat, longitude: e.a.lon), .init(latitude: e.b.lat, longitude: e.b.lon)]
+        if selected {
+            MapPolyline(coordinates: ends)
+                .stroke(color.opacity(0.3), style: StrokeStyle(lineWidth: 16, lineCap: .round))
+        }
+        MapPolyline(coordinates: ends)
+            .stroke(.black.opacity(0.45), style: StrokeStyle(lineWidth: 8, lineCap: .round))
+        MapPolyline(coordinates: ends)
             .stroke(color, style: StrokeStyle(lineWidth: 4, lineCap: .round))
         Annotation(label, coordinate: .init(latitude: gate.lat, longitude: gate.lon), anchor: .center) {
             Image(systemName: "arrow.up")
@@ -342,6 +323,10 @@ struct GateMapContent: MapContent {
                 .rotationEffect(.degrees(gate.headingDegrees))
                 .padding(4)
                 .background(.black.opacity(0.55), in: Circle())
+                .padding(8)
+                .contentShape(Circle())
+                .onTapGesture { onTap?() }
+                .allowsHitTesting(onTap != nil)
         }
     }
 }

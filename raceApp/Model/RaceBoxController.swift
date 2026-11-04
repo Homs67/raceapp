@@ -32,6 +32,9 @@ final class RaceBoxController {
         static let useForRecording = "racebox.useForRecording"
         /// Solved car frame, per device serial.
         static func frame(_ serial: String) -> String { "racebox.frame.\(serial)" }
+        /// When that frame was first solved. Kept beside the snapshot rather
+        /// than inside it so frames written by older builds still decode.
+        static func frameDate(_ serial: String) -> String { "racebox.frame.\(serial).at" }
     }
 
     /// Settings toggle: let a connected RaceBox provide session position and
@@ -45,6 +48,12 @@ final class RaceBoxController {
     }
 
     private(set) var state: State = .idle
+    /// Both links share one radio, but each has its own central manager, so
+    /// each watches it for itself rather than reaching across controllers.
+    private(set) var bluetoothRadio: BluetoothRadioState = .unknown
+    /// The user pressed disconnect, rather than the device going missing. Worth
+    /// saying, because it means nothing is wrong.
+    private(set) var userDisconnected = false
     private(set) var discovered: [DiscoveredAdapter] = []
     private(set) var deviceInfo: RaceBoxDeviceInfo?
     private(set) var latest: RaceBoxDataMessage?
@@ -115,6 +124,8 @@ final class RaceBoxController {
     private var logStart = monotonicSeconds()
     /// DEBUG: drive the whole screen off the simulator instead of hardware.
     private var simulated: RaceBoxSimulatedTransport?
+    /// Running off the demo transport, so the phone's radio doesn't matter.
+    var isSimulated: Bool { simulated != nil }
 
     var storedDeviceName: String? { UserDefaults.standard.string(forKey: Keys.deviceName) }
     private var storedDeviceId: UUID? {
@@ -129,6 +140,7 @@ final class RaceBoxController {
     private(set) var dataStalled = false
     private static let stallAfter: TimeInterval = 5
     private var rescanDeadline: Task<Void, Never>?
+    private var failureDecay: Task<Void, Never>?
 
     init() {
         transport = CoreBluetoothTransport(profile: .raceBox)
@@ -137,6 +149,17 @@ final class RaceBoxController {
         transport.onDisconnect = { [weak self] in
             Task { @MainActor in self?.linkLost() }
         }
+        // Turning Bluetooth back on should pick the logger up again, the way
+        // the adapter does — otherwise the card sits at "Bluetooth is off"
+        // until something else happens to poke it.
+        transport.onRadioStateChange = { [weak self] radio in
+            Task { @MainActor in
+                guard let self else { return }
+                self.bluetoothRadio = radio
+                if radio == .poweredOn { self.autoConnectIfRemembered() }
+            }
+        }
+        bluetoothRadio = transport.radioState
     }
 
     /// The peripheral went away underneath a live link. Tear down, show
@@ -169,6 +192,17 @@ final class RaceBoxController {
         }
     }
 
+    /// The reported power rail, classified. The Micro has no battery — it
+    /// reports whichever supply it sees — so this is a voltage as often as a
+    /// percentage, and every caller wants the same mapping.
+    var loggerPower: LoggerPower? {
+        guard let msg = latest else { return nil }
+        switch msg.power(for: deviceInfo?.model ?? .micro) {
+        case .inputVoltage(let v): return .from(inputVolts: v)
+        case .battery(let pct, let charging): return .battery(percent: pct, charging: charging)
+        }
+    }
+
     var statusText: String {
         switch state {
         case .idle: return storedDeviceName.map { "Not connected — \($0)" } ?? "Not connected"
@@ -197,6 +231,13 @@ final class RaceBoxController {
     }
 
     func start() {
+        // A retry is pressed *because* the last attempt failed, so .failed has
+        // to be a legal starting point — guarding on .idle alone made the
+        // button do nothing.
+        if case .failed = state { state = .idle }
+        failureDecay?.cancel()
+        failureDecay = nil
+        userDisconnected = false
         guard case .idle = state else { return }
         #if DEBUG
         if CommandLine.arguments.contains("-racebox-demo") {
@@ -227,15 +268,17 @@ final class RaceBoxController {
                         self.discovered.append(device)
                     }
                     self.discovered.sort { $0.rssi > $1.rssi }
-                    // A remembered device reconnects on sight; otherwise a lone
-                    // hit auto-connects so first pairing is one tap.
-                    if device.id == self.storedDeviceId || self.discovered.count == 1 {
+                    // A remembered device reconnects on sight. A device we
+                    // have never paired stops here instead: Settings offers it
+                    // on a card, so pairing is something you agreed to rather
+                    // than something that happened to you.
+                    if device.id == self.storedDeviceId {
                         self.select(device)
                         return
                     }
                 }
             } catch {
-                self.state = .failed(Self.describe(error))
+                self.fail(Self.describe(error))
             }
         }
     }
@@ -247,6 +290,7 @@ final class RaceBoxController {
     }
 
     private func connect(to id: UUID, name: String) {
+        userDisconnected = false
         scanTask?.cancel()
         transport.stopScan()
         state = .connecting(name)
@@ -264,8 +308,21 @@ final class RaceBoxController {
                 // Mini S / Micro: it may already be logging on its own.
                 if info.supportsStandaloneRecording { await self.refreshRecordingStatus() }
             } catch {
-                self.state = .failed(Self.describe(error))
+                self.fail(Self.describe(error))
             }
+        }
+    }
+
+    /// Show the failure, then let it settle. A card that shouts "couldn't
+    /// connect" an hour later is just noise — after a minute it reads as a
+    /// plain "not connected" until someone asks again.
+    private func fail(_ reason: String) {
+        state = .failed(reason)
+        failureDecay?.cancel()
+        failureDecay = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(60))
+            guard let self, !Task.isCancelled, case .failed = self.state else { return }
+            self.state = .idle
         }
     }
 
@@ -289,11 +346,20 @@ final class RaceBoxController {
         dataStalled = false
         rescanDeadline?.cancel()
         rescanDeadline = nil
+        failureDecay?.cancel()
+        failureDecay = nil
+        // Only a device we actually had can be "disconnected" — walking away
+        // from the pairing card is not that.
+        userDisconnected = storedDeviceId != nil
         recentMessages = []
     }
 
     func forget() {
         disconnect()
+        // Forgetting is not disconnecting: nothing is remembered afterwards,
+        // so the card goes back to offering setup rather than reporting a
+        // device that is no longer ours.
+        userDisconnected = false
         UserDefaults.standard.removeObject(forKey: Keys.deviceId)
         UserDefaults.standard.removeObject(forKey: Keys.deviceName)
         deviceInfo = nil
@@ -624,7 +690,27 @@ final class RaceBoxController {
         lastFrameSave = 0
         if let serial = frameKeySerial {
             UserDefaults.standard.removeObject(forKey: Keys.frame(serial))
+            UserDefaults.standard.removeObject(forKey: Keys.frameDate(serial))
         }
+    }
+
+#if DEBUG
+    /// Put the link in "one in range, never paired" so the first-connect card
+    /// can be seen without hardware — the RaceBox counterpart of
+    /// `ConnectionController.uiStatusOverride`. CoreBluetooth does not exist
+    /// in the Simulator, so there is no other way to reach this state.
+    func previewDiscovery() {
+        scanTask?.cancel()
+        discovered = [DiscoveredAdapter(id: UUID(), name: "RaceBox Micro 3242708836", rssi: -48)]
+        state = .scanning
+    }
+#endif
+
+    /// When the stored alignment was first solved, for the "levelled <date>"
+    /// line. Nil for a frame saved before this was recorded.
+    var frameCalibratedAt: Date? {
+        guard let serial = frameKeySerial else { return nil }
+        return UserDefaults.standard.object(forKey: Keys.frameDate(serial)) as? Date
     }
 
     /// Progress for the calibration UI.
@@ -652,6 +738,9 @@ final class RaceBoxController {
               let data = try? JSONEncoder().encode(snapshot) else { return }
         lastFrameSave = now
         UserDefaults.standard.set(data, forKey: Keys.frame(serial))
+        if UserDefaults.standard.object(forKey: Keys.frameDate(serial)) == nil {
+            UserDefaults.standard.set(Date(), forKey: Keys.frameDate(serial))
+        }
     }
 
     /// Feed the telemetry bus. Position and speed go to the canonical `gps.*`
@@ -887,7 +976,7 @@ final class RaceBoxController {
                 satellites: 14, hasFix: true)
         }
         simulated = source
-        deviceInfo = RaceBoxDeviceInfo(model: .micro, serialNumber: "0000000001",
+        deviceInfo = RaceBoxDeviceInfo(model: .micro, serialNumber: "3241500917",
                                        firmware: RaceBoxFirmware("3.3"),
                                        hardwareRevision: "1.0", manufacturer: "RaceBox")
         Task { [weak self] in

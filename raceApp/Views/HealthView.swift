@@ -49,7 +49,7 @@ struct HealthView: View {
                 let codes = model.connection.dtcCount ?? 0
                 let flagged = milOn || codes > 0
                 Text("MIL \(milOn ? "ON" : "OFF") · \(codes) CODE\(codes == 1 ? "" : "S")")
-                    .font(.microLabel(9)).kerning(1)
+                    .font(.microLabel(12)).kerning(1)
                     .foregroundStyle(flagged ? Color.recordRed : Color.mutedStrong)
                     .padding(.horizontal, 8).padding(.vertical, 5)
                     .overlay(RoundedRectangle(cornerRadius: 6)
@@ -167,12 +167,12 @@ private struct HealthCard: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text(card.label)
-                    .font(.microLabel(9)).kerning(1.2)
+                    .font(.microLabel(12)).kerning(1.2)
                     .foregroundStyle(Color.muted)
                 Spacer()
                 if let age = card.age {
                     Text(age)
-                        .font(.system(size: 9))
+                        .font(.system(size: 12))
                         .foregroundStyle(Color.warnAmber)
                 }
             }
@@ -182,7 +182,7 @@ private struct HealthCard: View {
                     .foregroundStyle(card.value == nil ? Color.mutedWeak : card.color)
                 if card.value != nil, !card.unit.isEmpty {
                     Text(card.unit)
-                        .font(.system(size: 11))
+                        .font(.system(size: 12))
                         .foregroundStyle(Color.muted)
                 }
             }

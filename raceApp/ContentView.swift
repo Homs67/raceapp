@@ -4,6 +4,7 @@
 //
 
 import SwiftUI
+import SessionKit
 
 enum LaunchArgs {
     #if DEBUG
@@ -27,11 +28,13 @@ enum LaunchArgs {
         CommandLine.arguments.contains("-tab-health")
             || CommandLine.arguments.contains("-tab-tracks")
             || CommandLine.arguments.contains("-tab-debug")
+            || CommandLine.arguments.contains("-emblem-playground")
     }
     static var debugRoute: String? {
         if CommandLine.arguments.contains("-tab-health") { return "health" }
         if CommandLine.arguments.contains("-tab-tracks") { return "tracks" }
         if CommandLine.arguments.contains("-open-diagnostics") { return "diagnostics" }
+        if CommandLine.arguments.contains("-emblem-playground") { return "emblem" }
         return nil
     }
     #else
@@ -48,19 +51,35 @@ enum LaunchArgs {
 struct ContentView: View {
     @Environment(AppModel.self) private var model
 
+    /// car.side.fill is twice as wide as the other tab symbols, and the tab bar
+    /// sizes every SF Symbol the same, so it's drawn into a template image at
+    /// a smaller point size; the bar still tints it like the rest.
+    static let profileTabIcon: UIImage = {
+        let config = UIImage.SymbolConfiguration(pointSize: 20, weight: .regular)
+        guard let symbol = UIImage(systemName: "car.side.fill", withConfiguration: config) else { return UIImage() }
+        return UIGraphicsImageRenderer(size: symbol.size).image { _ in symbol.draw(at: .zero) }
+            .withRenderingMode(.alwaysTemplate)
+    }()
+
     var body: some View {
         TabView {
             SessionsView()
+                .sessionPreviewBar(model)
                 .tabItem { Label("Sessions", systemImage: "flag.checkered") }
             TracksView()
+                .sessionPreviewBar(model)
                 .tabItem { Label("Tracks", systemImage: "map") }
+            ProfileView()
+                .sessionPreviewBar(model)
+                .tabItem { Label { Text("Profile") } icon: { Image(uiImage: Self.profileTabIcon) } }
         }
             .tint(Color.accent)
-            // The live dashboard is up for exactly as long as a session records;
-            // the only way out is STOP.
+            // The dashboard is up while a session records *and* has not been
+            // collapsed. Collapsing dismisses this cover and leaves the session
+            // running behind the bar above the tab bar.
             .fullScreenCover(isPresented: Binding(
-                get: { model.recording.isRecording },
-                set: { _ in }
+                get: { model.isDashboardPresented },
+                set: { model.isDashboardPresented = $0 }
             )) {
                 DashboardPagerView(mode: .recording)
                     .environment(model)
@@ -85,6 +104,24 @@ struct ContentView: View {
             )) {
                 DebugView()
                     .environment(model)
+            }
+            // A drive just earned a track emblem: show it once the recording
+            // dashboard has gone.
+            .background {
+                Color.clear.fullScreenCover(isPresented: Binding(
+                    get: { model.achievements.pending != nil && !model.recording.isRecording },
+                    set: { shown in
+                        if !shown, let entry = model.achievements.pending { model.achievements.markAnnounced(entry) }
+                    }
+                )) {
+                    if let entry = model.achievements.pending {
+                        AchievementDetailView(entry: entry, isNew: true)
+                            .environment(model)
+                    }
+                }
+            }
+            .task(id: model.recording.sessionsVersion) {
+                model.achievements.refresh(model.store.list())
             }
             .onAppear {
                 #if DEBUG

@@ -139,7 +139,9 @@ final class DashboardLiveFeed {
         live.obdLive = model.connection.carLinkUp
 
         live.isRecording = model.recording.isRecording
-        live.elapsed = model.recording.startedAt.map { date.timeIntervalSince($0) } ?? 0
+        // Recorded time, not wall clock — a session paused in the paddock must
+        // not tick on while nothing is being written.
+        live.elapsed = model.recording.elapsed(asOf: date)
         return live
     }
 }

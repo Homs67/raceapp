@@ -83,7 +83,7 @@ struct RaceBoxMemoryView: View {
                         Text(status.isRecording
                              ? "Logging on its own at 25 Hz, phone or no phone."
                              : "Off — the memory stays empty until this is on.")
-                            .font(.system(size: 11)).foregroundStyle(Color.muted)
+                            .font(.system(size: 12)).foregroundStyle(Color.muted)
                     }
                 }
                 .tint(Color.accent)

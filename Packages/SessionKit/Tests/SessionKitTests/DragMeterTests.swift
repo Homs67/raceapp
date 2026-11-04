@@ -37,6 +37,20 @@ struct DragMeterTests {
         #expect((meter.current.quarterMileTrapKmh ?? 0) > 150)   // fast trap
     }
 
+    /// A pull to 50 mph, a lift into a corner, then 110 mph down the next straight:
+    /// the lift ends the run, so 0–100 is never timed from the old launch.
+    @Test func liftEndsTheRun() {
+        let meter = DragMeter()
+        meter.add(speedMps: 0, t: 0)
+        var t = 0.05, v = 0.0
+        while v < 22 { v += 4 * 0.05; meter.add(speedMps: v, t: t); t += 0.05 }
+        while v > 15 { v -= 6 * 0.05; meter.add(speedMps: v, t: t); t += 0.05 }
+        while v < 49 { v += 3 * 0.05; meter.add(speedMps: v, t: t); t += 0.05 }
+        #expect(meter.best.zeroToHundred == nil)
+        #expect(meter.best.zeroToSixty == nil)
+        #expect(!meter.current.launching)
+    }
+
     @Test func doesNotTriggerWithoutStandstillLaunch() {
         // Already moving fast the whole time — no launch from rest.
         let meter = DragMeter()

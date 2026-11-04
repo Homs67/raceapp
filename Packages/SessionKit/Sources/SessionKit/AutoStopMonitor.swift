@@ -48,6 +48,15 @@ public struct AutoStopMonitor: Sendable {
         }
     }
 
+    /// A pause writes nothing, so every clock here would be `threshold` stale
+    /// the moment recording resumes and fire the forgotten-stop rule on a
+    /// driver who just pressed play. Rewind them to the resume instant.
+    public mutating func noteResumed(at t: TimeInterval) {
+        lastMovement = t
+        if everSawObd { lastObdSeen = t }
+        if everSawLogger { lastLoggerSeen = t }
+    }
+
     public func shouldAutoStop(now: TimeInterval) -> Bool {
         if everSawObd {
             guard now - lastObdSeen >= threshold else { return false }

@@ -63,7 +63,9 @@ Idle → NeedsPermission → Scanning → Connecting → DiscoveringGATT
         └─ drop → Reconnecting (backoff) → InitializingELM …
 ```
 
-Every state maps 1:1 to a UI string on the status chip. The state machine lives in `ObdKit` and is UI-agnostic — the onboarding screens and the dashboard chip render the same state stream.
+The state machine lives in `ObdKit` and is UI-agnostic — the onboarding screens and the dashboard chip render the same state stream.
+
+**It no longer maps 1:1 to the UI.** It used to, and that is what made Settings a readout of the machine rather than an answer to the driver's question. Every state above now collapses into one of four in `DeviceLinkStatus` (`raceApp/Model/DeviceLinkStatus.swift`) — Not set up / Searching / Connected / Not connected — plus one optional line saying what to do about it. `Connecting`, `DiscoveringGATT`, `InitializingELM` and `Reconnecting` are all "Searching"; `WaitingForIgnition` is *connected*, because the adapter is, with "Turn the key to ON" underneath. The detail that used to justify a state per string — protocol, PIDs, satellites, Hz, accuracy — lives on the device pages.
 
 ## 6. What we deliberately do differently from Car Scanner (per the screenshot)
 

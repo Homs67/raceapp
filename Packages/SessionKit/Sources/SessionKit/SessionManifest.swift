@@ -7,6 +7,9 @@ public struct SessionManifest: Codable, Equatable, Sendable, Identifiable {
 
     public enum Status: String, Codable, Sendable {
         case recording
+        /// Open but not writing — the driver paused between runs. Still a live
+        /// session: it holds its files and links and resumes into the same id.
+        case paused
         case complete
         case recovered
     }
@@ -37,6 +40,26 @@ public struct SessionManifest: Codable, Equatable, Sendable, Identifiable {
             self.end = end
         }
         public var duration: TimeInterval { end - start }
+    }
+
+    /// One stretch of actual recording, in the same monotonic-uptime basis as
+    /// sample `t`. A track day paused between runs leaves several; a drive that
+    /// ran straight through leaves one. `end` is nil while the segment is open.
+    public struct Segment: Codable, Equatable, Sendable {
+        public var start: TimeInterval
+        public var end: TimeInterval?
+
+        public init(start: TimeInterval, end: TimeInterval? = nil) {
+            self.start = start
+            self.end = end
+        }
+
+        /// Length of this segment; an open one is measured to `now` when given,
+        /// and counts as zero when it is not.
+        public func duration(asOf now: TimeInterval? = nil) -> TimeInterval {
+            guard let finish = end ?? now else { return 0 }
+            return max(0, finish - start)
+        }
     }
 
     /// A suspension-sized interruption in one of the phone sensor sources.
@@ -138,6 +161,10 @@ public struct SessionManifest: Codable, Equatable, Sendable, Identifiable {
     public var obdGaps: [Gap]
     /// Optional for backward-compatible decoding of manifests from older builds.
     public var sensorGaps: [SensorGap]?
+    /// The stretches this session actually recorded for. Absent on manifests
+    /// written before pause existed — those ran continuously, so they read as
+    /// one segment spanning the whole session (see `recordedSeconds`).
+    public var segments: [Segment]?
     public var channels: [ChannelSummary]
     public var highlights: Highlights?
     /// Mode-01 PIDs the ECU reported as supported at connect (capability record).
@@ -285,4 +312,25 @@ public struct SessionManifest: Codable, Equatable, Sendable, Identifiable {
     public func utcDate(forUptime t: TimeInterval) -> Date {
         startedAtUTC.addingTimeInterval(t - startUptime)
     }
+
+    /// Seconds this session actually recorded for, with paused time taken out.
+    /// Pass `now` (monotonic uptime) to include a segment that is still open.
+    ///
+    /// Manifests from before pause existed carry no segments; they recorded
+    /// continuously, so their finalized duration — or, while still live, the
+    /// whole span since start — is already the answer.
+    public func recordedSeconds(asOf now: TimeInterval? = nil) -> TimeInterval {
+        guard let segments else {
+            if let finalized = highlights?.durationSeconds, finalized > 0 { return finalized }
+            guard let now else { return 0 }
+            return max(0, now - startUptime)
+        }
+        return segments.reduce(0) { $0 + $1.duration(asOf: now) }
+    }
+
+    /// True while a session is open but not writing.
+    public var isPaused: Bool { status == .paused }
+
+    /// A live session is one the recorder still owns — recording or paused.
+    public var isLive: Bool { status == .recording || status == .paused }
 }

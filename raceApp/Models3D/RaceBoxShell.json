@@ -1,0 +1,102 @@
+{
+  "format": 1,
+  "generator": "tools/build_racebox_mesh.py",
+  "source": "design/next-features/racebox-model.js",
+  "sourceSHA256": "c26a4250cf0e6816f6b85961e9646a8e8b021d5f4cca387b1fc1f9f89197a21d",
+  "vertexCount": 41293,
+  "triangleCount": 42279,
+  "frame": {
+    "center": [
+      0.0,
+      15.8,
+      0.0
+    ],
+    "radius": 58.22061490571875
+  },
+  "positions": {
+    "offset": 0,
+    "length": 495520
+  },
+  "normals": {
+    "offset": 495520,
+    "length": 495520
+  },
+  "indices": {
+    "offset": 991040,
+    "length": 253680
+  },
+  "parts": [
+    {
+      "name": "01_LOWER_BODY_unchanged",
+      "material": "plastic",
+      "firstVertex": 0,
+      "vertexCount": 5012,
+      "firstIndex": 0,
+      "indexCount": 15336
+    },
+    {
+      "name": "02_UPPER_BODY_with_integrated_switch_rails",
+      "material": "plastic",
+      "firstVertex": 5012,
+      "vertexCount": 33094,
+      "firstIndex": 15336,
+      "indexCount": 100044
+    },
+    {
+      "name": "03_RECORDING_BUTTON_for_raised_main_lid",
+      "material": "plastic",
+      "firstVertex": 38106,
+      "vertexCount": 927,
+      "firstIndex": 115380,
+      "indexCount": 3702
+    },
+    {
+      "name": "04_SWITCH_M2_BOTTOM_PLATE",
+      "material": "plastic",
+      "firstVertex": 39033,
+      "vertexCount": 1180,
+      "firstIndex": 119082,
+      "indexCount": 3636
+    },
+    {
+      "name": "05_SWITCH_LOWER_CARRIER",
+      "material": "plastic",
+      "firstVertex": 40213,
+      "vertexCount": 88,
+      "firstIndex": 122718,
+      "indexCount": 156
+    },
+    {
+      "name": "06_SWITCH_UPPER_BUTTON_3mm_GLUE_ON",
+      "material": "plastic",
+      "firstVertex": 40301,
+      "vertexCount": 676,
+      "firstIndex": 122874,
+      "indexCount": 3087
+    },
+    {
+      "name": "09_RECORD_RED_CENTER_INSERT_6mm",
+      "material": "red",
+      "firstVertex": 40977,
+      "vertexCount": 146,
+      "firstIndex": 125961,
+      "indexCount": 420
+    },
+    {
+      "name": "03b_RECORDING_BUTTON_LEG_glue_on",
+      "material": "plastic",
+      "firstVertex": 41123,
+      "vertexCount": 146,
+      "firstIndex": 126381,
+      "indexCount": 420
+    },
+    {
+      "name": "physical_switch_slider",
+      "material": "steel",
+      "firstVertex": 41269,
+      "vertexCount": 24,
+      "firstIndex": 126801,
+      "indexCount": 36
+    }
+  ]
+}

@@ -48,10 +48,14 @@ public final class DragMeter: @unchecked Sendable {
     private let quarterMeters = 402.336
     private let launchThreshold = 1.0
     private let stopThreshold = 0.5
+    /// Speed lost from the run's peak that means the driver lifted: the pull is over.
+    /// A gear change costs well under this.
+    private let liftDrop = 3.0
 
     private var armed = true
     private var t0: TimeInterval?
     private var dist = 0.0
+    private var peak = 0.0
     private var last: (v: Double, t: TimeInterval)?
     public private(set) var current = Run()
     public private(set) var best = Run()
@@ -69,6 +73,7 @@ public final class DragMeter: @unchecked Sendable {
             armed = false
             t0 = t
             dist = 0
+            peak = 0
             current = Run(launching: true)
         }
         guard let start = t0, current.launching else {
@@ -77,6 +82,7 @@ public final class DragMeter: @unchecked Sendable {
         }
 
         dist += v * dt
+        peak = max(peak, v)
         let elapsed = t - start
         if current.zeroToSixty == nil, v >= mph60 { current.zeroToSixty = elapsed }
         if current.zeroToHundred == nil, v >= mph100 { current.zeroToHundred = elapsed }
@@ -87,10 +93,11 @@ public final class DragMeter: @unchecked Sendable {
             current.quarterMileTrapKmh = v * 3.6
         }
 
-        // End the run when the car slows to a stop (or the ¼ mile is done + coasting).
-        if v < stopThreshold {
+        // End the run when the driver lifts (a pit exit that turns into laps must not
+        // time 0–100 at the end of the straight minutes later) or the car stops.
+        if v < stopThreshold || v < peak - liftDrop {
             current.launching = false
-            armed = true
+            armed = v < stopThreshold
             mergeBest()
         }
     }

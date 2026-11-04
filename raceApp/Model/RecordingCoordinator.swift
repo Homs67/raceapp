@@ -17,7 +17,16 @@ import SessionKit
 final class RecordingCoordinator {
 
     private(set) var isRecording = false
+    /// The session is open but not writing — the driver paused between runs.
+    /// Still `isRecording`: the links stay up and resuming returns to the same
+    /// session. Not to be confused with `samplesMayBePaused`, which is a
+    /// warning that iOS may have suspended capture.
+    private(set) var isPaused = false
     private(set) var startedAt: Date?
+    /// Recorded seconds banked before the current segment opened.
+    private var recordedBeforeSegment: TimeInterval = 0
+    /// When the open segment started; nil while paused.
+    private var segmentStartedAt: Date?
     /// Active session id while `isRecording` (for camera / side channels).
     private(set) var currentSessionId: UUID?
     /// Live distance for the active session (metres), updated while recording.
@@ -124,7 +133,10 @@ final class RecordingCoordinator {
         }
 
         isRecording = true
+        isPaused = false
         startedAt = Date()
+        recordedBeforeSegment = 0
+        segmentStartedAt = Date()
         liveDistanceMeters = 0
         liveLocationName = nil
         samplesMayBePaused = false
@@ -136,6 +148,36 @@ final class RecordingCoordinator {
     }
 
     /// CAN stream diagnostics from the connection controller, kept in the manifest.
+    /// Recorded time so far, with paused stretches left out. This is what the
+    /// dashboard, the bar and the Live Activity all count up.
+    func elapsed(asOf now: Date = Date()) -> TimeInterval {
+        guard let segmentStartedAt else { return recordedBeforeSegment }
+        return recordedBeforeSegment + max(0, now.timeIntervalSince(segmentStartedAt))
+    }
+
+    /// Stop writing but keep the session open (between runs on a track day).
+    /// The adapter and logger links stay up, so resuming is immediate.
+    func pause() async {
+        guard isRecording, !isPaused, let recorder else { return }
+        try? await recorder.pause(at: monotonicUptime())
+        recordedBeforeSegment = elapsed()
+        segmentStartedAt = nil
+        isPaused = true
+        // Nothing is being written, so a quiet feed is expected, not a warning.
+        samplesMayBePaused = false
+        didPostQuietWarning = false
+        applyIdleTimerPolicy()
+    }
+
+    func resume() async {
+        guard isRecording, isPaused, let recorder else { return }
+        try? await recorder.resume(at: monotonicUptime())
+        segmentStartedAt = Date()
+        isPaused = false
+        didPostQuietWarning = false
+        applyIdleTimerPolicy()
+    }
+
     func noteCanStream(_ text: String, at t: TimeInterval) {
         guard let recorder else { return }
         Task { await recorder.noteObd(text, at: t) }
@@ -174,7 +216,10 @@ final class RecordingCoordinator {
         let manifest = try? await recorder.stop()
         self.recorder = nil
         isRecording = false
+        isPaused = false
         startedAt = nil
+        recordedBeforeSegment = 0
+        segmentStartedAt = nil
         currentSessionId = nil
         liveDistanceMeters = 0
         let startedLocation = liveLocationName
@@ -269,7 +314,7 @@ final class RecordingCoordinator {
             await MainActor.run {
                 guard let self, self.isRecording else { return }
                 self.liveLocationName = name
-                if var manifest = self.store.list().first(where: { $0.status == .recording }) {
+                if var manifest = self.store.list().first(where: { $0.isLive }) {
                     manifest.locationName = name
                     try? self.store.save(manifest)
                     self.sessionsVersion += 1
@@ -318,6 +363,12 @@ final class RecordingCoordinator {
     }
 
     private func refreshQuietSampleState(notify: Bool) {
+        // A paused session is meant to be quiet — warning about it would be
+        // telling the driver their own button press went wrong.
+        guard !isPaused else {
+            samplesMayBePaused = false
+            return
+        }
         let now = monotonicUptime()
         let gpsAge = bus.snapshot().age(.gpsLatitude, now: now)
         let quiet = gpsAge.map { $0 > 15 } ?? true
