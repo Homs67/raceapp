@@ -25,6 +25,8 @@
 		<string>SofiaSansCondensed-ExtraBold.ttf</string>
 		<string>SofiaSansCondensed-Black.ttf</string>
 	</array>
+	<key>NSSupportsLiveActivities</key>
+	<true/>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>bluetooth-central</string>

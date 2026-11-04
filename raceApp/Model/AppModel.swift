@@ -91,6 +91,7 @@ final class AppModel {
         }
         recording.onRecordingDidStop = { [weak self] in
             self?.isDashboardPresented = false
+            RecordingActivityController.shared.end()
             self?.metrics.stop()
             self?.sensors.endRecordingActivity()
             self?.forceScreenAwakeForSession = false
@@ -127,6 +128,8 @@ final class AppModel {
         launched = true
         SofiaFace.audit()
         recording.recoverAtLaunch()
+        // A Live Activity survives a force-quit mid-session; clear leftovers.
+        RecordingActivityController.shared.endOrphanedActivities()
         #if DEBUG
         // `-replay <path>`: a recorded drive owns the bus. The phone's own
         // sensors and both links stay out of it, but look connected.
@@ -234,12 +237,33 @@ final class AppModel {
             if started {
                 isDashboardPresented = true
                 sensors.beginRecordingActivity()
+                startLiveActivity()
                 applyRecordingIdlePolicy()
                 connection.recordingDidStart() // CAN stream if enabled + mapped
             } else {
                 forceScreenAwakeForSession = false
                 metrics.stop()
             }
+        }
+    }
+
+    /// Lock Screen / Dynamic Island activity for the running session. Title
+    /// precedence matches the in-app recorder bar: the geocoded place name once
+    /// it lands, else the nearest track, else "Session". The lap line is only
+    /// offered when a track is known, since lap counts are meaningless without one.
+    private func startLiveActivity() {
+        RecordingActivityController.shared.start(
+            title: metrics.track?.name ?? "Session",
+            startedAt: recording.startedAt ?? Date()
+        ) { [weak self] in
+            guard let self, self.recording.isRecording else { return nil }
+            let lap = self.metrics.lapState
+            let onTrack = self.metrics.track != nil
+            return RecordingActivityController.Sample(
+                locationName: self.recording.liveLocationName,
+                lapCount: onTrack ? lap.completedLaps : nil,
+                lastLapSeconds: onTrack ? lap.lastLapTime : nil
+            )
         }
     }
 
