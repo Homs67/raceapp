@@ -82,9 +82,9 @@ struct SessionHeroMap: View {
         else if analysis.t.count > 1 { range = 0...(analysis.t.count - 1) } else { return }
         let step = max(1, range.count / 800)
         let idx = Array(stride(from: range.lowerBound, through: range.upperBound, by: step))
-        let pts = idx.map { analysis.coordinate($0) }
+        let pts = idx.map { analysis.coordinate($0) }   // nil = GPS dropout
         let outline = track.flatMap { $0.centerline.count > 2 ? $0.centerlineCoordinates : nil }
-        let all = pts + (outline ?? [])
+        let all = pts.compactMap { $0 } + (outline ?? [])
         guard let fit = GeoFit(all, in: size) else { return }
         if let outline {
             var o = Path()
@@ -96,9 +96,11 @@ struct SessionHeroMap: View {
         let speed = analysis.channels[.speed] ?? []
         let sr = analysis.speedRange
         for k in 1..<max(1, idx.count) {
+            // Skip strokes that touch a dropout: the trail breaks there.
+            guard let a = pts[k - 1], let b = pts[k] else { continue }
             var p = Path()
-            p.move(to: fit.point(analysis.coordinate(idx[k - 1])))
-            p.addLine(to: fit.point(analysis.coordinate(idx[k])))
+            p.move(to: fit.point(a))
+            p.addLine(to: fit.point(b))
             let v = speed[safe: idx[k]] ?? sr.lowerBound
             let u = v.isFinite ? (v - sr.lowerBound) / (sr.upperBound - sr.lowerBound) : 0
             ctx.stroke(p, with: .color(SpeedColor.color(u)), style: StrokeStyle(lineWidth: 3.8, lineCap: .round))

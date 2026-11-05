@@ -237,7 +237,8 @@ struct SessionTrackMapView: View {
     private var map: some View {
         SessionMapLayer(camera: $camera, overlay: overlay, overlayVersion: overlayVersion, mode: mode,
                         satellite: satellite, track: track, layout: layout,
-                        car: analysis.lat.indices.contains(cursorIndex) ? analysis.coordinate(cursorIndex) : nil,
+                        car: analysis.lat.indices.contains(cursorIndex) ? analysis.heldCoordinate(at: cursorIndex) : nil,
+                        carInGap: analysis.lat.indices.contains(cursorIndex) && analysis.inGpsGap(cursorIndex),
                         carIndex: cursorIndex)
             .equatable()
     }
@@ -588,10 +589,14 @@ struct SessionTrackMapView: View {
 struct MapOverlay {
     struct Segment: Identifiable { let id: Int; let coordinates: [CLLocationCoordinate2D]; let color: Color }
     struct Zone: Identifiable { let id: Int; let corner: String; let coordinates: [CLLocationCoordinate2D]; let entry: Int; let min: Int; var labeled = true }
+    /// A GPS dropout: the last fix before it and the first after, joined on
+    /// the map by a dotted line so the trail still reads as one drive.
+    struct Gap: Identifiable { let id: Int; let from: CLLocationCoordinate2D; let to: CLLocationCoordinate2D }
 
     var line: [CLLocationCoordinate2D] = []
     var segments: [Segment] = []
     var zones: [Zone] = []
+    var gaps: [Gap] = []
     var series: [AnalysisChannel: [Double]] = [:]
 
     static func build(_ a: SessionAnalysis, lap: SessionAnalysis.Lap, mode: TrackMapMode) -> MapOverlay {
@@ -600,19 +605,46 @@ struct MapOverlay {
         guard r.count > 1, !a.lat.isEmpty else { return o }
         let step = max(1, r.count / 1500)
         let idx = Array(stride(from: r.lowerBound, through: r.upperBound, by: step))
-        o.line = idx.map { a.coordinate($0) }
+        // A dropout is nil here, and it must break every polyline: bridging it
+        // solid draws a teleport, and a NaN handed to MapKit lands on the
+        // north pole. `line` keeps only real fixes (it frames the camera).
+        let coords: [CLLocationCoordinate2D?] = idx.map { a.coordinate($0) }
+        o.line = coords.compactMap { $0 }
+        var k = 0
+        while k < coords.count {
+            guard coords[k] == nil else { k += 1; continue }
+            let from = k > 0 ? coords[k - 1] : nil
+            while k < coords.count, coords[k] == nil { k += 1 }
+            if let from, k < coords.count, let to = coords[k] {
+                o.gaps.append(Gap(id: o.gaps.count, from: from, to: to))
+            }
+        }
 
-        // Colour classes along the lap, merged into contiguous polylines.
+        // Colour classes along the lap, merged into contiguous polylines that
+        // also end at every dropout.
         func segments(_ cls: (Int) -> Int, _ color: (Int) -> Color) -> [Segment] {
             var out: [Segment] = []
-            var start = 0
-            for k in 1...idx.count {
-                if k == idx.count || cls(idx[k]) != cls(idx[start]) {
-                    let coords = Array(o.line[start...min(k, idx.count - 1)])
-                    if coords.count > 1 { out.append(Segment(id: out.count, coordinates: coords, color: color(cls(idx[start])))) }
-                    start = k
+            var run: [CLLocationCoordinate2D] = []
+            var runClass: Int?
+            func flush() {
+                if run.count > 1, let c = runClass {
+                    out.append(Segment(id: out.count, coordinates: run, color: color(c)))
                 }
             }
+            for (k, i) in idx.enumerated() {
+                guard let c = coords[k] else {
+                    flush(); run = []; runClass = nil; continue
+                }
+                let cl = cls(i)
+                if cl != runClass {
+                    flush()
+                    // Start from the previous point so adjacent colours touch.
+                    run = run.last.map { [$0] } ?? []
+                    runClass = cl
+                }
+                run.append(c)
+            }
+            flush()
             return out
         }
         switch mode {
@@ -632,11 +664,14 @@ struct MapOverlay {
                 return rate > 0.02 ? 2 : rate < -0.02 ? 0 : 1
             }, { c in c == 0 ? Color(hex: 0x30D158) : c == 2 ? .recordRed : Color.white.opacity(0.45) })
         case .braking:
+            // The plain white trail, in valid runs so it too breaks at dropouts.
+            o.segments = segments({ _ in 0 }, { _ in Color.white.opacity(0.7) })
             let units = UnitsFormatter(metric: UserDefaults.standard.bool(forKey: "useMetricUnits"))
-            o.zones = a.brakeZones(lap).map { z in
-                Zone(id: z.id, corner: z.corner,
-                     coordinates: (z.startIndex...max(z.startIndex + 1, z.endIndex)).map { a.coordinate($0) },
-                     entry: Int(units.speed(fromMps: z.entrySpeed).rounded()), min: Int(units.speed(fromMps: z.minSpeed).rounded()))
+            o.zones = a.brakeZones(lap).compactMap { z in
+                let coords = (z.startIndex...max(z.startIndex + 1, z.endIndex)).compactMap { a.coordinate($0) }
+                guard coords.count > 1 else { return nil }
+                return Zone(id: z.id, corner: z.corner, coordinates: coords,
+                            entry: Int(units.speed(fromMps: z.entrySpeed).rounded()), min: Int(units.speed(fromMps: z.minSpeed).rounded()))
             }
             // Label the bigger stops first; skip labels that would sit on top of one already placed.
             var placed: [CLLocationCoordinate2D] = []
@@ -729,6 +764,7 @@ private struct SessionMapLayer: View, Equatable {
     let track: Track?
     let layout: CourseLayout?
     let car: CLLocationCoordinate2D?
+    let carInGap: Bool
     let carIndex: Int
 
     static func == (a: Self, b: Self) -> Bool {
@@ -741,6 +777,13 @@ private struct SessionMapLayer: View, Equatable {
                 MapPolyline(coordinates: track.centerlineCoordinates)
                     .stroke(Color.white.opacity(satellite ? 0.25 : 0.12), style: StrokeStyle(lineWidth: 12, lineCap: .round, lineJoin: .round))
             }
+            // Dropouts: a dotted line from the last fix to the first one after,
+            // so a tunnel reads as "no GPS here", not a break in the drive.
+            ForEach(overlay.gaps) { gap in
+                MapPolyline(coordinates: [gap.from, gap.to])
+                    .stroke(Color.white.opacity(0.55),
+                            style: StrokeStyle(lineWidth: 2.5, lineCap: .round, dash: [0.1, 7]))
+            }
             switch mode {
             case .speed, .delta:
                 ForEach(overlay.segments) { seg in
@@ -748,8 +791,10 @@ private struct SessionMapLayer: View, Equatable {
                         .stroke(seg.color, style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round))
                 }
             case .braking:
-                MapPolyline(coordinates: overlay.line)
-                    .stroke(Color.white.opacity(0.7), style: StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round))
+                ForEach(overlay.segments) { seg in
+                    MapPolyline(coordinates: seg.coordinates)
+                        .stroke(seg.color, style: StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round))
+                }
                 ForEach(overlay.zones) { zone in
                     MapPolyline(coordinates: zone.coordinates)
                         .stroke(Color.recordRed, style: StrokeStyle(lineWidth: 7, lineCap: .round, lineJoin: .round))
@@ -765,10 +810,12 @@ private struct SessionMapLayer: View, Equatable {
             }
             if let gate = layout?.finish { GateMapContent(gate: gate, color: .white, label: "Finish") }
             if let car {
+                // In a dropout the dot holds the last fix, dimmed: "signal
+                // lost about here", not a position claim.
                 Annotation("", coordinate: car) {
                     ZStack {
-                        Circle().fill(Color.white.opacity(0.2)).frame(width: 30, height: 30)
-                        Circle().fill(Color.white).frame(width: 13, height: 13)
+                        Circle().fill(Color.white.opacity(carInGap ? 0.1 : 0.2)).frame(width: 30, height: 30)
+                        Circle().fill(Color.white.opacity(carInGap ? 0.45 : 1)).frame(width: 13, height: 13)
                             .overlay(Circle().stroke(Color.black, lineWidth: 2.5))
                     }
                 }

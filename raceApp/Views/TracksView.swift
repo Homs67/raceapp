@@ -333,6 +333,9 @@ struct GateMapContent: MapContent {
 
 enum MapRegion {
     static func fitting(_ pts: [CLLocationCoordinate2D], minSpanMeters: Double) -> MKCoordinateRegion {
+        // One NaN (a GPS dropout sample) would poison every min/max below and
+        // send the camera to the north pole.
+        let pts = pts.filter { $0.latitude.isFinite && $0.longitude.isFinite }
         guard let first = pts.first else {
             return MKCoordinateRegion(center: .init(latitude: 37.33, longitude: -122.01),
                                       latitudinalMeters: 2000, longitudinalMeters: 2000)

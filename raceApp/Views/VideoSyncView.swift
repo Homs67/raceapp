@@ -12,6 +12,7 @@
 
 import SwiftUI
 import AVFoundation
+import CoreLocation
 import SessionKit
 
 struct VideoSyncView: View {
@@ -475,8 +476,11 @@ struct RouteMiniMap: View, Equatable {
             guard n > 2 else { return }
             let step = max(1, n / 400)
             let idx = Array(stride(from: 0, to: n, by: step))
-            let lats = idx.map { analysis.lat[$0] }, lons = idx.map { analysis.lon[$0] }
-            guard let minLat = lats.min(), let maxLat = lats.max(), let minLon = lons.min(), let maxLon = lons.max() else { return }
+            // nil marks a GPS dropout; it must not reach min/max or the path.
+            let pts = idx.map { analysis.coordinate($0) }
+            let valid = pts.compactMap { $0 }
+            guard let minLat = valid.map(\.latitude).min(), let maxLat = valid.map(\.latitude).max(),
+                  let minLon = valid.map(\.longitude).min(), let maxLon = valid.map(\.longitude).max() else { return }
             let cosLat = cos((minLat + maxLat) / 2 * .pi / 180)
             let spanX = max(1e-6, (maxLon - minLon) * cosLat), spanY = max(1e-6, maxLat - minLat)
             let pad: CGFloat = 14
@@ -486,10 +490,15 @@ struct RouteMiniMap: View, Equatable {
                 CGPoint(x: offX + CGFloat((lon - minLon) * cosLat) * scale, y: offY + CGFloat(maxLat - lat) * scale)
             }
             var path = Path()
-            path.addLines(zip(lats, lons).map { p($0, $1) })
+            var pen = false
+            for c in pts {
+                guard let c else { pen = false; continue }   // lift the pen over a dropout
+                let q = p(c.latitude, c.longitude)
+                if pen { path.addLine(to: q) } else { path.move(to: q); pen = true }
+            }
             ctx.stroke(path, with: .color(Color.accent.opacity(0.9)), style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
-            if let at, analysis.lat.indices.contains(at) {
-                let c = p(analysis.lat[at], analysis.lon[at])
+            if let at, analysis.lat.indices.contains(at), let held = analysis.heldCoordinate(at: at) {
+                let c = p(held.latitude, held.longitude)
                 ctx.fill(Path(ellipseIn: CGRect(x: c.x - 6, y: c.y - 6, width: 12, height: 12)), with: .color(.white))
                 ctx.stroke(Path(ellipseIn: CGRect(x: c.x - 6, y: c.y - 6, width: 12, height: 12)), with: .color(.black), lineWidth: 2)
             }

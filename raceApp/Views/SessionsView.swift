@@ -656,7 +656,9 @@ struct SessionDetailView: View {
         guard let snapshot = manifest else { return }
         // Where the car actually was: the best lap's start, else mid-drive. The first
         // fix can predate a good GPS lock (or, in demo replays, the replay itself).
-        let start = built.coordinate(built.bestLap.map { built.indices($0).lowerBound } ?? built.t.count / 2)
+        // `heldCoordinate`: mid-drive can land inside a GPS dropout.
+        guard let start = built.heldCoordinate(at: built.bestLap.map { built.indices($0).lowerBound } ?? built.t.count / 2)
+            ?? built.heldCoordinate(at: built.t.count - 1) else { return }
         Task {
             do {
                 guard let weather = try await SessionWeather.fetch(for: snapshot, at: start),
@@ -715,7 +717,9 @@ struct SessionDetailView: View {
             if detailsExpanded {
                 VStack(spacing: 0) {
                     TrackDetailRow(sessionId: sessionId, manifest: manifest,
-                                   start: analysis.flatMap { $0.t.isEmpty ? nil : $0.coordinate(0) })
+                                   // The first fix can be minutes in (cold start), so fall
+                                   // back to the last valid one anywhere in the drive.
+                                   start: analysis.flatMap { $0.t.isEmpty ? nil : $0.coordinate(0) ?? $0.heldCoordinate(at: $0.t.count - 1) })
                     divider
                     if let car = manifest.car, let make = car.make {
                         detailRow("Car", "\(make) \(car.model ?? "")\(car.vin.map { " · \($0)" } ?? "")", Color.muted)

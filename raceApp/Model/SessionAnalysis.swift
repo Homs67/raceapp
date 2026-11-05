@@ -183,7 +183,28 @@ struct SessionAnalysis: Sendable {
         return max(0, min(t.count - 1, Int(((time - first) * Self.hz).rounded())))
     }
 
-    func coordinate(_ i: Int) -> CLLocationCoordinate2D { .init(latitude: lat[i], longitude: lon[i]) }
+    /// The sample's coordinate, or nil inside a GPS dropout (`resample` marks
+    /// those stretches NaN). Optional on purpose: handing MapKit a NaN puts
+    /// the car at the north pole, so every consumer has to decide what a gap
+    /// looks like instead.
+    func coordinate(_ i: Int) -> CLLocationCoordinate2D? {
+        guard lat[i].isFinite, lon[i].isFinite else { return nil }
+        return .init(latitude: lat[i], longitude: lon[i])
+    }
+
+    /// Where the car dot sits at `i`: the fix itself, or through a dropout the
+    /// last one before it — a lost signal holds the dot, it doesn't fling it.
+    func heldCoordinate(at i: Int) -> CLLocationCoordinate2D? {
+        var j = i
+        while j >= 0 {
+            if let c = coordinate(j) { return c }
+            j -= 1
+        }
+        return nil
+    }
+
+    /// True while `i` sits inside a GPS dropout.
+    func inGpsGap(_ i: Int) -> Bool { coordinate(i) == nil }
 
     func value(_ ch: AnalysisChannel, at i: Int, lap: Lap) -> Double? {
         if ch == .gap { return gap(lap)?[safe: i - indices(lap).lowerBound] }
@@ -258,8 +279,8 @@ struct SessionAnalysis: Sendable {
     }
 
     private func cornerName(near i: Int) -> String? {
-        guard !corners.isEmpty else { return nil }
-        let p = coordinate(i), mLon = 111_320 * cos(p.latitude * .pi / 180)
+        guard !corners.isEmpty, let p = coordinate(i) else { return nil }
+        let mLon = 111_320 * cos(p.latitude * .pi / 180)
         let best = corners.min { a, b in
             func d(_ c: CLLocationCoordinate2D) -> Double {
                 let dx = (c.longitude - p.longitude) * mLon, dy = (c.latitude - p.latitude) * 110_540
